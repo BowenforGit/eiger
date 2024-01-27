@@ -21,6 +21,7 @@
 #include "sort_hash_join.cuh"
 #include "experiment_util.cuh"
 #include "join_base.hpp"
+#include "gfur_join.cuh"
 
 //  #define KEY_T_8B
 //  #define COL_T_8B
@@ -32,6 +33,8 @@ enum join_algo {
     SMJ,
     SHJ,
     SMJI,
+    SHJI,
+    SHJIC,
     UnsupportedJoinAlgo
 };
 
@@ -41,7 +44,7 @@ enum Input {
     UniqueKeys
 };
 
-char join_algo_name[4][32] = {{"PHJ"}, {"SMJ"}, {"SHJ"}, {"SMJI"}};
+char join_algo_name[UnsupportedJoinAlgo][32] = {{"PHJ"}, {"SMJ"}, {"SHJ"}, {"SMJI"}, {"SHJI"}, {"SHJIC"}};
 
 #define RUN_CASE(c1, c2, c3) { \
     if(args.pr+1 == c1 && args.ps+1 == c2) { \
@@ -398,6 +401,48 @@ void check_correctness(const struct join_args& args, TupleR& r, TupleS& s, Tout&
 }
 
 template<typename TupleR, typename TupleS, typename ResultTuple>
+auto get_join_impl(TupleR r, TupleS s, int circular_buffer_size, const struct join_args& args) {
+    int first_bit = 0;
+
+    JoinBase<ResultTuple>* impl = nullptr;
+    switch (args.algo) {
+        case SMJI:
+            if(args.pr > 1 || args.ps > 1) {
+                std::cout << "Initialize " << join_algo_name[SMJI] << std::endl;
+                impl = new GFUR_Join<TupleR, TupleS, ResultTuple>(r, s, circular_buffer_size, JoinAlgo::SMJ, MaterializeAlgo::GFUR);
+                break;
+            }
+        case SMJ:
+            std::cout << "Initialize " << join_algo_name[SMJ] << std::endl;
+            impl = new SortMergeJoin<TupleR, TupleS, ResultTuple, true>(r, s, circular_buffer_size);
+            break;
+        case PHJ:
+            std::cout << "Initialize " << join_algo_name[PHJ] << std::endl;
+            impl = new PartitionHashJoin<TupleR, TupleS, ResultTuple>(r, s, args.phj_log_part1, args.phj_log_part2, first_bit, circular_buffer_size);
+            break;
+        case SHJI:
+            if(args.pr > 1 || args.ps > 1) {
+                std::cout << "Initialize " << join_algo_name[SHJI] << std::endl;
+                impl = new GFUR_Join<TupleR, TupleS, ResultTuple>(r, s, circular_buffer_size, JoinAlgo::SHJ, MaterializeAlgo::GFUR);
+                break;
+            }
+        case SHJIC:
+            if(args.pr > 1 || args.ps > 1) {
+                std::cout << "Initialize " << join_algo_name[SHJIC] << std::endl;
+                impl = new GFUR_Join<TupleR, TupleS, ResultTuple>(r, s, circular_buffer_size, JoinAlgo::SHJ, MaterializeAlgo::ID_CLUSTER);
+                break;
+            }
+        case SHJ:
+            std::cout << "Initialize " << join_algo_name[SHJ] << std::endl;
+            impl = new SortHashJoin<TupleR, TupleS, ResultTuple>(r, s, first_bit, args.phj_log_part1+args.phj_log_part2, circular_buffer_size);
+            break;
+        default:
+            throw std::runtime_error("Unknown join algorithm");
+    }
+    return impl;
+}
+
+template<typename TupleR, typename TupleS, typename ResultTuple>
 ResultTuple exec_join(TupleR& relation_r, TupleS& relation_s, const struct join_args& args, JoinBase<ResultTuple>*& impl) {
     int circular_buffer_size;
     int first_bit = 0;
@@ -412,19 +457,20 @@ ResultTuple exec_join(TupleR& relation_r, TupleS& relation_s, const struct join_
 #endif
 
     std::cout << "Circular buffer size = " << circular_buffer_size << "\n";
-    if(args.algo == SMJ || (args.algo == SMJI && args.pr == 1 && args.ps == 1)) {
-        impl = new SortMergeJoin<TupleR, TupleS, ResultTuple, true>(relation_r, relation_s, circular_buffer_size);
-    } else if(args.algo == PHJ) {
-        impl = new PartitionHashJoin<TupleR, TupleS, ResultTuple>(relation_r, relation_s, args.phj_log_part1, args.phj_log_part2, first_bit, circular_buffer_size);
-    } else if(args.algo == SHJ) {
-        impl = new SortHashJoin<TupleR, TupleS, ResultTuple>(relation_r, relation_s, first_bit, args.phj_log_part1+args.phj_log_part2, circular_buffer_size);
-    } else if(args.algo == SMJI) {
-        impl = new SortMergeJoinByIndex<TupleR, TupleS, ResultTuple, false>(relation_r, relation_s, circular_buffer_size);
-    } 
-    else {
-        std::cout << "Unsupported join algorithm\n";
-        std::exit(-1);
-    }
+    // if(args.algo == SMJ || (args.algo == SMJI && args.pr == 1 && args.ps == 1)) {
+    //     impl = new SortMergeJoin<TupleR, TupleS, ResultTuple, true>(relation_r, relation_s, circular_buffer_size);
+    // } else if(args.algo == PHJ) {
+    //     impl = new PartitionHashJoin<TupleR, TupleS, ResultTuple>(relation_r, relation_s, args.phj_log_part1, args.phj_log_part2, first_bit, circular_buffer_size);
+    // } else if(args.algo == SHJ) {
+    //     impl = new SortHashJoin<TupleR, TupleS, ResultTuple>(relation_r, relation_s, first_bit, args.phj_log_part1+args.phj_log_part2, circular_buffer_size);
+    // } else if(args.algo == SMJI) {
+    //     impl = new SortMergeJoinByIndex<TupleR, TupleS, ResultTuple, false>(relation_r, relation_s, circular_buffer_size);
+    // } 
+    // else {
+    //     std::cout << "Unsupported join algorithm\n";
+    //     std::exit(-1);
+    // }
+    impl = get_join_impl<TupleR, TupleS, ResultTuple>(relation_r, relation_s, circular_buffer_size, args);
 
     return impl->join();
 }
@@ -570,6 +616,8 @@ void parse_args(int argc, char** argv, struct join_args& args) {
             if(std::string(optarg) == "phj") args.algo = PHJ;
             else if(std::string(optarg) == "shj") args.algo = SHJ;
             else if(std::string(optarg) == "smji") args.algo = SMJI;
+            else if(std::string(optarg) == "shji") args.algo = SHJI;
+            else if(std::string(optarg) == "shjic") args.algo = SHJIC;
             else args.algo = SMJ;
             continue;
         case 'p':
