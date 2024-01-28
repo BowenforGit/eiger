@@ -5,8 +5,8 @@
 #include <thrust/gather.h>
 #include <thrust/device_ptr.h>
 
-#include "tuple.cuh"
-#include "utils.cuh"
+#include "types/tuple.cuh"
+#include "utils/utils.cuh"
 #include "partition_util.cuh"
 
 template<typename TupleR, 

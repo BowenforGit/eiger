@@ -1,8 +1,64 @@
 cmake_minimum_required(VERSION 3.20.1)
 
+# if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+#   set(CMAKE_CUDA_ARCHITECTURES 86)
+# endif()
+
 project(
-    GPUJoin 
+    GPUOPS 
     LANGUAGES CXX CUDA)
 
-add_subdirectory(nvbench)
+option(USE_CUDA_MEMALLOC "Use CUDA to manage memory allocation and deallocation. [Default=OFF]" OFF)
+
+add_library(common INTERFACE)
+target_compile_features(common INTERFACE cxx_std_17 cuda_std_17)
+
+set(NVCC_COMPILER_FLAGS "")
+# list(APPEND NVCC_COMPILER_FLAGS -gencode=arch=compute_86,code=\"sm_86,compute_86\")
+list(APPEND NVCC_COMPILER_FLAGS -gencode arch=compute_${CMAKE_CUDA_ARCHITECTURES},code=sm_${CMAKE_CUDA_ARCHITECTURES})
+list(APPEND NVCC_COMPILER_FLAGS --expt-relaxed-constexpr --expt-extended-lambda --extended-lambda)
+list(APPEND NVCC_COMPILER_FLAGS -Xptxas="-v" -lineinfo -Xcudafe)
+list(APPEND NVCC_COMPILER_FLAGS -Xcompiler -fopenmp -O3 --compile)
+# list(APPEND NVCC_COMPILER_FLAGS -Xlinker -lgomp)
+
+target_compile_options(
+    common
+    INTERFACE
+    $<$<COMPILE_LANGUAGE:CUDA>:${NVCC_COMPILER_FLAGS}>
+)
+
+target_include_directories(
+    common 
+    INTERFACE 
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/>/"
+)
+
+message(STATUS "CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
+
+target_compile_definitions(
+    common
+    INTERFACE 
+    $<$<COMPILE_LANGUAGE:CUDA>:SM${CMAKE_CUDA_ARCHITECTURES}0>
+)
+
+if(CMAKE_BUILD_TYPE MATCHES Debug)
+    message(STATUS "Debug build.")
+endif()
+
+target_compile_definitions(
+    common 
+    INTERFACE
+    $<$<CONFIG:Debug>:DEBUG>
+)
+
+if(USE_CUDA_MEMALLOC)
+    message(STATUS "Using CUDA to manage memory allocation and deallocation.")
+    target_compile_definitions(
+        common 
+        INTERFACE
+        $<$<COMPILE_LANGUAGE:CUDA>:USE_CUDA_MEMALLOC>
+    )
+endif()
+
+# add_subdirectory(nvbench)
 add_subdirectory(src)

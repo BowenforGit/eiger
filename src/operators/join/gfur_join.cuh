@@ -9,8 +9,8 @@
 #include <cuda.h>
 #include <cub/cub.cuh> 
 
-#include "tuple.cuh"
-#include "utils.cuh"
+#include "types/tuple.cuh"
+#include "utils/utils.cuh"
 #include "sort_hash_join.cuh"
 #include "sort_merge_join.cuh"
 #include "join_base.hpp"

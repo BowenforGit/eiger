@@ -4,7 +4,7 @@
 #include <cuda.h>
 #include <tuple>
 #include <cassert>
-#include "utils.cuh"
+#include "utils/utils.cuh"
 
 template<int N, typename T>
 __host__ __device__ auto get_typed_ptr(T t) {

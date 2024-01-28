@@ -12,16 +12,16 @@
 
 #include <cuda.h>
 
-#include "tuple.cuh"
-#include "utils.cuh"
-#include "operators.cuh"
-#include "../data_gen/generator.cuh"
-#include "sort_merge_join.cuh"
-#include "partitioned_hash_join.cuh"
-#include "sort_hash_join.cuh"
-#include "experiment_util.cuh"
-#include "join_base.hpp"
-#include "gfur_join.cuh"
+#include "types/tuple.cuh"
+#include "utils/utils.cuh"
+#include "operators/scan/scan.cuh"
+#include "data_gen/generator.cuh"
+#include "operators/join/sort_merge_join.cuh"
+#include "operators/join/partitioned_hash_join.cuh"
+#include "operators/join/sort_hash_join.cuh"
+#include "benchmarks/common/experiment_util.cuh"
+#include "operators/join/join_base.hpp"
+#include "operators/join/gfur_join.cuh"
 
 //  #define KEY_T_8B
 //  #define COL_T_8B
@@ -652,6 +652,12 @@ void parse_args(int argc, char** argv, struct join_args& args) {
 }
 
 int main(int argc, char** argv) {
+#ifdef DEBUG
+    std::cout << "!! This is DEBUG build !!\n";
+#endif
+#ifdef USE_CUDA_MEMALLOC
+    std::cout << "!! Using CUDA memory allocator !!\n";
+#endif
 #ifndef COL_T_8B
     using col_t = int;
 #else

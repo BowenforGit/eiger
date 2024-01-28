@@ -12,12 +12,12 @@
 #include <cuda.h>
 #include <cub/cub.cuh> 
 
-#include "tuple.cuh"
-#include "utils.cuh"
-#include "join_base.hpp"
-#include "partitioned_hash_join.cuh"
-#include "sort_merge_join.cuh"
-#include "sort_hash_join.cuh"
+#include "types/tuple.cuh"
+#include "utils/utils.cuh"
+#include "volcano/join/join_base.hpp"
+#include "volcano/join/partitioned_hash_join.cuh"
+#include "volcano/join/sort_merge_join.cuh"
+#include "volcano/join/sort_hash_join.cuh"
 #include "experiment_util.cuh"
 
 using namespace std;

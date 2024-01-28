@@ -9,8 +9,8 @@
 #include <cuda.h>
 #include <cub/cub.cuh> 
 
-#include "tuple.cuh"
-#include "utils.cuh"
+#include "types/tuple.cuh"
+#include "utils/utils.cuh"
 #include "merge_path.cuh"
 #include "join_base.hpp"
 #include <thrust/gather.h>

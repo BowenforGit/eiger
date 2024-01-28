@@ -14,8 +14,8 @@
 #include <cub/block/block_shuffle.cuh>
 #include <cuda_pipeline.h>
 
-#include "tuple.cuh"
-#include "utils.cuh"
+#include "types/tuple.cuh"
+#include "utils/utils.cuh"
 
 template<typename idx_t, typename cnt_t>
 struct merge_range {

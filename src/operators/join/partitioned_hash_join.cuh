@@ -13,8 +13,8 @@
 #include <cuda.h>
 #include <cub/cub.cuh> 
 
-#include "tuple.cuh"
-#include "utils.cuh"
+#include "types/tuple.cuh"
+#include "utils/utils.cuh"
 #include "partition_util.cuh"
 #include "phj_util.cuh"
 #include "join_base.hpp"

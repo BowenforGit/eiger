@@ -4,7 +4,7 @@
 #include <cub/cub.cuh> 
 #include <iostream>
 
-#include "mem_manager.hpp"
+#include "memory/mem_manager.hpp"
 
 #define COL(t,i) (t).template get_typed_ptr<(i)>()
 
@@ -50,7 +50,8 @@ void for_(F func)
 template <typename T>
 void check(T err, const char* const func, const char* const file,
            const int line)
-{/*
+{
+#ifdef DEBUG
     if (err != cudaSuccess)
     {
         std::cerr << "CUDA Runtime Error at: " << file << ":" << line
@@ -60,11 +61,13 @@ void check(T err, const char* const func, const char* const file,
         // We don't exit when we encounter CUDA errors in this example.
         // std::exit(EXIT_FAILURE);
     }
-*/}
+#endif
+}
 
 #define CHECK_LAST_CUDA_ERROR() checkLast(__FILE__, __LINE__)
 void checkLast(const char* const file, const int line)
-{/*
+{
+#ifdef DEBUG
     cudaError_t err{cudaGetLastError()};
     if (err != cudaSuccess)
     {
@@ -74,7 +77,8 @@ void checkLast(const char* const file, const int line)
         // We don't exit when we encounter CUDA errors in this example.
         // std::exit(EXIT_FAILURE);
     }
-*/}
+#endif
+}
 
 inline void alloc_by_cuda(void** ptr, bool clear, size_t sz, cudaStream_t stream) {
     CHECK_CUDA_ERROR(cudaMallocAsync(ptr, sz, stream));

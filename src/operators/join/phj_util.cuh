@@ -4,7 +4,7 @@
 
 #pragma once
 #include <cuda.h>
-#include "vec_types.cuh"
+#include "types/vec_types.cuh"
 
 __global__ void init_metadata_double ( 
                 uint64_t  * __restrict__ heads1,

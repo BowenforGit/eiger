@@ -11,9 +11,9 @@
 
 #include <cuda.h>
 
-#include "tuple.cuh"
-#include "utils.cuh"
-#include "../data_gen/generator.cuh"
+#include "types/tuple.cuh"
+#include "utils/utils.cuh"
+#include "data_gen/generator.cuh"
 
 #define DECL_TUP(c, ...) using TU ## c = struct Chunk<__VA_ARGS__>;
 
