@@ -14,7 +14,7 @@
 
 #include "types/tuple.cuh"
 #include "utils/utils.cuh"
-#include "operators/scan/scan.cuh"
+#include "pullops/scan.cuh"
 #include "data_gen/generator.cuh"
 #include "operators/join/sort_merge_join.cuh"
 #include "operators/join/partitioned_hash_join.cuh"

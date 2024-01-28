@@ -10,7 +10,7 @@
 
 #include "types/tuple.cuh"
 #include "utils/utils.cuh"
-#include "operators/operator.hpp"
+#include "operator.hpp"
 
 template<typename Tuple>
 class ScanOperator : public Operator {
