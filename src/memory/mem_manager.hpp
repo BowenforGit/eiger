@@ -53,6 +53,10 @@ public:
         return peak_mem_used;
     }
 
+    size_t get_mem_used() const {
+        return mem_used;
+    }
+
 private:
     // find a block in the free list that is at least as large as sz
     block_type find_block(const size_t sz) {
@@ -79,8 +83,9 @@ private:
         int i = 0;
         for(auto b = free_list.begin(); b != free_list.end(); b++, i++) {
             std::cout << "Block " << i << ": " << b->sz << " bytes\n";
-         }
-
+        }
+        std::cout << "Peak memory usage: " << peak_mem_used << " bytes (" << peak_mem_used / 1024 / 1024 / 1024 << " GB)\n";
+        std::cout << "Cuurent memory usage: " << mem_used << " bytes (" << mem_used / 1024 / 1024 / 1024 << " GB)\n";
         throw std::bad_alloc();
     }
 

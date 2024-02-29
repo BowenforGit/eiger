@@ -8,6 +8,9 @@ project(
     GPUOPS 
     LANGUAGES CXX CUDA)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 option(USE_CUDA_MEMALLOC "Use CUDA to manage memory allocation and deallocation. [Default=OFF]" OFF)
 
 add_library(common INTERFACE)
@@ -60,5 +63,12 @@ if(USE_CUDA_MEMALLOC)
     )
 endif()
 
-# add_subdirectory(nvbench)
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
+)
+find_package(GTest)
+
+add_subdirectory(nvbench)
 add_subdirectory(src)

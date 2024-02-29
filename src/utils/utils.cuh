@@ -133,9 +133,14 @@ inline int num_tb(const int N, const int threads_per_block=1024, const int items
 }
 
 void debug_cuda_mem_usage() {
+#ifdef USE_CUDA_MEMALLOC
     size_t free = 0, total = 0;
     cudaMemGetInfo(&free, &total);
     std::cout << "Free bytes : " << free << " Total bytes : " << total << std::endl;
+#else
+    std::cout << "Peak memory usage: " << mm->get_peak_mem_used() << " bytes (" << mm->get_peak_mem_used() / 1024 / 1024 / 1024 << " GB)\n";
+    std::cout << "Cuurent memory usage: " << mm->get_mem_used() << " bytes (" << mm->get_mem_used() / 1024 / 1024 / 1024 << " GB)\n";
+#endif
 }
 
 // The following two utility functions only work for 1D thread layout
