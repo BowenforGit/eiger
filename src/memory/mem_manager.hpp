@@ -21,6 +21,10 @@ public:
         free_list.insert(free_list.cend(), root_block);
     }
 
+    ~UserSpaceMM() {
+        if(root) cudaFree(root);
+    }
+
     void allocate(void** ptr, bool clear, size_t sz, cudaStream_t stream) {
         if(sz == 0) {
             std::cout << "!!WARNING!! Allocation of 0 bytes!!!\n";

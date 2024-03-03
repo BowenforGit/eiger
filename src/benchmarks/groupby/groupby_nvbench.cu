@@ -7,6 +7,7 @@
 
 template<typename KeyT>
 void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
+    release_all_mem();
     using namespace gamax::groupby;
 
     struct groupby_params params;

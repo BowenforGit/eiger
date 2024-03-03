@@ -127,6 +127,15 @@ inline void release_mem(T* ptr, cudaStream_t stream = 0) {
 #endif
 }
 
+inline void release_all_mem() {
+#ifdef USE_CUDA_MEMALLOC
+    std::cout << "Cannot release all memory with the CUDA memory allocator\n";
+#else
+    delete mm;
+    mm = nullptr;
+#endif
+}
+
 __host__ __device__
 inline int num_tb(const int N, const int threads_per_block=1024, const int items_per_thread=1) {
     return (N + threads_per_block*items_per_thread - 1) / (threads_per_block*items_per_thread);
