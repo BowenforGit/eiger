@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "operators/groupby/groupby_sort.cuh"
+#include "operators/groupby/groupby_partition.cuh"
 #include "types/tuple.cuh"
 #include "benchmarks/groupby/groupby_util.cuh"
 
@@ -12,6 +13,7 @@ template <typename KeyT, typename ValueT, typename AggT>
 void invoke_groupby_sort(KeyT* h_keys, 
                          ValueT* h_vals, 
                          const int num_items,
+                         gamax::groupby::groupby_algo algo,
                          KeyT*& h_out_keys,
                          typename AggT::OutputType*& h_out_vals,
                          int& num_groups,
@@ -33,7 +35,12 @@ void invoke_groupby_sort(KeyT* h_keys,
     tout.allocate(use_hint ? hint.NDV : num_items);
     cudaDeviceSynchronize();
     
-    gamax::groupby::sort::grouped_agg<AggT>(tkeys, tvals, tout);
+    if(algo == gamax::groupby::groupby_algo::GROUPBY_SORT) {
+        gamax::groupby::sort::grouped_agg<AggT>(tkeys, tvals, tout);
+    } else {
+        gamax::groupby::partition::grouped_agg<AggT>(tkeys, tvals, tout);
+    }
+    // gamax::groupby::partition::grouped_agg<AggT>(tkeys, tvals, tout);
 
     tout.peek(16);
 
@@ -59,18 +66,19 @@ void test_groupby_sort(const groupby_params& params, KeyT*& h_out_keys, int*& h_
 
     struct groupby_hint hint;
     hint.NDV = params.num_groups;
-    invoke_groupby_sort<KeyT, int, AggT>(h_keys, h_vals, params.num_items, h_out_keys, h_out_vals, num_groups, hint);
+    invoke_groupby_sort<KeyT, int, AggT>(h_keys, h_vals, params.num_items, params.algo, h_out_keys, h_out_vals, num_groups, hint);
     
     free(h_keys);
     free(h_vals);
 }
 
-#define GROUPBY_TEST_CASE(K, AGG, N, G) \
+#define GROUPBY_TEST_CASE(K, AGG, N, G, ALGO) \
     { \
         groupby_params params; \
         params.num_items = (N); \
         params.num_groups = (G); \
         params.zipf_factor = 0.0; \
+        params.algo = (ALGO); \
         K* ret_keys = nullptr; \
         int* ret_vals = nullptr; \
         int num_groups; \
@@ -86,29 +94,28 @@ void test_groupby_sort(const groupby_params& params, KeyT*& h_out_keys, int*& h_
         free(ret_vals); \
     }
 
-TEST(GROUPBY_SORT, INT_GROUPKEY_SUM_4_GROUPS) {
-    GROUPBY_TEST_CASE(int, Sum, (1<<28), 4)
-}
+#define GROUPBY_TEST_CASE_SUITE(SUITE_NAME, ALGO) \
+    TEST(SUITE_NAME, INT_GROUPKEY_SUM_4_GROUPS) { \
+        GROUPBY_TEST_CASE(int, Sum, (1<<28), 4, ALGO) \
+    } \
+    TEST(SUITE_NAME, INT_GROUPKEY_SUM_1024_GROUPS) { \
+        GROUPBY_TEST_CASE(int, Sum, (1<<28), 1024, ALGO) \
+    } \
+    TEST(SUITE_NAME, INT_GROUPKEY_SUM_1048576_GROUPS) { \
+        GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<20), ALGO) \
+    } \
+    TEST(SUITE_NAME, INT_GROUPKEY_SUM_33554432_GROUPS) { \
+        GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<25), ALGO) \
+    } \
+    TEST(SUITE_NAME, INT_GROUPKEY_SUM_268435356_GROUPS) { \
+        GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<28), ALGO) \
+    } \
+    TEST(SUITE_NAME, LONG_GROUPKEY_SUM_1024_GROUPS) { \
+        GROUPBY_TEST_CASE(long, Sum, (1<<28), 1024, ALGO) \
+    }
 
-TEST(GROUPBY_SORT, INT_GROUPKEY_SUM_1024_GROUPS) {
-    GROUPBY_TEST_CASE(int, Sum, (1<<28), 1024)
-}
-
-TEST(GROUPBY_SORT, INT_GROUPKEY_SUM_1048576_GROUPS) {
-    GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<20))
-}
-
-TEST(GROUPBY_SORT, INT_GROUPKEY_SUM_33554432_GROUPS) {
-    GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<25))
-}
-
-TEST(GROUPBY_SORT, INT_GROUPKEY_SUM_268435356_GROUPS) {
-    GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<28))
-}
-
-TEST(GROUPBY_SORT, LONG_GROUPKEY_SUM_1024_GROUPS) {
-    GROUPBY_TEST_CASE(long, Sum, (1<<28), 1024)
-}
+GROUPBY_TEST_CASE_SUITE(GROUPBY_SORT, gamax::groupby::groupby_algo::GROUPBY_SORT)
+GROUPBY_TEST_CASE_SUITE(GROUPBY_PARTITION, gamax::groupby::groupby_algo::GROUPBY_PARTITION)
 
 int main(int argc, char **argv) {
   testing::InitGoogleTest(&argc, argv);

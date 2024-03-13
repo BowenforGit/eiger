@@ -6,10 +6,17 @@
 
 namespace gamax {
 namespace groupby {
+    enum groupby_algo {
+        GROUPBY_PARTITION,
+        GROUPBY_SORT,
+        GROUPBY_NOT_SUPPORTED
+    };
+
     struct groupby_params {
         int num_items {4096};
         int num_groups {1024};
         double zipf_factor {0.0};
+        enum groupby_algo algo {GROUPBY_SORT};
 
         void print() const {
             std::cout << "num_items: " << num_items << std::endl;
@@ -44,6 +51,7 @@ namespace groupby {
         using OutputType = ValT;
         
         static constexpr bool is_monoid = true;
+        static constexpr bool is_atomic_updatable = true;
         static constexpr ValT identity = 0;
 
         template <typename IdxT, typename ResultT, typename IntermediateT>
@@ -55,9 +63,15 @@ namespace groupby {
         }
 
         template <typename ResultT>
+        __device__ __forceinline__ void atomic_update(ResultT* result, 
+                                                      ValT val) {
+            atomicAdd(result, val);
+        }
+
+        template <typename ResultT>
         __device__ __forceinline__ ResultT thread_local_update(
-                                            ResultT local_agg,
-                                            ValT val) {
+                                            const ResultT& local_agg,
+                                            const ValT& val) {
             return local_agg + val;
         }
 
@@ -65,26 +79,17 @@ namespace groupby {
         __device__ __forceinline__ ResultT operator() (
                                             const ResultT& local_agg,
                                             const ValT& val) const {
+            // return template thread_local_update<ResultT>(local_agg, val);
             return local_agg + val;
         }
     };
 
-    // template<typename ValT>
-    // struct Max {
-    //     using OutputType = ValT;
-    //     template <typename IdxT, typename ResultT, typename IntermediateT>
-    //     __device__ __forceinline__ void update(IdxT idx, 
-    //                                         ResultT* result, 
-    //                                         IntermediateT* inter, 
-    //                                         ValT val) {
-    //         atomicMax(&result[idx], val);
-    //     }
-    // };
     template<typename ValT>
     struct Max {
         using OutputType = ValT;
         
         static constexpr bool is_monoid = true;
+        static constexpr bool is_atomic_updatable = true;
         static constexpr ValT identity = std::numeric_limits<OutputType>::min();
 
         template <typename IdxT, typename ResultT, typename IntermediateT>
@@ -96,9 +101,15 @@ namespace groupby {
         }
 
         template <typename ResultT>
+        __device__ __forceinline__ void atomic_update(ResultT* result, 
+                                                      ValT val) {
+            atomicMax(result, val);
+        }
+
+        template <typename ResultT>
         __device__ __forceinline__ ResultT thread_local_update(
-                                            ResultT local_agg,
-                                            ValT val) {
+                                            const ResultT& local_agg,
+                                            const ValT& val) {
             return cub::max(local_agg, val);
         }
 
