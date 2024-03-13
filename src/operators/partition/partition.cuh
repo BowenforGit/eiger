@@ -46,8 +46,9 @@ namespace gamax {
             }
 
             ~Partition() {
-                release_mem(partition_offsets);
+                release_mem(partitioned_keys);
                 release_mem(partitioned_values);
+                if(calculate_offsets) release_mem(partition_offsets);
             }
 
             KeyT* get_partitioned_keys() {
