@@ -8,6 +8,8 @@
 
 #define COL(t,i) (t).template get_typed_ptr<(i)>()
 
+#define CEIL(a,b) (((a)+(b)-1)/(b))
+
 // Timing functions are from Anil Shanbhag (https://github.com/anilshanbhag/crystal)
 
 #define SETUP_TIMING() cudaEvent_t start, stop; cudaEventCreate(&start); cudaEventCreate(&stop);
@@ -65,7 +67,7 @@ void check(T err, const char* const func, const char* const file,
 }
 
 #define CHECK_LAST_CUDA_ERROR() checkLast(__FILE__, __LINE__)
-void checkLast(const char* const file, const int line)
+inline void checkLast(const char* const file, const int line)
 {
 #ifdef DEBUG
     cudaError_t err{cudaGetLastError()};
@@ -95,7 +97,7 @@ inline size_t get_cuda_free_mem() {
 
 // Choose your own memory pool size
 constexpr size_t mem_pool_size = 25769803776*0.9;
-static UserSpaceMM<mem_pool_size>* mm;
+extern UserSpaceMM<mem_pool_size>* mm;
 
 inline void alloc_by_rmm_mempool(void** ptr, bool clear, size_t sz, cudaStream_t stream) {
     if(mm == nullptr) mm = new UserSpaceMM<mem_pool_size>();
@@ -106,7 +108,7 @@ inline void free_rmm_mempool(void* ptr, cudaStream_t stream) {
     mm->release(ptr, stream);
 }
 
-// #define USE_CUDA_MEMALLOC
+#define USE_CUDA_MEMALLOC
 template<typename T>
 inline void allocate_mem(T** ptr, bool clear = true, size_t sz = sizeof(T), cudaStream_t stream = 0) {
     assert(ptr != nullptr);
@@ -141,7 +143,7 @@ inline int num_tb(const int N, const int threads_per_block=1024, const int items
     return (N + threads_per_block*items_per_thread - 1) / (threads_per_block*items_per_thread);
 }
 
-void debug_cuda_mem_usage() {
+inline void debug_cuda_mem_usage() {
 #ifdef USE_CUDA_MEMALLOC
     size_t free = 0, total = 0;
     cudaMemGetInfo(&free, &total);
@@ -174,8 +176,8 @@ void print_gpu_arr(const T* arr, size_t n, size_t offset=0) {
 }
 
 template<typename T>
-__global__ void fill_sequence(T* arr, const T start, const size_t N) {
+__global__ void fill_sequence(T* arr, const T start, const size_t N, const T step = 1) {
     for(int t = get_cuda_tid(); t < N; t += nthreads()) {
-        arr[t] = start+t;
+        arr[t] = start+t*step;
     }
 }

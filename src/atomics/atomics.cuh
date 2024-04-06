@@ -16,5 +16,33 @@ namespace atomic {
                          static_cast<U>(compare), 
                          static_cast<U>(val));
     }
+
+    template<typename T>
+    __device__ T atomic_add(T* address, T val) {
+        return atomicAdd(address, val);
+    }
+
+    template<>
+    __device__ int64_t atomic_add<int64_t>(int64_t* address, int64_t val) {
+        return atomicAdd(reinterpret_cast<unsigned long long*>(address), 
+                         static_cast<unsigned long long>(val));
+    }
+
+    template<>
+    __device__ long long int atomic_add<long long int>(long long int* address, long long int val) {
+        return atomicAdd(reinterpret_cast<unsigned long long*>(address), 
+                         static_cast<unsigned long long>(val));
+    }
+
+    template<typename T>
+    __device__ T atomic_max(T* address, T val) {
+        return atomicMax(address, val);
+    }
+
+    template<>
+    __device__ int64_t atomic_max<int64_t>(int64_t* address, int64_t val) {
+        return atomicMax(reinterpret_cast<long long int*>(address), 
+                         static_cast<long long int>(val));
+    }
 }
 }

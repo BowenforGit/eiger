@@ -25,10 +25,6 @@ namespace groupby {
         }
     };
 
-    struct groupby_hint {
-        int NDV {-1};
-    };
-
     template <typename KeyT, typename ValueT>
     void generate_groupby_data(KeyT* h_keys, ValueT* h_vals, const groupby_params& params) {
         if(params.zipf_factor == 0.0) {
@@ -39,86 +35,27 @@ namespace groupby {
             }
             knuth_shuffle(h_keys, params.num_items);
         } else {
-            std::cout << "Zipfian distribution not implemented yet" << std::endl;
-            std::exit(1);
+            KeyT* groups = new KeyT[params.num_groups];
+            for (int i = 0; i < params.num_groups; i++) {
+                groups[i] = i;
+            }
+            
+            auto lut = gen_zipf_lut(params.zipf_factor, params.num_groups);
+            zipf_distribution_t<KeyT> dist(lut.begin(), lut.end());
+            #pragma omp parallel
+            {
+                int tid = omp_get_thread_num();
+                std::default_random_engine e(42+tid);
+                
+                #pragma omp for
+                for(size_t i = 0; i < params.num_items; i++) {
+                    h_keys[i] = groups[dist(e)];
+                }
+            }
+            // std::cout << "Zipfian distribution not implemented yet" << std::endl;
+            // std::exit(1);
         }
         std::cout << "Data generated" << std::endl;
     }
-
-    // some common aggregation functions
-    template<typename ValT>
-    struct Sum {
-        using OutputType = ValT;
-        
-        static constexpr bool is_monoid = true;
-        static constexpr bool is_atomic_updatable = true;
-        static constexpr ValT identity = 0;
-
-        template <typename IdxT, typename ResultT, typename IntermediateT>
-        __device__ __forceinline__ void global_update(IdxT idx, 
-                                            ResultT* result, 
-                                            IntermediateT* inter, 
-                                            ValT val) {
-            atomicAdd(&result[idx], val);
-        }
-
-        template <typename ResultT>
-        __device__ __forceinline__ void atomic_update(ResultT* result, 
-                                                      ValT val) {
-            atomicAdd(result, val);
-        }
-
-        template <typename ResultT>
-        __device__ __forceinline__ ResultT thread_local_update(
-                                            const ResultT& local_agg,
-                                            const ValT& val) {
-            return local_agg + val;
-        }
-
-        template <typename ResultT>
-        __device__ __forceinline__ ResultT operator() (
-                                            const ResultT& local_agg,
-                                            const ValT& val) const {
-            // return template thread_local_update<ResultT>(local_agg, val);
-            return local_agg + val;
-        }
-    };
-
-    template<typename ValT>
-    struct Max {
-        using OutputType = ValT;
-        
-        static constexpr bool is_monoid = true;
-        static constexpr bool is_atomic_updatable = true;
-        static constexpr ValT identity = std::numeric_limits<OutputType>::min();
-
-        template <typename IdxT, typename ResultT, typename IntermediateT>
-        __device__ __forceinline__ void global_update(IdxT idx, 
-                                            ResultT* result, 
-                                            IntermediateT* inter, 
-                                            ValT val) {
-            atomicMax(&result[idx], val);
-        }
-
-        template <typename ResultT>
-        __device__ __forceinline__ void atomic_update(ResultT* result, 
-                                                      ValT val) {
-            atomicMax(result, val);
-        }
-
-        template <typename ResultT>
-        __device__ __forceinline__ ResultT thread_local_update(
-                                            const ResultT& local_agg,
-                                            const ValT& val) {
-            return cub::max(local_agg, val);
-        }
-
-        template <typename ResultT>
-        __device__ __forceinline__ ResultT operator() (
-                                            const ResultT& local_agg,
-                                            const ValT& val) const {
-            return cub::max(local_agg, val);
-        }
-    };
 }
 }

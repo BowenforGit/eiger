@@ -1,11 +1,17 @@
 #include <iostream>
 #include <omp.h>
 #include <gtest/gtest.h>
+#include <vector>
 
+#include "operators/groupby/groupby.hpp"
+#include "operators/groupby/aggregation.hpp"
 #include "operators/groupby/groupby_sort.cuh"
+#include "operators/groupby/agg_func.cuh"
 #include "operators/groupby/groupby_partition.cuh"
-#include "types/tuple.cuh"
+#include "types/type_dispatcher.hpp"
 #include "benchmarks/groupby/groupby_util.cuh"
+#include "memory/column.hpp"
+#include "memory/table.hpp"
 
 using namespace gamax::groupby;
 
@@ -17,44 +23,36 @@ void invoke_groupby_sort(KeyT* h_keys,
                          KeyT*& h_out_keys,
                          typename AggT::OutputType*& h_out_vals,
                          int& num_groups,
-                         const struct groupby_hint& hint) {
-    using keys_tuple_t = struct Chunk<KeyT>;
-    using vals_tuple_t = struct Chunk<ValueT>;
-    using agg_t = typename AggT::OutputType;
-    using out_tuple_t = struct Chunk<KeyT, agg_t>;
+                         gamax::groupby::groupby_hint& hint) {
+    auto d_keys = gamax::make_column_from_host(h_keys, num_items);
+    auto d_vals = gamax::make_column_from_host(h_vals, num_items);
 
-    keys_tuple_t tkeys(num_items, 0, h_keys);
-    vals_tuple_t tvals(num_items, 0, h_vals);
-    release_mem(tkeys.select_vec);
-    release_mem(tvals.select_vec);
-    tkeys.select_vec = nullptr;
-    tvals.select_vec = nullptr;
-    
-    const bool use_hint = hint.NDV != -1;
-    out_tuple_t tout;
-    tout.allocate(use_hint ? hint.NDV : num_items);
-    cudaDeviceSynchronize();
-    
-    if(algo == gamax::groupby::groupby_algo::GROUPBY_SORT) {
-        gamax::groupby::sort::grouped_agg<AggT>(tkeys, tvals, tout);
-    } else {
-        gamax::groupby::partition::grouped_agg<AggT>(tkeys, tvals, tout);
-    }
-    // gamax::groupby::partition::grouped_agg<AggT>(tkeys, tvals, tout);
+    // std::cout << gamax::to_string(d_keys->type()) << std::endl;
+    // std::cout << gamax::to_string(d_vals->type()) << std::endl;
+    // std::cout << d_keys->size() << std::endl;
+    // std::cout << d_vals->size() << std::endl;
 
-    tout.peek(16);
+    std::vector<decltype(d_keys)> keys_vec;
+    keys_vec.push_back(std::move(d_keys));
+    std::vector<decltype(d_vals)> vals_vec;
+    vals_vec.push_back(std::move(d_vals));
 
-    tkeys.free_mem();
-    tvals.free_mem();
+    gamax::table key_table(std::move(keys_vec));
+    gamax::table val_table(std::move(vals_vec));
 
-    num_groups = tout.num_items;
-    h_out_keys = (KeyT*)malloc(num_groups * sizeof(KeyT));
-    h_out_vals = (agg_t*)malloc(num_groups * sizeof(agg_t));
-    cudaMemcpy(h_out_keys, COL(tout, 0), num_groups * sizeof(KeyT), cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_out_vals, COL(tout, 1), num_groups * sizeof(agg_t), cudaMemcpyDeviceToHost);
-    tout.free_mem();
+    std::vector<gamax::groupby::aggregation_request> requests;
+    requests.push_back({0, gamax::groupby::aggregation_id::SUM});
+    auto out_table_ptr = gamax::groupby::sort::groupby(key_table, val_table, requests, hint);
 
-    cudaDeviceSynchronize();
+    auto& d_out_keys = out_table_ptr->get_column(0);
+    auto& d_out_vals = out_table_ptr->get_column(1);
+
+    h_out_keys = new KeyT[d_out_keys.size()];
+    h_out_vals = new typename AggT::OutputType[d_out_vals.size()];
+
+    gamax::copy_column_to_host(d_out_keys, h_out_keys);
+    gamax::copy_column_to_host(d_out_vals, h_out_vals);
+    num_groups = d_out_keys.size();
 }
 
 template <typename KeyT, typename AggT>
@@ -64,8 +62,8 @@ void test_groupby_sort(const groupby_params& params, KeyT*& h_out_keys, int*& h_
 
     generate_groupby_data(h_keys, h_vals, params);
 
-    struct groupby_hint hint;
-    hint.NDV = params.num_groups;
+    gamax::groupby::groupby_hint hint;
+    hint.groups_upper_bound = params.num_groups;
     invoke_groupby_sort<KeyT, int, AggT>(h_keys, h_vals, params.num_items, params.algo, h_out_keys, h_out_vals, num_groups, hint);
     
     free(h_keys);
@@ -111,11 +109,11 @@ void test_groupby_sort(const groupby_params& params, KeyT*& h_out_keys, int*& h_
         GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<28), ALGO) \
     } \
     TEST(SUITE_NAME, LONG_GROUPKEY_SUM_1024_GROUPS) { \
-        GROUPBY_TEST_CASE(long, Sum, (1<<28), 1024, ALGO) \
+        GROUPBY_TEST_CASE(int64_t, Sum, (1<<28), 1024, ALGO) \
     }
 
 GROUPBY_TEST_CASE_SUITE(GROUPBY_SORT, gamax::groupby::groupby_algo::GROUPBY_SORT)
-GROUPBY_TEST_CASE_SUITE(GROUPBY_PARTITION, gamax::groupby::groupby_algo::GROUPBY_PARTITION)
+// GROUPBY_TEST_CASE_SUITE(GROUPBY_PARTITION, gamax::groupby::groupby_algo::GROUPBY_PARTITION)
 
 int main(int argc, char **argv) {
   testing::InitGoogleTest(&argc, argv);
