@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <omp.h>
+#include <cassert>
 
 #include "operators/groupby/groupby.hpp"
 #include "memory/column.hpp"
@@ -45,13 +46,9 @@ void generate_groupby_data(KeyT* h_keys, ValueT* h_vals, const groupby_params& p
         }
         knuth_shuffle(h_keys, params.num_items);
     } else {
-        KeyT* groups = new KeyT[params.num_groups];
-        for (int i = 0; i < params.num_groups; i++) {
-            groups[i] = i;
-        }
-        
         auto lut = gen_zipf_lut(params.zipf_factor, params.num_groups);
         zipf_distribution_t<KeyT> dist(lut.begin(), lut.end());
+        
         #pragma omp parallel
         {
             int tid = omp_get_thread_num();
@@ -59,7 +56,8 @@ void generate_groupby_data(KeyT* h_keys, ValueT* h_vals, const groupby_params& p
             
             #pragma omp for
             for(size_t i = 0; i < params.num_items; i++) {
-                h_keys[i] = groups[dist(e)];
+                h_keys[i] = dist(e);
+                h_vals[i] = 1;
             }
         }
     }
