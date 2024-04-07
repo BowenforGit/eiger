@@ -8,7 +8,9 @@ find_package(OpenMP)
 
 set(srcs
     operators/groupby/groupby_sort.cu
+    operators/groupby/groupby_partition.cu
     operators/sort/sort.cu
+    operators/partition/partition.cu
     memory/column.cu
     memory/table.cu
     memory/mem_manager.cu

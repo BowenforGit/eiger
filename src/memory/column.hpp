@@ -46,6 +46,10 @@ public:
         return _data;
     }
 
+    void set_size (size_type size) {
+        _size = size;
+    }
+
     template <typename T = void>
     T* data() const noexcept
     {
@@ -71,5 +75,6 @@ void copy_column_to_host(column const& col, T* host_data) {
 }
 
 std::unique_ptr<column> make_column(data_type type, size_type size); 
+std::unique_ptr<column> make_idx_column(size_type size); 
 void free_column(std::unique_ptr<column> column);
 } // namespace gamax

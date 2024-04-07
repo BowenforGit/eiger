@@ -1,6 +1,9 @@
 #include <memory>
 #include <utility> // std::pair
 
+#include <cuda.h>
+#include <cub/cub.cuh> 
+
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
 #include "operators/sort/sort.cuh"
@@ -98,6 +101,8 @@ std::pair<std::unique_ptr<gamax::column>, std::unique_ptr<gamax::column>>
 sort_column_pair(
     gamax::column& key_col, 
     gamax::column& val_col, 
+    int begin_bit,
+    int end_bit,
     gamax::sort_order order, 
     void* d_temp_storage, 
     size_t temp_storage_bytes, 
@@ -108,6 +113,10 @@ sort_column_pair(
     auto key_out = std::make_unique<gamax::column>(key_col.type(), num_rows);
     auto val_out = std::make_unique<gamax::column>(val_col.type(), num_rows);
 
+    if(end_bit <= 0) {
+        end_bit = 8 * gamax::size_of(key_col.type());
+    }
+
     double_type_dispatcher(
         key_col.type(), 
         val_col.type(), 
@@ -117,8 +126,8 @@ sort_column_pair(
         val_col, 
         *val_out, 
         num_rows,
-        0, // begin bit
-        8 * gamax::size_of(key_col.type()), // end bit
+        begin_bit,
+        end_bit,
         order, 
         d_temp_storage, 
         temp_storage_bytes, 
@@ -131,6 +140,8 @@ sort_column_pair(
 std::unique_ptr<gamax::column>
 sort_column(
     gamax::column& col,
+    int begin_bit,
+    int end_bit,
     gamax::sort_order order,
     void* d_temp_storage,
     size_t temp_storage_bytes,
@@ -140,14 +151,18 @@ sort_column(
 
     auto out = std::make_unique<gamax::column>(col.type(), num_rows);
 
+    if(end_bit <= 0) {
+        end_bit = 8 * gamax::size_of(col.type());
+    }
+
     type_dispatcher(
         col.type(),
         sort_key_helper{},
         col,
         *out,
         num_rows,
-        0, // begin bit
-        8 * gamax::size_of(col.type()), // end bit
+        begin_bit,
+        end_bit,
         order,
         d_temp_storage,
         temp_storage_bytes,

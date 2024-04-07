@@ -2,19 +2,12 @@
 
 #define CUB_STDERR
 
-#include <iostream>
-#include <type_traits>
-
-#include <cuda.h>
-#include <cub/cub.cuh> 
+#include <memory>
 
 #include "memory/column.hpp"
 #include "memory/table.hpp"
-#include "utils/utils.cuh"
-#include "utils/cub_wrapper.cuh"
-#include "operators/sort/sort.cuh"
-#include "operators/groupby/load_balancer.cuh"
 #include "operators/groupby/aggregation.hpp"
+#include "operators/groupby/groupby.hpp"
 
 namespace gamax::groupby::sort {
 

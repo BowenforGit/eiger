@@ -2,10 +2,14 @@ enable_testing()
 include(GoogleTest)
 
 set(testSources 
-    groupby/groupby_sort.cu)
+    groupby/groupby_sort.cu
+    groupby/groupby_partition.cu
+)
 
 set(testTargets 
-    test_groupby_sort)
+    test_groupby_sort
+    test_groupby_partition
+)
     
 foreach(source target IN ZIP_LISTS testSources testTargets)
     message(STATUS "Adding test target: ${target} with source: ${source}")

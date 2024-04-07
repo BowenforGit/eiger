@@ -1,11 +1,13 @@
 #include <memory>
 
 #include "utils/utils.cuh"
+#include "utils/cub_wrapper.cuh"
 #include "operators/groupby/groupby.hpp"
 #include "operators/groupby/groupby_sort.cuh"
 #include "operators/groupby/aggregation.hpp"
 #include "operators/groupby/load_balancer.cuh"
 #include "operators/groupby/agg_func.cuh"
+#include "operators/sort/sort.cuh"
 #include "types/data_type.hpp"
 
 namespace gamax::groupby::sort {
@@ -26,7 +28,7 @@ void group_keys(T* sorted_key,
     allocate_mem(&num_runs, true, sizeof(NumItemsT));
     CALL_CUB_FUNC(cub::DeviceRunLengthEncode::Encode, sorted_key, unique_keys_out, membership_cnt, num_runs, num_items)
 
-    CHECK_CUDA_ERROR(cudaMemcpy(num_groups, num_runs, sizeof(NumItemsT), cudaMemcpyDeviceToHost));
+    cudaMemcpy(num_groups, num_runs, sizeof(NumItemsT), cudaMemcpyDeviceToHost);
     CALL_CUB_FUNC(cub::DeviceScan::InclusiveSum, membership_cnt, membership_ps, *num_groups)
 
     release_mem(membership_cnt);
@@ -226,7 +228,7 @@ std::unique_ptr<gamax::table> groupby(
             throw std::runtime_error("Unsupported aggregation function");
         }
 
-        gamax::free_column(std::move(sorted_val));
+        // gamax::free_column(std::move(sorted_val));
     }
 
     cudaStreamSynchronize(0);
