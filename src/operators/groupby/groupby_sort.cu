@@ -2,12 +2,14 @@
 
 #include "utils/utils.cuh"
 #include "utils/cub_wrapper.cuh"
+#include "memory/column.hpp"
+#include "memory/table.hpp"
 #include "operators/groupby/groupby.hpp"
-#include "operators/groupby/groupby_sort.cuh"
+#include "operators/groupby/groupby_sort.hpp"
 #include "operators/groupby/aggregation.hpp"
 #include "operators/groupby/load_balancer.cuh"
 #include "operators/groupby/agg_func.cuh"
-#include "operators/sort/sort.cuh"
+#include "operators/sort/sort.hpp"
 #include "types/data_type.hpp"
 
 namespace gamax::groupby::sort {

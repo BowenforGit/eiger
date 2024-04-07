@@ -2,7 +2,8 @@
 
 #define CUB_STDERR
 
-#include <type_traits>
+#include <cuda.h>
+#include <memory>
 
 #include "memory/column.hpp"
 

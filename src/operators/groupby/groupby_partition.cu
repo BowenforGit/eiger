@@ -1,4 +1,4 @@
-#include "operators/groupby/groupby_partition.cuh"
+#include "operators/groupby/groupby_partition.hpp"
 
 #include <memory>
 #include <cuda.h>
@@ -7,6 +7,8 @@
 #include "utils/utils.cuh"
 #include "utils/cub_wrapper.cuh"
 #include "containers/agg_hashmap.cuh"
+#include "memory/column.hpp"
+#include "memory/table.hpp"
 #include "operators/partition/partition.hpp"
 #include "operators/groupby/groupby.hpp"
 #include "operators/groupby/aggregation.hpp"

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cuda.h>
+#include <limits>
+
 #include "atomics/atomics.cuh"
 
 namespace gamax::groupby {

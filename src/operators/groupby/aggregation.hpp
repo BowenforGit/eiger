@@ -1,11 +1,5 @@
 #pragma once
 
-#include <vector>
-
-#include "memory/column.hpp"
-#include "memory/table.hpp"
-#include "types/data_type.hpp"
-
 namespace gamax {
 namespace groupby {
 

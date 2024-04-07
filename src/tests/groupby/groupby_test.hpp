@@ -11,8 +11,8 @@
 #include "memory/table.hpp"
 #include "operators/groupby/aggregation.hpp"
 #include "operators/groupby/agg_func.cuh"
-#include "operators/groupby/groupby_sort.cuh"
-#include "operators/groupby/groupby_partition.cuh"
+#include "operators/groupby/groupby_sort.hpp"
+#include "operators/groupby/groupby_partition.hpp"
 #include "types/type_dispatcher.hpp"
 
 using namespace gamax::groupby;

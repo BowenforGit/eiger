@@ -6,7 +6,7 @@
 
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
-#include "operators/sort/sort.cuh"
+#include "operators/sort/sort.hpp"
 
 namespace gamax::sort {
 namespace {

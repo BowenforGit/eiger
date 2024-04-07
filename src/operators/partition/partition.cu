@@ -1,7 +1,7 @@
 #include <cub/cub.cuh>
 
 #include "operators/partition/partition.hpp"
-#include "operators/sort/sort.cuh"
+#include "operators/sort/sort.hpp"
 #include "utils/cub_wrapper.cuh"
 #include "types/type_dispatcher.hpp"
 #include "types/data_type.hpp"

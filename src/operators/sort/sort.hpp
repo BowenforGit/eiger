@@ -2,10 +2,11 @@
 
 #define CUB_STDERR
 
-#include <memory>
+#include <cuda.h> // cudaStream_t
+#include <memory> // std::unique_ptr
 
-#include "types/data_type.hpp"
-#include "memory/column.hpp"
+#include "types/data_type.hpp" // sort_order
+#include "memory/column.hpp" // column
 
 namespace gamax {
 namespace sort {

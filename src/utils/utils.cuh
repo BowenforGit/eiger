@@ -108,7 +108,7 @@ inline void free_rmm_mempool(void* ptr, cudaStream_t stream) {
     mm->release(ptr, stream);
 }
 
-#define USE_CUDA_MEMALLOC
+// #define USE_CUDA_MEMALLOC
 template<typename T>
 inline void allocate_mem(T** ptr, bool clear = true, size_t sz = sizeof(T), cudaStream_t stream = 0) {
     assert(ptr != nullptr);
