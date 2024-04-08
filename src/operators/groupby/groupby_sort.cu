@@ -151,6 +151,7 @@ std::unique_ptr<gamax::table> groupby(
     auto unique_keys = gamax::make_column(key.get_column(0).type(), estimated_num_groups);
     auto membership_ps_ptr = gamax::make_column(gamax::data_type{type_to_id<gamax::size_type>()}, estimated_num_groups);
     group_keys(*sorted_key, *unique_keys, input_num_rows, &num_groups, *membership_ps_ptr);
+    unique_keys->set_size(num_groups);
     // std::cout << "num_groups: " << num_groups << "\n";
     // print_gpu_arr(unique_keys->data<int64_t>(), 16);
     

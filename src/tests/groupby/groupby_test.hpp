@@ -64,7 +64,7 @@ void invoke_groupby_sort(KeyT* h_keys,
 
 template <typename KeyT>
 void check_groupby_result(KeyT* h_keys, KeyT* ret_keys, int* ret_vals, int num_groups, const groupby_params& params) {
-    ASSERT_EQ(num_groups, params.num_groups);
+    ASSERT_EQ(num_groups, params.actual_num_groups);
     unsigned long long sum = 0;
 
     if(params.zipf_factor == 0.0) {
@@ -109,7 +109,10 @@ void test_groupby_sort(groupby_params& params) {
             std::cout << "Warning: only " << num_groups_generated << " groups generated out of " << params.num_groups << std::endl;
         }
 
-        params.num_groups = num_groups_generated;
+        params.actual_num_groups = num_groups_generated;
+    }
+    else {
+        params.actual_num_groups = params.num_groups;
     }
 
 
@@ -166,5 +169,11 @@ void test_groupby_sort(groupby_params& params) {
     } \
     TEST(SUITE_NAME, INT_GROUPKEY_SUM_1024_GROUPS_SKEW_3) { \
         GROUPBY_TEST_CASE(int, Sum, (1<<28), 1024, ALGO, (2.0)) \
+    } \
+    TEST(SUITE_NAME, INT_GROUPKEY_SUM_4194304_GROUPS_SKEW_4) { \
+        GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<22), ALGO, (1.0)) \
+    } \
+    TEST(SUITE_NAME, INT_GROUPKEY_SUM_4194304_GROUPS_SKEW_5) { \
+        GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<22), ALGO, (2.0)) \
     }
 }

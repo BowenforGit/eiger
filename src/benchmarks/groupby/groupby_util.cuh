@@ -28,6 +28,7 @@ struct groupby_params {
     int num_groups {1024};
     double zipf_factor {0.0};
     enum groupby_algo algo {GROUPBY_SORT};
+    int actual_num_groups {-1};
 
     void print() const {
         std::cout << "num_items: " << num_items << std::endl;
