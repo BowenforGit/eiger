@@ -172,4 +172,18 @@ sort_column(
     return out;
 }
 
+std::pair<std::unique_ptr<gamax::column>, std::unique_ptr<gamax::column>> 
+argsort(
+    gamax::column& col,
+    int begin_bit,
+    int end_bit,
+    gamax::sort_order order,
+    void* d_temp_storage,
+    size_t temp_storage_bytes,
+    cudaStream_t stream) {
+    
+    auto idx_col = gamax::make_sequence(col.size());
+    return sort_column_pair(col, *idx_col, begin_bit, end_bit, order, d_temp_storage, temp_storage_bytes, stream);
+}
+
 } // namespace gamax::sort

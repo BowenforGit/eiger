@@ -76,5 +76,6 @@ void copy_column_to_host(column const& col, T* host_data) {
 
 std::unique_ptr<column> make_column(data_type type, size_type size); 
 std::unique_ptr<column> make_idx_column(size_type size); 
+std::unique_ptr<column> make_sequence(size_type size, size_type start = 0, size_type step = 1); 
 void free_column(std::unique_ptr<column> column);
 } // namespace gamax

@@ -1,4 +1,5 @@
 #include <memory>
+#include <thrust/iterator/permutation_iterator.h>
 
 #include "utils/utils.cuh"
 #include "utils/cub_wrapper.cuh"
@@ -70,8 +71,8 @@ void group_keys(
     );
 }
 
-template<typename F, int NT, typename T, typename NumItemsT, typename IdxT, typename ResultT>
-__global__ void aggregate_kernel_block_monoid(T* values, 
+template<typename F, int NT, typename ValIt, typename NumItemsT, typename IdxT, typename ResultT>
+__global__ void aggregate_kernel_block_monoid(ValIt values, 
                 NumItemsT num_items, 
                 NumItemsT num_units,
                 IdxT* units_start, 
@@ -106,8 +107,8 @@ __global__ void aggregate_kernel_block_monoid(T* values,
     }
 }
 
-template<typename F>
-void aggregate(typename F::InputType* values, 
+template<typename F, typename ValIt = typename F::InputType*>
+void aggregate(ValIt values, 
                 gamax::size_type num_items, 
                 gamax::size_type num_units,
                 gamax::size_type* units_start, 
@@ -123,8 +124,7 @@ void aggregate(typename F::InputType* values,
 } // unnamed namespace
 
 // TODO
-// 1. assign the actual number of groups to the output table not using the table from hint
-// 2. support the aggregation function in a better way
+// 1. support the aggregation function in a better way
 std::unique_ptr<gamax::table> groupby(
     gamax::table& key, 
     gamax::table& val, 
@@ -143,17 +143,12 @@ std::unique_ptr<gamax::table> groupby(
     auto estimated_num_groups = std::min(input_num_rows, hint.groups_upper_bound);
 
     auto [sorted_key, sorted_val_0] = gamax::sort::sort_column_pair(key.get_column(0), val.get_column(0));
-
-    // print_gpu_arr(sorted_key->data<int64_t>(), 16);
-    // print_gpu_arr(sorted_val_0->data<int32_t>(), 16);
     
     gamax::size_type num_groups = 0;
     auto unique_keys = gamax::make_column(key.get_column(0).type(), estimated_num_groups);
     auto membership_ps_ptr = gamax::make_column(gamax::data_type{type_to_id<gamax::size_type>()}, estimated_num_groups);
     group_keys(*sorted_key, *unique_keys, input_num_rows, &num_groups, *membership_ps_ptr);
     unique_keys->set_size(num_groups);
-    // std::cout << "num_groups: " << num_groups << "\n";
-    // print_gpu_arr(unique_keys->data<int64_t>(), 16);
     
     gamax::free_column(std::move(sorted_key));
 
@@ -162,17 +157,17 @@ std::unique_ptr<gamax::table> groupby(
 
     constexpr gamax::size_type threshold = 4096;
     int num_units = 0;
-    gamax::size_type* units_start = nullptr, *units_end = nullptr, *units_group = nullptr;
     int max_work_units = num_groups + (input_num_rows+threshold-1)/threshold;
-    allocate_mem(&units_start, false, max_work_units*sizeof(gamax::size_type));
-    allocate_mem(&units_end,   false, max_work_units*sizeof(gamax::size_type));
-    allocate_mem(&units_group, false, max_work_units*sizeof(gamax::size_type));
-    generate_workunits(reinterpret_cast<gamax::size_type*>(membership_ps_ptr->data()), num_groups, threshold, &num_units, units_start, units_end, units_group);
 
-    // std::cout << "num_units: " << num_units << "\n";
-    // print_gpu_arr(units_start, 16);
-    // print_gpu_arr(units_end, 16);
-    // print_gpu_arr(units_group, 16);
+    auto units_start_ptr = gamax::make_idx_column(max_work_units);
+    auto units_end_ptr = gamax::make_idx_column(max_work_units);
+    auto units_group_ptr = gamax::make_idx_column(max_work_units);
+
+    auto units_start = units_start_ptr->data<gamax::size_type>();
+    auto units_end = units_end_ptr->data<gamax::size_type>();
+    auto units_group = units_group_ptr->data<gamax::size_type>();
+
+    generate_workunits(reinterpret_cast<gamax::size_type*>(membership_ps_ptr->data()), num_groups, threshold, &num_units, units_start, units_end, units_group);
 
     gamax::free_column(std::move(membership_ps_ptr));
 
@@ -230,15 +225,125 @@ std::unique_ptr<gamax::table> groupby(
         else {
             throw std::runtime_error("Unsupported aggregation function");
         }
-
-        // gamax::free_column(std::move(sorted_val));
     }
 
     cudaStreamSynchronize(0);
 
-    release_mem(units_start);
-    release_mem(units_end);
-    release_mem(units_group);
+    return std::make_unique<gamax::table>(std::move(final_columns));
+}
+
+std::unique_ptr<gamax::table> groupby_gfur(
+    gamax::table& key, 
+    gamax::table& val, 
+    std::vector<gamax::groupby::aggregation_request>& agg_requests,
+    gamax::groupby::groupby_hint& hint) 
+{
+    if(key.num_columns() > 1) {
+        throw std::runtime_error("Only single-column group keys are supported");
+    }
+    
+    if(key.num_columns() == 0) {
+        throw std::runtime_error("Aggregation only is not supported yet");
+    }
+
+    auto input_num_rows = key.num_rows();
+    auto estimated_num_groups = std::min(input_num_rows, hint.groups_upper_bound);
+
+    auto [sorted_key, idx_col] = gamax::sort::argsort(key.get_column(0));
+    
+    gamax::size_type num_groups = 0;
+    auto unique_keys = gamax::make_column(key.get_column(0).type(), estimated_num_groups);
+    auto membership_ps_ptr = gamax::make_column(gamax::data_type{type_to_id<gamax::size_type>()}, estimated_num_groups);
+    group_keys(*sorted_key, *unique_keys, input_num_rows, &num_groups, *membership_ps_ptr);
+    unique_keys->set_size(num_groups);
+    
+    gamax::free_column(std::move(sorted_key));
+
+    std::vector<std::unique_ptr<gamax::column>> final_columns;
+    final_columns.push_back(std::move(unique_keys));
+
+    constexpr gamax::size_type threshold = 4096;
+    int num_units = 0;
+    int max_work_units = num_groups + (input_num_rows+threshold-1)/threshold;
+
+    auto units_start_ptr = gamax::make_idx_column(max_work_units);
+    auto units_end_ptr = gamax::make_idx_column(max_work_units);
+    auto units_group_ptr = gamax::make_idx_column(max_work_units);
+
+    auto units_start = units_start_ptr->data<gamax::size_type>();
+    auto units_end = units_end_ptr->data<gamax::size_type>();
+    auto units_group = units_group_ptr->data<gamax::size_type>();
+
+    generate_workunits(reinterpret_cast<gamax::size_type*>(membership_ps_ptr->data()), num_groups, threshold, &num_units, units_start, units_end, units_group);
+
+    gamax::free_column(std::move(membership_ps_ptr));
+
+    for(auto& req: agg_requests) {
+        auto i = req.column_index;
+        auto agg_kind = req.agg_kind;
+
+        auto& val_col = val.get_column(i);
+        
+        if(agg_kind == gamax::groupby::aggregation_id::SUM) {
+            if(val.get_column(i).type().id() == gamax::type_id::INT32) {
+                using agg_fn_t = gamax::groupby::Sum<int32_t>;
+                using agg_output_t = agg_fn_t::OutputType;
+                auto agg_val = std::make_unique<gamax::column>(gamax::data_type{type_to_id<agg_output_t>()}, num_groups, true);
+
+                auto val_data = val_col.data<agg_fn_t::InputType>();
+                auto val_itr = thrust::make_permutation_iterator(val_data, idx_col->data<gamax::size_type>());
+
+                aggregate<agg_fn_t>(val_itr, input_num_rows, num_units, units_start, units_end, units_group, num_groups, agg_val->data<agg_fn_t::OutputType>());
+                final_columns.push_back(std::move(agg_val));
+            }
+            else if(val.get_column(i).type().id() == gamax::type_id::INT64) {
+                using agg_fn_t = gamax::groupby::Sum<int64_t>;
+                using agg_output_t = agg_fn_t::OutputType;
+                auto agg_val = std::make_unique<gamax::column>(gamax::data_type{type_to_id<agg_output_t>()}, num_groups, true);
+
+                auto val_data = val_col.data<agg_fn_t::InputType>();
+                auto val_itr = thrust::make_permutation_iterator(val_data, idx_col->data<gamax::size_type>());
+
+                aggregate<agg_fn_t>(val_itr, input_num_rows, num_units, units_start, units_end, units_group, num_groups, agg_val->data<agg_fn_t::OutputType>());
+                final_columns.push_back(std::move(agg_val));
+            }
+            else {
+                throw std::runtime_error("Unsupported data type for SUM aggregation");
+            }
+        }
+        else if(agg_kind == gamax::groupby::aggregation_id::MAX) {
+            if(val.get_column(i).type().id() == gamax::type_id::INT32) {
+                using agg_fn_t = gamax::groupby::Max<int32_t>;
+                using agg_output_t = agg_fn_t::OutputType;
+                auto agg_val = std::make_unique<gamax::column>(gamax::data_type{type_to_id<agg_output_t>()}, num_groups, true);
+
+                auto val_data = val_col.data<agg_fn_t::InputType>();
+                auto val_itr = thrust::make_permutation_iterator(val_data, idx_col->data<gamax::size_type>());
+
+                aggregate<agg_fn_t>(val_itr, input_num_rows, num_units, units_start, units_end, units_group, num_groups, agg_val->data<agg_fn_t::OutputType>());
+                final_columns.push_back(std::move(agg_val));
+            }
+            else if(val.get_column(i).type().id() == gamax::type_id::INT64) {
+                using agg_fn_t = gamax::groupby::Max<int64_t>;
+                using agg_output_t = agg_fn_t::OutputType;
+                auto agg_val = std::make_unique<gamax::column>(gamax::data_type{type_to_id<agg_output_t>()}, num_groups, true);
+
+                auto val_data = val_col.data<agg_fn_t::InputType>();
+                auto val_itr = thrust::make_permutation_iterator(val_data, idx_col->data<gamax::size_type>());
+
+                aggregate<agg_fn_t>(val_itr, input_num_rows, num_units, units_start, units_end, units_group, num_groups, agg_val->data<agg_fn_t::OutputType>());
+                final_columns.push_back(std::move(agg_val));
+            }
+            else {
+                throw std::runtime_error("Unsupported data type for SUM aggregation");
+            }
+        }
+        else {
+            throw std::runtime_error("Unsupported aggregation function");
+        }
+    }
+
+    cudaStreamSynchronize(0);
 
     return std::make_unique<gamax::table>(std::move(final_columns));
 }

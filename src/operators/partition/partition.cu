@@ -48,6 +48,19 @@ partition_column(
         stream);
 }
 
+std::pair<std::unique_ptr<gamax::column>, std::unique_ptr<gamax::column>> 
+arg_partition(
+    gamax::column& col,
+    int begin_bit,
+    int end_bit,
+    void* d_temp_storage,
+    size_t temp_storage_bytes,
+    cudaStream_t stream) 
+{
+    auto idx_col = gamax::make_sequence(col.size());
+    return partition_column_pair(col, *idx_col, begin_bit, end_bit, d_temp_storage, temp_storage_bytes, stream);
+}
+
 namespace {
 template<typename T>
 struct RadixExtractor

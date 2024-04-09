@@ -2,7 +2,8 @@
 
 #include "groupby_test.hpp"
 
-GROUPBY_TEST_CASE_SUITE(GROUPBY_SORT, gamax::groupby::groupby_algo::GROUPBY_SORT)
+// GROUPBY_TEST_CASE_SUITE(GROUPBY_SORT, gamax::groupby::groupby_algo::GROUPBY_SORT)
+GROUPBY_TEST_CASE_SUITE(GROUPBY_SORT, gamax::groupby::groupby_algo::GROUPBY_SORT_GFUR)
 
 int main(int argc, char **argv) {
   testing::InitGoogleTest(&argc, argv);

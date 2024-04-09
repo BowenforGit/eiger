@@ -18,5 +18,11 @@ std::unique_ptr<gamax::table> groupby(
     gamax::table& val, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint);
+
+std::unique_ptr<gamax::table> groupby_gfur(
+    gamax::table& key, 
+    gamax::table& val, 
+    std::vector<gamax::groupby::aggregation_request>& agg_requests,
+    gamax::groupby::groupby_hint& hint);
     
 } // namespace gamax::groupby::sort

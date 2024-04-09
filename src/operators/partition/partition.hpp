@@ -27,6 +27,15 @@ partition_column(
     size_t temp_storage_bytes = 0,
     cudaStream_t stream = 0);
 
+std::pair<std::unique_ptr<gamax::column>, std::unique_ptr<gamax::column>> 
+arg_partition(
+    gamax::column& col,
+    int begin_bit,
+    int end_bit,
+    void* d_temp_storage = nullptr,
+    size_t temp_storage_bytes = 0,
+    cudaStream_t stream = 0);
+
 std::unique_ptr<gamax::column>
 compute_partition_offsets(
     gamax::column& partitioned_key_col,

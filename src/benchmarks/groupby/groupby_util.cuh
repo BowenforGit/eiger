@@ -20,6 +20,8 @@ namespace groupby {
 enum groupby_algo {
     GROUPBY_PARTITION,
     GROUPBY_SORT,
+    GROUPBY_PARTITION_GFUR,
+    GROUPBY_SORT_GFUR,
     GROUPBY_NOT_SUPPORTED
 };
 

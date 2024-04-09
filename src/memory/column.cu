@@ -1,5 +1,6 @@
 #include "column.hpp"
 #include "types/type_dispatcher.hpp"
+#include "utils/sequence.cuh"
 
 #include <memory>
 
@@ -20,6 +21,16 @@ std::unique_ptr<column> make_column(data_type type, size_type size) {
 
 std::unique_ptr<column> make_idx_column(size_type size) {
     return make_column(data_type{size_type_id}, size);
+}
+
+std::unique_ptr<column> make_sequence(
+    size_type size, 
+    size_type start, 
+    size_type step) {
+    
+    auto col = make_idx_column(size);
+    gamax::utils::device::create_sequence(col->data<gamax::size_type>(), size, start, step);
+    return col;
 }
 
 
