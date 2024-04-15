@@ -1,3 +1,6 @@
 [submodule "nvbench"]
 	path = nvbench
 	url = https://github.com/NVIDIA/nvbench.git
+[submodule "cuCollections"]
+	path = cuCollections
+	url = https://github.com/NVIDIA/cuCollections.git

@@ -52,6 +52,8 @@ void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
     auto f = gamax::groupby::sort::groupby;
     if(algo == "partition") {
         f = gamax::groupby::partition::groupby;
+    } else if(algo == "sort_gfur") {
+        f = gamax::groupby::sort::groupby_gfur;
     }
 
     state.set_cuda_stream(nvbench::make_cuda_stream_view(0));
@@ -69,7 +71,7 @@ void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
 NVBENCH_BENCH_TYPES(bench_groupby_max,
                     NVBENCH_TYPE_AXES(nvbench::type_list<int32_t, int64_t>))
   .set_name("groupby_max")
-  .add_string_axis("algo", {"sort", "partition"})
+  .add_string_axis("algo", {"sort", "partition", "sort_gfur"})
   .add_int64_power_of_two_axis("num_items", {28, 29})
   .add_int64_power_of_two_axis("num_groups", nvbench::range(2, 22, 2))
   .add_float64_axis("zipf_factor", {0.0, 0.5, 1.0, 1.5, 2.0});
