@@ -10,7 +10,7 @@ Currently, GaMax is under active development and has supported
 
 ## Dependencies
 
-- CMake 3.20.1+
+- CMake 3.23.1+
 - GNU Make
 
 ## Code Structure
@@ -28,6 +28,12 @@ All non-third-party source code are located in the `src/` directory, including t
 - `tests/` - tests based on GoogleTest.
 - `types/` - definition of data types and related utility functions.
 - `utils` - utility functions.
+
+## Get GaMax
+
+```sh
+git clone --recursive git@gitlab.inf.ethz.ch:wubo/vldb24-artifact.git
+```
 
 ## Build GaMax
 
