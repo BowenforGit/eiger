@@ -1,10 +1,8 @@
 set(benchmarkSources 
-    groupby/groupby_nvbench.cu
-    misc/murmur3.cu)
+    groupby/groupby_nvbench.cu)
 
 set(benchmarkTargets 
-    benchmark_groupby
-    benchmark_murmur3_hash)
+    benchmark_groupby)
 
 foreach(source target IN ZIP_LISTS benchmarkSources benchmarkTargets)
     message(STATUS "Adding test target: ${target} with source: ${source}")
