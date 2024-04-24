@@ -4,6 +4,8 @@
 #include <limits>
 
 #include "atomics/atomics.cuh"
+#include "types/data_type.hpp"
+#include "types/type_dispatcher.hpp"
 
 namespace gamax::groupby {
 template<typename ValT>
@@ -35,12 +37,11 @@ struct Sum {
         return local_agg + val;
     }
 
-    template <typename ResultT>
-    __device__ __forceinline__ ResultT operator() (
-                                        const ResultT& local_agg,
-                                        const ValT& val) const {
-        // return template thread_local_update<ResultT>(local_agg, val);
-        return local_agg + val;
+    template<typename T, typename U>
+    __device__ __forceinline__ OutputType operator() (
+                                        const T& a,
+                                        const U& b) const {
+        return static_cast<OutputType>(a) + static_cast<OutputType>(b);
     }
 };
 
@@ -73,11 +74,11 @@ struct Max {
         return cub::max(local_agg, val);
     }
 
-    template <typename ResultT>
-    __device__ __forceinline__ ResultT operator() (
-                                        const ResultT& local_agg,
-                                        const ValT& val) const {
-        return cub::max(local_agg, val);
+    template<typename T, typename U>
+    __device__ __forceinline__ OutputType operator() (
+                                        const T& a,
+                                        const U& b) const {
+        return cub::max(static_cast<OutputType>(a), static_cast<OutputType>(b));
     }
 };
 } // namespace gamax::groupby
