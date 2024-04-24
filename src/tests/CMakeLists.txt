@@ -4,11 +4,13 @@ include(GoogleTest)
 set(testSources 
     groupby/groupby_sort.cu
     groupby/groupby_partition.cu
+    compress/dictionary_encode_test.cu
 )
 
 set(testTargets 
     test_groupby_sort
     test_groupby_partition
+    test_dictionary_encode
 )
     
 foreach(source target IN ZIP_LISTS testSources testTargets)

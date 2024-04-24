@@ -15,12 +15,12 @@ column::column(column&& other) noexcept
   other._type       = data_type{type_id::EMPTY};
 }
 
-std::unique_ptr<column> make_column(data_type type, size_type size) {
-    return std::make_unique<column>(type, size, gamax::device_buffer{size * gamax::size_of(type)});
+std::unique_ptr<column> make_column(data_type type, size_type size, bool clear) {
+    return std::make_unique<column>(type, size, clear);
 }
 
-std::unique_ptr<column> make_idx_column(size_type size) {
-    return make_column(data_type{size_type_id}, size);
+std::unique_ptr<column> make_idx_column(size_type size, bool clear) {
+    return make_column(data_type{size_type_id}, size, clear);
 }
 
 std::unique_ptr<column> make_sequence(
