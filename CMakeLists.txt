@@ -17,7 +17,6 @@ add_library(common INTERFACE)
 target_compile_features(common INTERFACE cxx_std_17 cuda_std_17)
 
 set(NVCC_COMPILER_FLAGS "")
-# list(APPEND NVCC_COMPILER_FLAGS -gencode=arch=compute_86,code=\"sm_86,compute_86\")
 list(APPEND NVCC_COMPILER_FLAGS -gencode arch=compute_${CMAKE_CUDA_ARCHITECTURES},code=sm_${CMAKE_CUDA_ARCHITECTURES})
 list(APPEND NVCC_COMPILER_FLAGS --expt-relaxed-constexpr --expt-extended-lambda --extended-lambda)
 list(APPEND NVCC_COMPILER_FLAGS -Xptxas="-v" -lineinfo -Xcudafe)
@@ -34,7 +33,6 @@ target_include_directories(
     common 
     INTERFACE 
     "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/>/"
-    # "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/cuCollections/include/>/"
 )
 
 message(STATUS "CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
