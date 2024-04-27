@@ -4,12 +4,14 @@ include(GoogleTest)
 set(testSources 
     groupby/groupby_sort.cu
     groupby/groupby_partition.cu
+    groupby/groupby_hash_test.cu
     compress/dictionary_encode_test.cu
 )
 
 set(testTargets 
     test_groupby_sort
     test_groupby_partition
+    test_groupby_hash
     test_dictionary_encode
 )
     

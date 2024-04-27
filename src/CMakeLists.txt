@@ -3,6 +3,7 @@ find_package(OpenMP)
 set(srcs
     operators/groupby/groupby_sort.cu
     operators/groupby/groupby_partition.cu
+    operators/groupby/groupby_hash.cu
     operators/sort/sort.cu
     operators/partition/partition.cu
     compress/dictionary_encode.cu

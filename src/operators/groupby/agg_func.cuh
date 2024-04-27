@@ -6,6 +6,7 @@
 #include "atomics/atomics.cuh"
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
+#include "memory/column.hpp"
 
 namespace gamax::groupby {
 template<typename ValT>
@@ -20,20 +21,20 @@ struct Sum {
     template <typename IdxT, typename ResultT>
     __device__ __forceinline__ void global_update(IdxT idx, 
                                         ResultT* result, 
-                                        ValT val) {
+                                        ValT val) const {
         gamax::atomic::atomic_add(&result[idx], val);
     }
 
     template <typename ResultT>
     __device__ __forceinline__ void atomic_update(ResultT* result, 
-                                                    ValT val) {
+                                                    ValT val) const {
         gamax::atomic::atomic_add(result, val);
     }
 
     template <typename ResultT>
     __device__ __forceinline__ ResultT thread_local_update(
                                         const ResultT& local_agg,
-                                        const ValT& val) {
+                                        const ValT& val) const {
         return local_agg + val;
     }
 
@@ -42,6 +43,12 @@ struct Sum {
                                         const T& a,
                                         const U& b) const {
         return static_cast<OutputType>(a) + static_cast<OutputType>(b);
+    }
+
+    __device__ __forceinline__ void operator() (
+                                        column& src, gamax::size_type src_idx, 
+                                        column& dst, gamax::size_type dst_idx) const {
+        this->global_update(dst_idx, dst.data<OutputType>(), src.data<ValT>()[src_idx]);
     }
 };
 
@@ -57,20 +64,20 @@ struct Max {
     template <typename IdxT, typename ResultT>
     __device__ __forceinline__ void global_update(IdxT idx, 
                                         ResultT* result, 
-                                        ValT val) {
+                                        ValT val) const {
         gamax::atomic::atomic_max(&result[idx], val);
     }
 
     template <typename ResultT>
     __device__ __forceinline__ void atomic_update(ResultT* result, 
-                                                    ValT val) {
+                                                    ValT val) const {
         gamax::atomic::atomic_max(result, val);
     }
 
     template <typename ResultT>
     __device__ __forceinline__ ResultT thread_local_update(
                                         const ResultT& local_agg,
-                                        const ValT& val) {
+                                        const ValT& val) const {
         return cub::max(local_agg, val);
     }
 
@@ -79,6 +86,12 @@ struct Max {
                                         const T& a,
                                         const U& b) const {
         return cub::max(static_cast<OutputType>(a), static_cast<OutputType>(b));
+    }
+
+    __device__ __forceinline__ void operator() (
+                                        column& src, gamax::size_type src_idx, 
+                                        column& dst, gamax::size_type dst_idx) const {
+        this->global_update(dst_idx, dst.data<OutputType>(), src.data<ValT>()[src_idx]);
     }
 };
 } // namespace gamax::groupby

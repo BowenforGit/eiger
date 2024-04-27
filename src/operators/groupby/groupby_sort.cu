@@ -18,20 +18,6 @@ namespace gamax::groupby::sort {
 
 namespace {
 
-template<gamax::groupby::aggregation_id agg_kind, typename ValT>
-struct agg_fn_mapper {
-    using F = void;
-};
-
-#define AGG_FN_MAPPER(agg_kind, agg_name) \
-    template<typename ValT> \
-    struct agg_fn_mapper<gamax::groupby::aggregation_id::agg_kind, ValT> { \
-        using F = gamax::groupby::agg_name<ValT>; \
-    };
-
-AGG_FN_MAPPER(SUM, Sum)
-AGG_FN_MAPPER(MAX, Max)
-
 template<typename F, typename ValT>
 struct reduce_by_key_aggregator_helper {
     template<typename KeyT>
@@ -89,7 +75,7 @@ struct dispatch_key_type_helper {
         gamax::size_type* d_num_groups,
         gamax::size_type* permutation_idx = nullptr) {
 
-        using F = typename agg_fn_mapper<agg_kind, ValT>::F;
+        using F = typename gamax::groupby::agg_fn_mapper<agg_kind, ValT>::F;
         
         gamax::type_dispatcher(
             key.type(), 

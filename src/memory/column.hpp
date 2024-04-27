@@ -34,24 +34,24 @@ public:
         , _size{size}
         , _data{std::move(data)} {}
 
-    size_type size() const {
+    __host__ __device__ size_type size() const noexcept {
         return _size;
     }
 
-    data_type type() const {
+    __host__ __device__ data_type type() const noexcept {
         return _type;
     }
 
-    device_buffer& buffer() {
+    __host__ __device__ device_buffer& buffer() noexcept {
         return _data;
     }
 
-    void set_size (size_type size) {
+    void set_size (size_type size) noexcept{
         _size = size;
     }
 
     template <typename T = void>
-    T* data() const noexcept
+    __host__ __device__ T* data() const noexcept
     {
         return static_cast<T*>(_data.data());
     }

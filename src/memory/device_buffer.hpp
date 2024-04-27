@@ -34,8 +34,8 @@ public:
         release_mem(data_);
     }
 
-    void* data() const { return data_; }
-    size_t size() const { return size_; }
+    __host__ __device__ void* data() const { return data_; }
+    __host__ __device__ size_t size() const { return size_; }
 
 private:
     void* data_ {nullptr};

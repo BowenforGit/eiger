@@ -31,6 +31,12 @@ public:
         _columns.at(column_index).reset(nullptr);
     }
 
+    void set_rows(gamax::size_type rows) {
+        for (auto& col : _columns) {
+            col->set_size(rows);
+        }
+    }
+
 private:
     std::vector<std::unique_ptr<column>> _columns {};
 };
