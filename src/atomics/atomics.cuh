@@ -3,6 +3,8 @@
 #include <cuda.h>
 #include <type_traits>
 
+#include "utils/assert.cuh"
+
 namespace gamax {
 namespace atomic {
     template<typename T>
@@ -34,6 +36,11 @@ namespace atomic {
                          static_cast<unsigned long long>(val));
     }
 
+    template<>
+    __device__ __forceinline__ int16_t atomic_add<int16_t>(int16_t* address, int16_t val) {
+        GAMAX_UNREACHABLE("atomicAdd does not support 16-bit integers");
+    }
+
     template<typename T>
     __device__ __forceinline__ T atomic_max(T* address, T val) {
         return atomicMax(address, val);
@@ -43,6 +50,11 @@ namespace atomic {
     __device__ __forceinline__ int64_t atomic_max<int64_t>(int64_t* address, int64_t val) {
         return atomicMax(reinterpret_cast<long long int*>(address), 
                          static_cast<long long int>(val));
+    }
+
+    template<>
+    __device__ __forceinline__ int16_t atomic_max<int16_t>(int16_t* address, int16_t val) {
+        GAMAX_UNREACHABLE("atomicMax does not support 16-bit integers");
     }
 }
 }

@@ -42,7 +42,7 @@ struct id_to_type_impl {
 #endif
 
 // GAMAX_TYPE_MAPPING(int8_t, type_id::INT8)
-// GAMAX_TYPE_MAPPING(int16_t, type_id::INT16)
+GAMAX_TYPE_MAPPING(int16_t, type_id::INT16)
 GAMAX_TYPE_MAPPING(int32_t, type_id::INT32)
 GAMAX_TYPE_MAPPING(int64_t, type_id::INT64)
 // GAMAX_TYPE_MAPPING(uint8_t, type_id::UINT8)
@@ -69,9 +69,9 @@ __host__ __device__ __forceinline__ constexpr decltype(auto) type_dispatcher(gam
     // case type_id::INT8:
     //   return f.template operator()<typename IdTypeMap<type_id::INT8>::type>(
     //     std::forward<Ts>(args)...);
-    // case type_id::INT16:
-    //   return f.template operator()<typename IdTypeMap<type_id::INT16>::type>(
-    //     std::forward<Ts>(args)...);
+    case type_id::INT16:
+      return f.template operator()<typename IdTypeMap<type_id::INT16>::type>(
+        std::forward<Ts>(args)...);
     case type_id::INT32:
       return f.template operator()<typename IdTypeMap<type_id::INT32>::type>(
         std::forward<Ts>(args)...);

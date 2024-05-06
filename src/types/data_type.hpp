@@ -9,7 +9,7 @@ constexpr size_type MAXIMUM_SIZE = std::numeric_limits<size_type>::max();
 enum class type_id {
     EMPTY,                   ///< Always null with no underlying data
     // INT8,                    ///< 1 byte signed integer
-    // INT16,                   ///< 2 byte signed integer
+    INT16,                   ///< 2 byte signed integer
     INT32,                   ///< 4 byte signed integer
     INT64,                   ///< 8 byte signed integer
     // UINT8,                   ///< 1 byte unsigned integer
