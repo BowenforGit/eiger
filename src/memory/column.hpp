@@ -5,6 +5,7 @@
 #include "memory/device_buffer.hpp"
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
+#include "utils/sequence.cuh"
 
 namespace gamax {
 class column {
@@ -62,6 +63,10 @@ private:
     gamax::data_type _type;
 };
 
+std::unique_ptr<column> make_column(data_type type, size_type size, bool clear=false); 
+std::unique_ptr<column> make_idx_column(size_type size, bool clear=false); 
+void free_column(std::unique_ptr<column> column);
+
 template <typename T>
 std::unique_ptr<column> make_column_from_host(T* host_data, size_type num_items) {
     gamax::device_buffer buffer(num_items * sizeof(T), false);
@@ -74,8 +79,14 @@ void copy_column_to_host(column const& col, T* host_data) {
     cudaMemcpy(host_data, col.data<T>(), col.size() * sizeof(T), cudaMemcpyDeviceToHost);
 }
 
-std::unique_ptr<column> make_column(data_type type, size_type size, bool clear=false); 
-std::unique_ptr<column> make_idx_column(size_type size, bool clear=false); 
-std::unique_ptr<column> make_sequence(size_type size, size_type start = 0, size_type step = 1); 
-void free_column(std::unique_ptr<column> column);
+template<typename T = gamax::size_type>
+std::unique_ptr<column> make_sequence(
+    size_type size, 
+    T start = 0, 
+    T step = 1) {
+    
+    auto col = make_column(data_type{type_to_id<T>()}, size);
+    gamax::utils::device::create_sequence(col->data<T>(), size, start, step);
+    return col;
+}
 } // namespace gamax
