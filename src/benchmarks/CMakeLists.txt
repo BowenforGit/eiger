@@ -1,8 +1,10 @@
 set(benchmarkSources 
-    groupby/groupby_nvbench.cu)
+    groupby/groupby_nvbench.cu
+    compress/dict_enc.cu)
 
 set(benchmarkTargets 
-    benchmark_groupby)
+    benchmark_groupby
+    benchmark_dict_enc)
 
 foreach(source target IN ZIP_LISTS benchmarkSources benchmarkTargets)
     message(STATUS "Adding test target: ${target} with source: ${source}")

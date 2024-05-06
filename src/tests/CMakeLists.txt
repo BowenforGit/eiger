@@ -6,6 +6,7 @@ set(testSources
     groupby/groupby_partition.cu
     groupby/groupby_hash_test.cu
     compress/dictionary_encode_test.cu
+    compress/dictionary_encode_dict_ready_test.cu
 )
 
 set(testTargets 
@@ -13,6 +14,7 @@ set(testTargets
     test_groupby_partition
     test_groupby_hash
     test_dictionary_encode
+    test_dictionary_encode_dict_ready
 )
     
 foreach(source target IN ZIP_LISTS testSources testTargets)
