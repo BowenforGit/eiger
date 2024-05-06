@@ -12,8 +12,9 @@ public:
     table()                        = default;
     ~table()                       = default;
     table(table&&)                 = default;  ///< Move constructor
+    table& operator=(table&&)      = default;  ///< Move assignment operator
     table& operator=(table const&) = delete;
-    table& operator=(table&&)      = delete;
+    // table& operator=(table&&)      = delete;
 
     table(std::vector<std::unique_ptr<column>>&& columns);
 

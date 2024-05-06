@@ -16,7 +16,7 @@ struct Sum {
     
     static constexpr bool is_monoid = true;
     static constexpr bool is_atomic_updatable = true;
-    static constexpr ValT identity = 0;
+    static constexpr OutputType identity = 0;
 
     template <typename IdxT, typename ResultT>
     __device__ __forceinline__ void global_update(IdxT idx, 
@@ -59,7 +59,7 @@ struct Max {
     
     static constexpr bool is_monoid = true;
     static constexpr bool is_atomic_updatable = true;
-    static constexpr ValT identity = std::numeric_limits<OutputType>::min();
+    static constexpr OutputType identity = std::numeric_limits<OutputType>::min();
 
     template <typename IdxT, typename ResultT>
     __device__ __forceinline__ void global_update(IdxT idx, 

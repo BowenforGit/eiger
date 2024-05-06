@@ -6,7 +6,7 @@ namespace gamax {
 namespace groupby {
 struct groupby_hint {
     gamax::size_type groups_upper_bound {gamax::MAXIMUM_SIZE};
-    bool zero_based_ids {true}; 
+    bool zero_based_ids {false}; 
     bool use_gfur {false}; // use gfur instead of gftr to group by (for benchmark only)
 };
 }
