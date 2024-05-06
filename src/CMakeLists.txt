@@ -7,6 +7,7 @@ set(srcs
     operators/sort/sort.cu
     operators/partition/partition.cu
     compress/dictionary_encode.cu
+    compress/dictionary_encode_dict_ready.cu
     memory/column.cu
     memory/table.cu
     memory/mem_manager.cu
@@ -14,7 +15,7 @@ set(srcs
 
 add_library(gamax SHARED ${srcs})
 target_link_libraries(gamax PRIVATE common)
-target_link_libraries(gamax PRIVATE cuco)
+target_link_libraries(gamax PUBLIC cuco)
 
 add_subdirectory(tests)
 add_subdirectory(benchmarks)
