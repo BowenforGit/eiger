@@ -50,18 +50,30 @@ private:
 template<typename T>
 class ThrustAllocator {
 public:
+    template<typename U>
+    friend class ThrustAllocator;
+
     using value_type = T;
+
+    ThrustAllocator() = default;
 
     ThrustAllocator(std::shared_ptr<UserSpaceMM> mm, cudaStream_t stream) : mm_(mm), stream_(stream) {}
 
-    T* allocate(std::ptrdiff_t num_bytes) {
+    T* allocate(std::size_t num_items) {
         T* ptr;
-        mm_->allocate((void**)&ptr, false, num_bytes, stream_);
+        mm_->allocate((void**)&ptr, false, num_items*sizeof(T), stream_);
         return ptr;
     }
 
-    void deallocate(char* ptr, std::ptrdiff_t) {
+    void deallocate(T* ptr, std::size_t) {
         mm_->release(ptr, stream_);
+    }
+
+    template <class U>
+    ThrustAllocator(ThrustAllocator<U> const& other) noexcept
+    {
+        mm_ = other.mm_;
+        stream_ = other.stream_;
     }
 
 private:
