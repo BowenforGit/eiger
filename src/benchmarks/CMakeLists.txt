@@ -1,6 +1,6 @@
 set(benchmarkSources 
     groupby/groupby_nvbench.cu
-    compress/dict_enc.cu)
+    compress/dict_enc_nvbench.cu)
 
 set(benchmarkTargets 
     benchmark_groupby

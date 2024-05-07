@@ -2,8 +2,8 @@ enable_testing()
 include(GoogleTest)
 
 set(testSources 
-    groupby/groupby_sort.cu
-    groupby/groupby_partition.cu
+    groupby/groupby_sort_test.cu
+    groupby/groupby_partition_test.cu
     groupby/groupby_hash_test.cu
     compress/dictionary_encode_test.cu
     compress/dictionary_encode_dict_ready_test.cu
