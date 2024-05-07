@@ -11,6 +11,7 @@
 
 #include "memory/column.hpp"
 #include "memory/table.hpp"
+#include "memory/mem_manager.hpp"
 #include "compress/dictionary_encode.hpp"
 #include "operators/sort/sort.hpp"
 
@@ -63,7 +64,7 @@ void test_dictionary_encode(const gamax::size_type num_items, const gamax::size_
     
     thrust::for_each_n(thrust::device, raw_key_ptr, num_items, [=] __device__ (Key& key) { key = key % dict_size; });
     thrust::default_random_engine g;
-    thrust::shuffle(thrust::device, raw_key_ptr, raw_key_ptr + num_items, g);
+    thrust::shuffle(thrust::cuda::par(*get_thrust_allocator()), raw_key_ptr, raw_key_ptr + num_items, g);
     cudaDeviceSynchronize();
 
     auto res = 

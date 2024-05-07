@@ -6,6 +6,7 @@
 #include <thrust/random.h>
 
 #include "memory/column.hpp"
+#include "memory/mem_manager.hpp"
 #include "utils/utils.cuh"
 #include "compress/dictionary_encode.hpp"
 
@@ -65,7 +66,7 @@ void bench_dict_ready_dict_enc(nvbench::state& state, nvbench::type_list<Key, En
     
     thrust::for_each_n(thrust::device, raw_key_ptr, num_items, [=] __device__ (Key& key) { key = key % dict_size; });
     thrust::default_random_engine g;
-    thrust::shuffle(thrust::device, raw_key_ptr, raw_key_ptr + num_items, g);
+    thrust::shuffle(thrust::cuda::par(*get_thrust_allocator()), raw_key_ptr, raw_key_ptr + num_items, g);
     cudaDeviceSynchronize();
 
     state.set_cuda_stream(nvbench::make_cuda_stream_view(cudaStreamDefault));

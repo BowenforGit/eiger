@@ -16,6 +16,7 @@
 #include "operators/groupby/groupby_sort.hpp"
 #include "operators/groupby/groupby_partition.hpp"
 #include "types/type_dispatcher.hpp"
+#include "memory/mem_manager.hpp"
 
 #include "data_gen/generator.cuh"
 
@@ -99,7 +100,7 @@ void generate_groupby_data(gamax::table& key_table, gamax::table& val_table, con
         auto raw_key_ptr = keys->template data<Key>();
         thrust::for_each_n(thrust::device, raw_key_ptr, params.num_items, [=] __device__ (Key& key) { key = key % params.num_groups; });
         thrust::default_random_engine g;
-        thrust::shuffle(thrust::device, raw_key_ptr, raw_key_ptr + params.num_items, g);
+        thrust::shuffle(thrust::cuda::par(*get_thrust_allocator()), raw_key_ptr, raw_key_ptr + params.num_items, g);
         key_vec.push_back(std::move(keys));
     } else {
         auto  h_keys = new Key[params.num_items];

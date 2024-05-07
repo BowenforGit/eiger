@@ -5,6 +5,7 @@
 #include <iostream>
 
 #include "memory/mem_manager.hpp"
+#include "utils/check_error.hpp"
 
 #define COL(t,i) (t).template get_typed_ptr<(i)>()
 
@@ -48,110 +49,9 @@ void for_(F func)
   for_(func, std::make_index_sequence<N>());
 }
 
-#define CHECK_CUDA_ERROR(val) check((val), #val, __FILE__, __LINE__)
-template <typename T>
-void check(T err, const char* const func, const char* const file,
-           const int line)
-{
-#ifdef DEBUG
-    if (err != cudaSuccess)
-    {
-        std::cerr << "CUDA Runtime Error at: " << file << ":" << line
-                  << std::endl;
-        std::cerr << cudaGetErrorString(err) << " " << func << std::endl;
-        cudaGetLastError(); // pop out the current error otherwise it'll be carried over
-        // We don't exit when we encounter CUDA errors in this example.
-        // std::exit(EXIT_FAILURE);
-    }
-#endif
-}
-
-#define CHECK_LAST_CUDA_ERROR() checkLast(__FILE__, __LINE__)
-inline void checkLast(const char* const file, const int line)
-{
-#ifdef DEBUG
-    cudaError_t err{cudaGetLastError()};
-    if (err != cudaSuccess)
-    {
-        std::cerr << "CUDA Runtime Error at: " << file << ":" << line
-                  << std::endl;
-        std::cerr << cudaGetErrorString(err) << std::endl;
-        // We don't exit when we encounter CUDA errors in this example.
-        // std::exit(EXIT_FAILURE);
-    }
-#endif
-}
-
-inline void alloc_by_cuda(void** ptr, bool clear, size_t sz, cudaStream_t stream) {
-    CHECK_CUDA_ERROR(cudaMallocAsync(ptr, sz, stream));
-    if(clear) CHECK_CUDA_ERROR(cudaMemsetAsync(*ptr, 0, sz, stream));
-}
-
-inline size_t get_cuda_free_mem() {
-    size_t free = 0, total = 0;
-    cudaMemGetInfo(&free, &total);
-    std::cout << free << std::endl;
-
-    return free;
-}
-
-// Choose your own memory pool size
-constexpr size_t mem_pool_size = 25769803776*0.9;
-extern UserSpaceMM<mem_pool_size>* mm;
-
-inline void alloc_by_rmm_mempool(void** ptr, bool clear, size_t sz, cudaStream_t stream) {
-    if(mm == nullptr) mm = new UserSpaceMM<mem_pool_size>();
-    mm->allocate(ptr, clear, sz, stream);
-}
-
-inline void free_rmm_mempool(void* ptr, cudaStream_t stream) {
-    mm->release(ptr, stream);
-}
-
-// #define USE_CUDA_MEMALLOC
-template<typename T>
-inline void allocate_mem(T** ptr, bool clear = true, size_t sz = sizeof(T), cudaStream_t stream = 0) {
-    assert(ptr != nullptr);
-
-#ifdef USE_CUDA_MEMALLOC
-    alloc_by_cuda((void**)ptr, clear, sz, stream);
-#else
-    alloc_by_rmm_mempool((void**)ptr, clear, sz, stream);
-#endif
-}
-
-template<typename T>
-inline void release_mem(T* ptr, cudaStream_t stream = 0) {
-#ifdef USE_CUDA_MEMALLOC
-    CHECK_CUDA_ERROR(cudaFreeAsync(ptr, stream));
-#else
-    free_rmm_mempool((void*)ptr, stream);
-#endif
-}
-
-inline void release_all_mem() {
-#ifdef USE_CUDA_MEMALLOC
-    std::cout << "Cannot release all memory with the CUDA memory allocator\n";
-#else
-    delete mm;
-    mm = nullptr;
-#endif
-}
-
 __host__ __device__
 inline int num_tb(const int N, const int threads_per_block=1024, const int items_per_thread=1) {
     return (N + threads_per_block*items_per_thread - 1) / (threads_per_block*items_per_thread);
-}
-
-inline void debug_cuda_mem_usage() {
-#ifdef USE_CUDA_MEMALLOC
-    size_t free = 0, total = 0;
-    cudaMemGetInfo(&free, &total);
-    std::cout << "Free bytes : " << free << " Total bytes : " << total << std::endl;
-#else
-    std::cout << "Peak memory usage: " << mm->get_peak_mem_used() << " bytes (" << mm->get_peak_mem_used() / 1024 / 1024 / 1024 << " GB)\n";
-    std::cout << "Cuurent memory usage: " << mm->get_mem_used() << " bytes (" << mm->get_mem_used() / 1024 / 1024 / 1024 << " GB)\n";
-#endif
 }
 
 // The following two utility functions only work for 1D thread layout
