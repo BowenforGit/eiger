@@ -156,7 +156,7 @@ __host__ __device__ __forceinline__ constexpr decltype(auto) double_type_dispatc
 
 struct size_of_helper {
   template <typename T>
-  constexpr int operator()() const noexcept
+  constexpr __host__ __device__ int operator()() const noexcept
   {
     return sizeof(T);
   }
@@ -170,7 +170,7 @@ struct to_string_helper {
   }
 };
 
-inline std::size_t size_of(data_type element_type)
+inline __host__ __device__ std::size_t size_of(data_type element_type)
 {
   return type_dispatcher(element_type, size_of_helper{});
 }

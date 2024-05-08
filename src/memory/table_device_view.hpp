@@ -15,7 +15,7 @@ public:
     table_device_view() = default;
     table_device_view(table_device_view const&) = default;
     table_device_view(table_device_view&&)      = default;
-    ~table_device_view() {}
+    __host__ __device__ ~table_device_view() {}
     
     __host__ table_device_view(table& source_table, cudaStream_t stream = cudaStreamDefault) {
         _num_columns = source_table.num_columns();
@@ -25,6 +25,10 @@ public:
             cudaMemcpyAsync(&_columns[i], &source_table.get_column(i), sizeof(gamax::column), cudaMemcpyHostToDevice, stream);
         }
     }
+    
+    __host__ __device__ table_device_view(gamax::column* columns, gamax::size_type num_columns) 
+        : _columns(columns)
+        , _num_columns(num_columns) {}
 
     __host__ __device__ gamax::size_type num_columns() const noexcept {
         return _num_columns;
@@ -40,6 +44,10 @@ public:
 
     __device__ gamax::column& operator[](gamax::size_type column_index) {
         return get_column(column_index);
+    }
+
+    __device__ gamax::column* columns() {
+        return _columns;
     }
 
     __host__ void destroy() {

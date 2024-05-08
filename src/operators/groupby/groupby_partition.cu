@@ -24,6 +24,11 @@ namespace {
 
 using namespace gamax::groupby::details;
 
+template<typename Key>
+struct custom_hash {
+  __device__ uint32_t operator()(Key const& k) const noexcept { return k; };
+};
+
 template<typename Key, 
          std::size_t NumWindows, 
          typename IdxIt,
@@ -41,7 +46,6 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
                                             const gamax::size_type num_aggs,
                                             table_device_view res) 
 {
-    constexpr int max_partition_size = 4096;
     constexpr gamax::size_type groupid_write_mask = 0x80000000;
     constexpr gamax::size_type groupid_read_mask = 0x7FFFFFFF;
 
@@ -52,7 +56,7 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
 
     extern __shared__ int16_t temp[];
     auto map = reinterpret_cast<cuco::window<slot_type, window_size>*>(temp);
-    union {
+    struct {
         gamax::size_type num_groups_local;
         gamax::size_type block_offset;
     } *u = reinterpret_cast<decltype(u)>(map+NumWindows);
@@ -70,7 +74,7 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
             cuco::static_map_ref{cuco::empty_key<Key>{-1}, // TODO: reconsider the sentinel value
                                 cuco::empty_value<Value>{-1},
                                 thrust::equal_to<Key>{},
-                                cuco::linear_probing<cg_size, cuco::default_hash_function<Key>>{},
+                                cuco::linear_probing<cg_size, cuco::default_hash_function<Key>>{}, // the hash computation is actually not a bottleneck here
                                 cuco::thread_scope_block,
                                 storage_ref_type{extent_type{}, map}};
         raw_ref.initialize(block);
@@ -79,12 +83,13 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
 
         #pragma unroll
         for(int t = block.thread_rank(); t < units_end[i] - units_start[i]; t += block.size()) {
-            auto [slot, is_new_key] = insert_and_find_ref.insert_and_find(cuco::pair{key_arr[t+units_start[i]], t+units_start[i]});
+            auto idx = t+units_start[i];
+            auto [slot, is_new_key] = insert_and_find_ref.insert_and_find(cuco::pair{key_arr[idx] % NumWindows, idx});
             if(is_new_key) {
                 auto t_group_id = atomicAdd(&(u->num_groups_local), 1); // block-scope group id
-                group_id[t+units_start[i]] = (groupid_write_mask | t_group_id); // flag that his is a group id not a location
+                group_id[idx] = (groupid_write_mask | t_group_id); // flag that his is a group id not a location
             } else {
-                group_loc[t+units_start[i]] = slot->second;
+                group_loc[idx] = slot->second;
             }
         }
         block.sync();
@@ -94,22 +99,95 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
         }
         block.sync();
 
-        for(int t = block.thread_rank(); t < units_end[i] - units_start[i]; t += block.size()) {
-            gamax::size_type g_group_id {-1}; // global group id
-            auto gl = group_loc[t+units_start[i]];
-            if((gl & groupid_write_mask) == groupid_write_mask) { // the first inserter
-                g_group_id = u->block_offset + (gl & groupid_read_mask);
-                res[0].data<Key>()[g_group_id] = key_arr[t+units_start[i]];
-            } else {
-                g_group_id = u->block_offset + (group_id[gl] & groupid_read_mask);
+
+        if(u->num_groups_local == 1) {
+            if(block.thread_rank() == 0) {
+                res[0].data<Key>()[u->block_offset] = key_arr[units_start[i]];
             }
+            for(gamax::size_type k = 0; k < num_aggs; k++) {
+                gamax::groupby::details::reduce(
+                    block,
+                    aggs[k].agg_kind,
+                    values.get_column(aggs[k].column_index), 
+                    val_idx, units_start[i], units_end[i],
+                    res.get_column(k+1), u->block_offset);
+            }
+            // if(block.thread_rank() == 0) {
+            //     gamax::groupby::details::segment_reduce<<<num_tb(units_end[i]-units_start[i], 1024), 1024>>>(
+            //         values.columns(), values.num_columns(), val_idx, units_start[i], units_end[i],
+            //         res.columns(), res.num_columns(), u->block_offset,
+            //         aggs);
+            // }
+        } else if(u->num_groups_local <= 256) { // TODO: re-evaluate this condition
+            void* agg_buffer = reinterpret_cast<void*>(u+1);
+
+            // initialize the aggregation buffer in SMEM
+            auto cur_agg_buffer = agg_buffer;
 
             #pragma unroll
-            for(gamax::size_type k = 0; k < num_aggs; k++) {
-                aggregate(
-                    aggs[k].agg_kind,
-                    values.get_column(aggs[k].column_index), val_idx[t+units_start[i]],
-                    res.get_column(k+1), g_group_id);
+            for(gamax::size_type t = block.thread_rank(); t < u->num_groups_local; t += block.size()) {
+                #pragma unroll
+                for(gamax::size_type k = 0; k < num_aggs; k++) {
+                    init_agg(aggs[k].agg_kind, values.get_column(k).type(), cur_agg_buffer, t);
+                    cur_agg_buffer = reinterpret_cast<void*>(reinterpret_cast<char*>(cur_agg_buffer) + (u->num_groups_local)*gamax::size_of(res.get_column(k+1).type()));
+                }
+            }
+            block.sync();
+            
+            #pragma unroll
+            for(int t = block.thread_rank(); t < units_end[i] - units_start[i]; t += block.size()) {
+                auto idx = t+units_start[i];
+
+                gamax::size_type l_group_id {-1}; // block-local group id
+                auto gl = group_loc[idx];
+                if((gl & groupid_write_mask) == groupid_write_mask) { // the first inserter
+                    l_group_id = (gl & groupid_read_mask);
+                    res[0].data<Key>()[u->block_offset+l_group_id] = key_arr[idx];
+                } else {
+                    l_group_id = (group_id[gl] & groupid_read_mask);
+                }
+                
+                auto cur_agg_buffer = agg_buffer;
+                
+                #pragma unroll
+                for(gamax::size_type k = 0; k < num_aggs; k++) {
+                    block_aggregate(
+                        aggs[k].agg_kind,
+                        values.get_column(aggs[k].column_index), val_idx[idx],
+                        cur_agg_buffer, l_group_id);
+                    cur_agg_buffer = reinterpret_cast<void*>(reinterpret_cast<char*>(cur_agg_buffer) + (u->num_groups_local)*gamax::size_of(res.get_column(k+1).type()));
+                }
+            }
+            block.sync();
+            
+            // copy the result
+            copy_agg_from_smem_to_global(
+                block,
+                res,
+                u->block_offset,
+                agg_buffer,
+                u->num_groups_local,
+                num_aggs);
+        } else {
+            for(int t = block.thread_rank(); t < units_end[i] - units_start[i]; t += block.size()) {
+                auto idx = t+units_start[i];
+
+                gamax::size_type g_group_id {-1}; // global group id
+                auto gl = group_loc[idx];
+                if((gl & groupid_write_mask) == groupid_write_mask) { // the first inserter
+                    g_group_id = u->block_offset + (gl & groupid_read_mask);
+                    res[0].data<Key>()[g_group_id] = key_arr[idx];
+                } else {
+                    g_group_id = u->block_offset + (group_id[gl] & groupid_read_mask);
+                }
+
+                #pragma unroll
+                for(gamax::size_type k = 0; k < num_aggs; k++) {
+                    aggregate(
+                        aggs[k].agg_kind,
+                        values.get_column(aggs[k].column_index), val_idx[idx],
+                        res.get_column(k+1), g_group_id);
+                }
             }
         }
         block.sync();
@@ -186,7 +264,14 @@ struct partition_groupby_impl {
             auto res_view = table_device_view::create(*res);
             auto group_id = gamax::make_idx_column(input_num_rows, false);
 
-            std::size_t sm_bytes = numWindows * sizeof(cuco::window<cuco::pair<Key, gamax::size_type>, window_size>) + sizeof(gamax::size_type);
+            std::size_t sm_bytes = numWindows * sizeof(cuco::window<cuco::pair<Key, gamax::size_type>, window_size>) + sizeof(gamax::size_type)*2;
+            if(estimated_num_groups / num_partitions <= 256) {
+                std::size_t agg_bytes = 0;
+                for(int i = 1; i < res->num_columns(); i++) {
+                    agg_bytes += gamax::size_of(res->get_column(i).type());
+                }
+                sm_bytes += agg_bytes * 256;
+            }
             // std::cout << "sm_bytes: " << sm_bytes << std::endl; 
             auto itr = thrust::make_counting_iterator<gamax::size_type>(0);
             auto agg_fn = partition_groupby_aggregate_kernel<Key, numWindows, decltype(itr)>;
@@ -195,10 +280,10 @@ struct partition_groupby_impl {
                 CHECK_CUDA_ERROR(cudaFuncSetAttribute(agg_fn, cudaFuncAttributeMaxDynamicSharedMemorySize, sm_bytes));
             }
             
-            initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*res_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
+            initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *res_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
             // the grid size and block size given by cudaOccupancyMaxPotentialBlockSize 
             // do not work very well for this kernel
-            agg_fn<<<82*3, 512, sm_bytes, stream>>>(
+            agg_fn<<<num_units, 512, sm_bytes, stream>>>(
                 partitioned_key->data<Key>(),
                 *val_view,
                 itr,
@@ -231,7 +316,6 @@ std::unique_ptr<gamax::table> groupby(
     cudaStream_t stream)
 {
     constexpr auto log_num_partitions = 16;
-    constexpr auto num_partitions = 1 << log_num_partitions;
     constexpr auto cg_size = 1;
     constexpr auto window_size = 1;
     constexpr auto numWindows = 4096;

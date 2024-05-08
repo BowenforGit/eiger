@@ -160,6 +160,9 @@ void test_groupby_sort(groupby_params& params) {
     TEST(SUITE_NAME, INT_GROUPKEY_SUM_1048576_GROUPS) { \
         GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<20), ALGO, 0) \
     } \
+    TEST(SUITE_NAME, INT_GROUPKEY_SUM_16777216_GROUPS) { \
+        GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<24), ALGO, 0) \
+    } \
     TEST(SUITE_NAME, INT_GROUPKEY_SUM_33554432_GROUPS) { \
         GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<25), ALGO, 0) \
     } \

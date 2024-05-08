@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cuda.h>
+#include <cooperative_groups/memcpy_async.h>
 
 #include "aggregation.hpp"
 #include "memory/column.hpp"
@@ -22,14 +23,69 @@ struct dispatch_val_type_helper {
         F{}(src, src_idx, dst, dst_idx);
     }
 
-    // initialize the aggregation value
     template<typename T>
     __device__ __forceinline__ void operator()(
-        gamax::column& dst,
+        gamax::column& src,
+        gamax::size_type src_idx,
+        void* dst,
         gamax::size_type dst_idx)
     {
         using F = typename gamax::groupby::agg_fn_mapper<agg_kind, T>::F;
-        dst.data<F::OutputType>()[dst_idx] = F::identity;
+
+        F f;
+        f.atomic_update(reinterpret_cast<typename F::OutputType*>(dst) + dst_idx, src.data<T>()[src_idx]);
+    }
+
+    // reduce the values from src_idx[src_end] to src_idx[src_start] into a single value
+    // this can be used by a thread block or a grid to perform the aggregation
+    // depending on the group parameter you passed in
+    template<typename T, typename Group, typename IdxIt>
+    __device__ __forceinline__ void operator()(
+        Group const& group,
+        gamax::column& src,
+        IdxIt& src_idx,
+        gamax::size_type src_start,
+        gamax::size_type src_end,
+        gamax::column& dst,
+        gamax::size_type dst_idx)
+    {
+        namespace cg = cooperative_groups;
+        
+        using F = typename gamax::groupby::agg_fn_mapper<agg_kind, T>::F;
+        using output_t  = typename F::OutputType;
+
+        auto block = cg::this_thread_block();
+        
+        __shared__ output_t agg_val;
+        if(block.thread_rank() == 0) {
+            agg_val = F::identity;
+        }
+        block.sync();
+
+        F f;
+        output_t tl_agg = F::identity;
+        #pragma unroll
+        // for(int i = threadIdx.x; i < src_end - src_start; i += blockDim.x) {
+        for(int i = group.thread_rank(); i < src_end - src_start; i += group.size()) {
+            tl_agg = f.thread_local_update(tl_agg, src.data<T>()[src_idx[i]]);
+        }
+        f.atomic_update(&agg_val, tl_agg);
+        block.sync();
+
+        if(block.thread_rank() == 0) {
+            // dst.data<output_t>()[dst_idx] = agg_val;
+            f.global_update(dst_idx, dst.data<output_t>(), agg_val);
+        }
+    }
+
+    // initialize the aggregation value
+    template<typename T>
+    __device__ __forceinline__ void operator()(
+        void* dst,
+        gamax::size_type dst_idx)
+    {
+        using F = typename gamax::groupby::agg_fn_mapper<agg_kind, T>::F;
+        reinterpret_cast<typename F::OutputType*>(dst)[dst_idx] = F::identity;
     }
 
     __device__ __forceinline__ void operator()(
@@ -48,14 +104,53 @@ struct dispatch_val_type_helper {
             dst_idx);
     }
 
+    template<typename Group, typename IdxIt>
     __device__ __forceinline__ void operator()(
+        Group const& group,
+        gamax::column& src,
+        IdxIt& src_idx,
+        gamax::size_type src_start,
+        gamax::size_type src_end,
         gamax::column& dst,
         gamax::size_type dst_idx)
     {
 
         type_dispatcher(
-            dst.type(),
+            src.type(),
             dispatch_val_type_helper<agg_kind>{},
+            group,
+            src, 
+            src_idx, 
+            src_start,
+            src_end,
+            dst, 
+            dst_idx);
+    }
+
+    __device__ __forceinline__ void operator()(
+        gamax::data_type src_type,
+        void* dst,
+        gamax::size_type dst_idx)
+    {
+
+        type_dispatcher(
+            src_type,
+            dispatch_val_type_helper<agg_kind>{},
+            dst, 
+            dst_idx);
+    }
+
+    __device__ __forceinline__ void operator()(
+        gamax::column& src,
+        gamax::size_type src_idx,
+        void* dst,
+        gamax::size_type dst_idx)
+    {
+        type_dispatcher(
+            src.type(),
+            dispatch_val_type_helper<agg_kind>{},
+            src,
+            src_idx,
             dst, 
             dst_idx);
     }
@@ -91,19 +186,130 @@ __device__ __forceinline__ void aggregate(
         dst_idx);
 }
 
+template<typename Group, typename IdxIt>
+__device__ __forceinline__ void reduce(
+    Group const& group,
+    gamax::groupby::aggregation_id agg_kind,
+    gamax::column& src,
+    IdxIt& src_idx,
+    gamax::size_type src_start,
+    gamax::size_type src_end,
+    gamax::column& dst,
+    gamax::size_type dst_idx
+)
+{
+    dispatch_type_aggregate(
+        agg_kind,
+        group,
+        src, 
+        src_idx, 
+        src_start, 
+        src_end, 
+        dst, 
+        dst_idx);
+}
+
+__device__ __forceinline__ void block_aggregate(
+    gamax::groupby::aggregation_id agg_kind,
+    gamax::column& src,
+    gamax::size_type src_idx,
+    void* dst,
+    gamax::size_type dst_idx)
+{
+    dispatch_type_aggregate(
+        agg_kind,
+        src, 
+        src_idx, 
+        dst, 
+        dst_idx);
+}
+
+template<typename TyGroup>
+struct copy_agg_from_smem_to_global_helper {
+    template<typename T>
+    __device__ __forceinline__ void operator()(
+        const TyGroup& group,
+        gamax::column& agg,
+        const gamax::size_type offset,
+        void* block_agg,
+        const gamax::size_type num_items)
+    {
+        cooperative_groups::memcpy_async(group, agg.data<T>()+offset, reinterpret_cast<T*>(block_agg), num_items * sizeof(T));
+    }
+};
+
+template<typename TyGroup>
+__device__ __forceinline__ void copy_agg_from_smem_to_global(
+    const TyGroup& group,
+    gamax::column& agg,
+    const gamax::size_type offset,
+    void* block_agg, 
+    const gamax::size_type num_items)
+{
+    type_dispatcher(
+        agg.type(),
+        copy_agg_from_smem_to_global_helper<TyGroup>{},
+        group,
+        agg,
+        offset,
+        block_agg,
+        num_items);
+}
+
+template<typename TyGroup>
+__device__ __forceinline__ void copy_agg_from_smem_to_global(
+    const TyGroup& group,
+    table_device_view& res,
+    const gamax::size_type offset,
+    void* block_agg, 
+    const gamax::size_type num_groups,
+    const gamax::size_type num_aggs)
+{
+    auto cur_agg_buffer = block_agg;
+
+    #pragma unroll
+    for(gamax::size_type k = 0; k < num_aggs; k++) {
+        copy_agg_from_smem_to_global(
+            group,
+            res.get_column(k+1), 
+            offset, 
+            cur_agg_buffer, 
+            num_groups);
+        cur_agg_buffer = reinterpret_cast<void*>(reinterpret_cast<char*>(cur_agg_buffer) + (num_groups)*gamax::size_of(res.get_column(k+1).type()));
+    }
+
+    cooperative_groups::wait(group);
+}
+
 __device__ __forceinline__ void init_agg(
     gamax::groupby::aggregation_id agg_kind,
+    gamax::data_type src_type,
     gamax::column& dst,
     gamax::size_type dst_idx)
 {
     dispatch_type_aggregate(
         agg_kind,
+        src_type,
+        dst.data(),
+        dst_idx);
+}
+
+__device__ __forceinline__ void init_agg(
+    gamax::groupby::aggregation_id agg_kind,
+    gamax::data_type src_type,
+    void* dst,
+    gamax::size_type dst_idx)
+{
+    dispatch_type_aggregate(
+        agg_kind,
+        src_type, // agg fn and src type can together deduce the output type
         dst, 
         dst_idx);
 }
 
 __inline__ __global__ void initialize_aggregation(
-    table_device_view res,
+    gamax::table_device_view src,
+    gamax::table_device_view res,
     gamax::groupby::aggregation_request* aggs)
 {
     auto num_groups = res.num_rows();
@@ -111,8 +317,42 @@ __inline__ __global__ void initialize_aggregation(
 
     for(gamax::size_type i = get_cuda_tid(); i < num_groups; i += nthreads()) {
         for(gamax::size_type j = 0; j < num_aggs; j++) {
-            init_agg(aggs[j].agg_kind, res.get_column(j+1), i);
+            init_agg(
+                aggs[j].agg_kind, 
+                src.get_column(j).type(), 
+                res.get_column(j+1), 
+                i);
         }
     }
 }
+
+// template<typename IdxIt>
+// __global__ void segment_reduce(
+//     gamax::column* src_cols,
+//     gamax::size_type num_src_cols,
+//     IdxIt src_idx,
+//     gamax::size_type src_start,
+//     gamax::size_type src_end,
+//     gamax::column* dst_cols,
+//     gamax::size_type num_dst_cols,
+//     gamax::size_type dst_idx,
+//     gamax::groupby::aggregation_request* aggs
+// )
+// {
+//     namespace cg = cooperative_groups;
+//     auto grid = cg::this_grid();
+
+//     gamax::table_device_view src(src_cols, num_src_cols);
+//     gamax::table_device_view dst(dst_cols, num_dst_cols);
+
+//     auto num_aggs = num_dst_cols - 1;
+
+//     for(gamax::size_type j = 0; j < num_aggs; j++) {
+//         reduce(
+//             grid,
+//             aggs[j].agg_kind, 
+//             src.get_column(j), src_idx, src_start, src_end,
+//             dst.get_column(j+1), dst_idx);
+//     }
+// }
 } // namespace gamax::groupby::details
