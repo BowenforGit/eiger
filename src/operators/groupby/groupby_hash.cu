@@ -125,12 +125,16 @@ namespace {
             constexpr double load_factor = 0.75;
             std::size_t map_capacity = std::ceil(estimated_num_groups / load_factor);
             Key constexpr empty_key_sentinel     = -1; // FIXME: handle negative values and unsigned values correctly 
-            gamax::size_type constexpr empty_value_sentinel = -1;            
+            gamax::size_type constexpr empty_value_sentinel = -1;      
+            auto cuco_allocator = *get_thrust_allocator<cuco::pair<Key, gamax::size_type>>(stream);   
             auto map = cuco::static_map{map_capacity,
                                     cuco::empty_key{empty_key_sentinel},
                                     cuco::empty_value{empty_value_sentinel},
                                     thrust::equal_to<Key>{},
-                                    cuco::linear_probing<1, cuco::default_hash_function<Key>>{}};
+                                    cuco::linear_probing<1, cuco::default_hash_function<Key>>{}
+                                    , {}, {},
+                                    cuco_allocator
+                                    };
             auto map_ref = map.ref(cuco::insert_and_find);
 
             auto sparse_group_ids = gamax::make_idx_column(input_num_rows, false);
