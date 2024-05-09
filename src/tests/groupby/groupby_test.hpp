@@ -30,17 +30,20 @@ void invoke_groupby_sort(KeyT* h_keys,
                          gamax::groupby::groupby_hint& hint) {
     auto d_keys = gamax::make_column_from_host(h_keys, num_items);
     auto d_vals = gamax::make_column_from_host(h_vals, num_items);
+    auto d_vals_2 = gamax::make_column_from_host(h_vals, num_items);
 
     std::vector<decltype(d_keys)> keys_vec;
     keys_vec.push_back(std::move(d_keys));
     std::vector<decltype(d_vals)> vals_vec;
     vals_vec.push_back(std::move(d_vals));
+    vals_vec.push_back(std::move(d_vals_2));
 
     gamax::table key_table(std::move(keys_vec));
     gamax::table val_table(std::move(vals_vec));
 
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
+    requests.push_back({1, gamax::groupby::aggregation_id::SUM});
 
     std::unique_ptr<gamax::table> out_table_ptr = nullptr;
 
@@ -59,7 +62,7 @@ void invoke_groupby_sort(KeyT* h_keys,
     }
 
     auto& d_out_keys = out_table_ptr->get_column(0);
-    auto& d_out_vals = out_table_ptr->get_column(1);
+    auto& d_out_vals = out_table_ptr->get_column(2);
 
     h_out_keys = new KeyT[d_out_keys.size()];
     h_out_vals = new typename AggT::OutputType[d_out_vals.size()];

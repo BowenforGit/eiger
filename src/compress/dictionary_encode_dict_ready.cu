@@ -46,11 +46,13 @@ template<typename Ref>
             gamax::size_type map_capacity = std::ceil(dict.size() / load_factor);
             Key constexpr empty_key_sentinel     = -1; // FIXME: handle negative values and unsigned values correctly 
             Encode constexpr empty_value_sentinel = -1;    
+            auto cuco_allocator = *get_thrust_allocator<cuco::pair<Key, Encode>>(stream);   
             auto map = cuco::static_map{map_capacity,
                                         cuco::empty_key{empty_key_sentinel},
                                         cuco::empty_value{empty_value_sentinel},
                                         thrust::equal_to<Key>{},
-                                        cuco::linear_probing<1, cuco::default_hash_function<Key>>{}};
+                                        cuco::linear_probing<1, cuco::default_hash_function<Key>>{},
+                                        {}, {}, cuco_allocator};
             
             auto pairs_begin = thrust::make_zip_iterator(thrust::make_tuple(dict.data<Key>(), thrust::make_counting_iterator<Encode>(0)));
             map.insert(pairs_begin, pairs_begin + dict.size(), cuco::cuda_stream_ref{stream});

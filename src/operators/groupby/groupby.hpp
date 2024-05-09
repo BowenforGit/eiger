@@ -8,6 +8,7 @@ struct groupby_hint {
     gamax::size_type groups_upper_bound {gamax::MAXIMUM_SIZE};
     bool zero_based_ids {false}; 
     bool use_gfur {false}; // use gfur instead of gftr to group by (for benchmark only)
+    bool optimize_sort {true}; // optimize sort for sort-based groupby
 };
 }
 }

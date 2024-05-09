@@ -13,6 +13,7 @@
 #include "operators/groupby/agg_func.cuh"
 #include "operators/sort/sort.hpp"
 #include "types/data_type.hpp"
+#include "compress/dictionary_encode.hpp"
 
 namespace gamax::groupby::sort {
 
@@ -254,13 +255,14 @@ std::unique_ptr<gamax::table> groupby(
     gamax::size_type num_groups = 0;
     std::vector<std::unique_ptr<gamax::column>> final_columns;
 
+    std::unique_ptr<gamax::column> encoded_key = nullptr;
+
     bool grouped = false;
     for(auto& req: agg_requests) {
         auto i = req.column_index;
         auto agg_kind = req.agg_kind;
         std::unique_ptr<column> sorted_val = nullptr;
         auto val_type = val.get_column(i).type();
-        // std::cout << "i: " << i << std::endl;
         
         if(!grouped) {
             sorted_val = std::move(sorted_val_0);
@@ -278,9 +280,28 @@ std::unique_ptr<gamax::table> groupby(
             grouped = true;
         }
         else {
-            auto sorted_pair = gamax::sort::sort_column_pair(key.get_column(0), val.get_column(i), begin_bit, end_bit);
-            sorted_val = std::move(sorted_pair.second);
-            gamax::free_column(std::move(sorted_pair.first));
+            if(hint.optimize_sort && num_groups <= 2048) {
+                if(encoded_key.get() == nullptr) {
+                    encoded_key = gamax::compress::dictionary_encode(
+                        key.get_column(0), 
+                        *(final_columns.front()), 
+                        data_type{type_id::INT32}, 
+                        stream);
+                }
+                auto end_bit = [&](gamax::size_type v) {
+                    v--;
+                    v |= v >> 1;
+                    v |= v >> 2;
+                    v |= v >> 4;
+                    v |= v >> 8;
+                    v |= v >> 16;
+                    v++;
+                    return 8 * gamax::size_of(encoded_key->type()) - __builtin_clz(v);
+                } (num_groups);
+                std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(*encoded_key, val.get_column(i), 0, end_bit);
+            } else {
+                std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(key.get_column(0), val.get_column(i), begin_bit, end_bit);
+            }
 
             auto agg_val = gamax::make_column(val_type, num_groups);
             aggregate(agg_kind, *sorted_key, *sorted_val, num_groups, *agg_val);
@@ -288,7 +309,7 @@ std::unique_ptr<gamax::table> groupby(
         }
     }
 
-    cudaStreamSynchronize(0);
+    cudaStreamSynchronize(stream);
 
     return std::make_unique<gamax::table>(std::move(final_columns));
 }
