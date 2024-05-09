@@ -50,8 +50,8 @@ void invoke_groupby_sort(KeyT* h_keys,
         out_table_ptr = gamax::groupby::partition::groupby(key_table, val_table, requests, hint);
     } else if(algo == gamax::groupby::groupby_algo::GROUPBY_SORT_GFUR) {
         out_table_ptr = gamax::groupby::sort::groupby_gfur(key_table, val_table, requests, hint);
-    // } else if(algo == gamax::groupby::groupby_algo::GROUPBY_PARTITION_GFUR) {
-        // out_table_ptr = gamax::groupby::partition::groupby_gfur(key_table, val_table, requests, hint);
+    } else if(algo == gamax::groupby::groupby_algo::GROUPBY_PARTITION_GFUR) {
+        out_table_ptr = gamax::groupby::partition::groupby_gfur(key_table, val_table, requests, hint);
     } else if(algo == gamax::groupby::groupby_algo::GROUPBY_HASH) {
         out_table_ptr = gamax::groupby::hash::groupby(key_table, val_table, requests, hint);
     } else {

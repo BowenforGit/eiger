@@ -41,11 +41,13 @@ void generate_workunits(const IdxT* membership_ps,
                         NumItemsT* num_units,
                         IdxT* units_start, 
                         IdxT* units_end, 
-                        IdxT* units_group) {
+                        IdxT* units_group,
+                        cudaStream_t stream = cudaStreamDefault) {
     NumItemsT* d_num_units = nullptr;
     allocate_mem(&d_num_units, true, sizeof(NumItemsT));
-    generate_workunits_kernel<<<num_tb(num_groups, 1024), 1024>>>(membership_ps, num_groups, threshold, d_num_units, units_start, units_end, units_group);
-    CHECK_CUDA_ERROR(cudaMemcpy(num_units, d_num_units, sizeof(NumItemsT), cudaMemcpyDeviceToHost));
+    generate_workunits_kernel<<<num_tb(num_groups, 1024), 1024, 0, stream>>>(membership_ps, num_groups, threshold, d_num_units, units_start, units_end, units_group);
+    CHECK_CUDA_ERROR(cudaMemcpyAsync(num_units, d_num_units, sizeof(NumItemsT), cudaMemcpyDeviceToHost, stream));
+    cudaStreamSynchronize(stream);
     release_mem(d_num_units); 
 }
 } // namespace groupby

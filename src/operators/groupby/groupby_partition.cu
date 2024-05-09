@@ -22,12 +22,13 @@
 namespace gamax::groupby::partition {
 namespace {
 
-using namespace gamax::groupby::details;
+constexpr auto log_num_partitions = 16;
+constexpr auto cg_size = 1;
+constexpr auto window_size = 1;
+constexpr auto numWindows = 4096;
+auto constexpr num_windows = cuco::make_window_extent<cg_size, window_size>(cuco::extent<gamax::size_type, numWindows>{});
 
-template<typename Key>
-struct custom_hash {
-  __device__ uint32_t operator()(Key const& k) const noexcept { return k; };
-};
+using namespace gamax::groupby::details;
 
 template<typename Key, 
          std::size_t NumWindows, 
@@ -112,12 +113,6 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
                     val_idx, units_start[i], units_end[i],
                     res.get_column(k+1), u->block_offset);
             }
-            // if(block.thread_rank() == 0) {
-            //     gamax::groupby::details::segment_reduce<<<num_tb(units_end[i]-units_start[i], 1024), 1024>>>(
-            //         values.columns(), values.num_columns(), val_idx, units_start[i], units_end[i],
-            //         res.columns(), res.num_columns(), u->block_offset,
-            //         aggs);
-            // }
         } else if(u->num_groups_local <= 256) { // TODO: re-evaluate this condition
             void* agg_buffer = reinterpret_cast<void*>(u+1);
 
@@ -194,7 +189,99 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
     }
 }
 
-template<int window_size, int numWindows>
+template<typename Key, int window_size, int numWindows, typename Itr>
+std::unique_ptr<gamax::table> compute_aggregate(
+    gamax::column& partitioned_key,
+    const gamax::size_type estimated_num_groups,
+    const gamax::size_type num_partitions,
+    gamax::table& val,
+    Itr itr,
+    std::vector<gamax::groupby::aggregation_request>& agg_requests,
+    cudaStream_t stream)
+{
+    auto input_num_rows = partitioned_key.size();
+
+    constexpr gamax::size_type threshold = std::numeric_limits<gamax::size_type>::max() / 2; // TODO: be careful of overflow
+    int max_work_units = num_partitions + (input_num_rows+threshold-1)/threshold;
+
+    auto units_start_ptr = gamax::make_idx_column(max_work_units);
+    auto units_end_ptr = gamax::make_idx_column(max_work_units);
+    auto units_group_ptr = gamax::make_idx_column(max_work_units);
+
+    int num_units = 0;
+    auto partition_ps = gamax::partition::compute_partition_offsets(partitioned_key, 0, log_num_partitions);
+    gamax::groupby::generate_workunits(
+        partition_ps->data<gamax::size_type>(), 
+        num_partitions, 
+        threshold, 
+        &num_units, 
+        units_start_ptr->data<gamax::size_type>(), 
+        units_end_ptr->data<gamax::size_type>(), 
+        units_group_ptr->data<gamax::size_type>(),
+        stream);
+    partition_ps.reset();
+
+    std::vector<std::unique_ptr<gamax::column>> final_columns;
+    final_columns.push_back(
+        gamax::make_column(
+            partitioned_key.type(), 
+            estimated_num_groups));
+    for(const auto& agg : agg_requests) {
+        final_columns.push_back(
+            gamax::make_column(
+                gamax::groupby::agg_output_data_type(agg.agg_kind, val.get_column(agg.column_index).type()), 
+                estimated_num_groups));
+    }
+    auto res = std::make_unique<gamax::table>(std::move(final_columns));
+    auto res_view = table_device_view::create(*res, stream);
+    
+    auto d_agg_req_buf = std::make_unique<gamax::device_buffer>(sizeof(gamax::groupby::aggregation_request) * agg_requests.size(), false);
+    cudaMemcpy(d_agg_req_buf->data(), agg_requests.data(), d_agg_req_buf->size(), cudaMemcpyHostToDevice);
+
+    auto val_view = table_device_view::create(val, stream);
+    initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *res_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
+    
+    std::size_t sm_bytes = numWindows * sizeof(cuco::window<cuco::pair<Key, gamax::size_type>, window_size>) + sizeof(gamax::size_type)*2;
+    if(estimated_num_groups / num_partitions <= 256) {
+        std::size_t agg_bytes = 0;
+        for(int i = 1; i < res->num_columns(); i++) {
+            agg_bytes += gamax::size_of(res->get_column(i).type());
+        }
+        sm_bytes += agg_bytes * 256;
+    }
+    // std::cout << "sm_bytes: " << sm_bytes << std::endl; 
+    auto agg_fn = partition_groupby_aggregate_kernel<Key, numWindows, decltype(itr)>;
+    if(sm_bytes > 48*1024) {
+        CHECK_CUDA_ERROR(cudaFuncSetAttribute(agg_fn, cudaFuncAttributeMaxDynamicSharedMemorySize, sm_bytes));
+    }
+
+    auto group_id = gamax::make_idx_column(input_num_rows, false);
+    auto d_num_groups = gamax::make_idx_column(1, true);
+    // the grid size and block size given by cudaOccupancyMaxPotentialBlockSize 
+    // do not work very well for this kernel
+    agg_fn<<<num_units, 512, sm_bytes, stream>>>(
+        partitioned_key.data<Key>(),
+        *val_view,
+        itr,
+        num_units,
+        units_start_ptr->data<gamax::size_type>(),
+        units_end_ptr->data<gamax::size_type>(),
+        d_num_groups->data<gamax::size_type>(),
+        group_id->data<gamax::size_type>(),
+        static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()),
+        agg_requests.size(),
+        *res_view);
+    
+    gamax::size_type num_groups;
+    cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
+    res->set_rows(num_groups);
+    
+    cudaStreamSynchronize(stream);
+
+    return res;
+}
+
+template<int window_size, int numWindows, bool kUseGFUR = false>
 struct partition_groupby_impl {
     template<typename Key>
     std::unique_ptr<gamax::table> operator()(
@@ -204,106 +291,43 @@ struct partition_groupby_impl {
             gamax::groupby::groupby_hint& hint,
             const int log_num_partitions,
             cudaStream_t stream = cudaStreamDefault)
-        {
-            auto input_num_rows = key.num_rows();
-            gamax::size_type estimated_num_groups = std::min(input_num_rows, hint.groups_upper_bound);
+    {
+        gamax::size_type estimated_num_groups = std::min(key.num_rows(), hint.groups_upper_bound);
+        
+        int num_partitions = (1 << log_num_partitions);
 
-            auto d_agg_req_buf = std::make_unique<gamax::device_buffer>(sizeof(gamax::groupby::aggregation_request) * agg_requests.size(), false);
-            cudaMemcpy(d_agg_req_buf->data(), agg_requests.data(), d_agg_req_buf->size(), cudaMemcpyHostToDevice);
-            
-            int num_partitions = 1 << log_num_partitions;
+        if constexpr (kUseGFUR) {
+            auto [partitioned_key, permutation_idx] = gamax::partition::arg_partition(key.get_column(0), 0, log_num_partitions, nullptr, 0, stream);
 
-            std::vector<std::unique_ptr<gamax::column>> partitioned_val_cols;
-            
+            return compute_aggregate<Key, window_size, numWindows>(
+                *partitioned_key, 
+                estimated_num_groups, 
+                num_partitions, 
+                val, 
+                permutation_idx->data<gamax::size_type>(),
+                agg_requests, 
+                stream);
+        } else {
             std::unique_ptr<gamax::column> partitioned_key {nullptr};
+        
+            std::vector<std::unique_ptr<gamax::column>> partitioned_val_cols;
             std::unique_ptr<gamax::column> pval_temp {nullptr};
             for(int i = 0; i < val.num_columns(); i++) {
-                // when assigning to the partitioned key, the previous pointed resource should be released right?
-                std::tie(partitioned_key, pval_temp) = gamax::partition::partition_column_pair(key.get_column(0), val.get_column(i), 0, log_num_partitions);
+                std::tie(partitioned_key, pval_temp) = gamax::partition::partition_column_pair(key.get_column(0), val.get_column(i), 0, log_num_partitions, stream);
                 partitioned_val_cols.push_back(std::move(pval_temp));
-                // val.free_column(i);
             }
             auto partitioned_val = std::make_unique<gamax::table>(std::move(partitioned_val_cols));
-            // print_gpu_arr(partitioned_key->data<Key>(), 16);
-
-            constexpr gamax::size_type threshold = std::numeric_limits<gamax::size_type>::max() / 2; // TODO: be careful of overflow
-            int max_work_units = num_partitions + (input_num_rows+threshold-1)/threshold;
-
-            auto units_start_ptr = gamax::make_idx_column(max_work_units);
-            auto units_end_ptr = gamax::make_idx_column(max_work_units);
-            auto units_group_ptr = gamax::make_idx_column(max_work_units);
-
-            auto units_start = units_start_ptr->data<gamax::size_type>();
-            auto units_end = units_end_ptr->data<gamax::size_type>();
-            auto units_group = units_group_ptr->data<gamax::size_type>();
-
-            int num_units = 0;
             
-            {
-                auto partition_ps = gamax::partition::compute_partition_offsets(*partitioned_key, 0, log_num_partitions);
-                gamax::groupby::generate_workunits(partition_ps->data<gamax::size_type>(), num_partitions, threshold, &num_units, units_start, units_end, units_group);
-            }
-
-            std::vector<std::unique_ptr<gamax::column>> final_columns;
-            final_columns.push_back(
-                gamax::make_column(
-                    key.get_column(0).type(), 
-                    estimated_num_groups, 
-                    false));
-            for(const auto& agg : agg_requests) {
-                final_columns.push_back(
-                    gamax::make_column(
-                        gamax::groupby::agg_output_data_type(agg.agg_kind, val.get_column(agg.column_index).type()), 
-                        estimated_num_groups, 
-                        true)); // TODO: fix this initial aggregation value
-            }
-            auto res = std::make_unique<gamax::table>(std::move(final_columns));
-
-            auto d_num_groups = gamax::make_idx_column(1, true);
-            auto val_view = table_device_view::create(*partitioned_val);
-            auto res_view = table_device_view::create(*res);
-            auto group_id = gamax::make_idx_column(input_num_rows, false);
-
-            std::size_t sm_bytes = numWindows * sizeof(cuco::window<cuco::pair<Key, gamax::size_type>, window_size>) + sizeof(gamax::size_type)*2;
-            if(estimated_num_groups / num_partitions <= 256) {
-                std::size_t agg_bytes = 0;
-                for(int i = 1; i < res->num_columns(); i++) {
-                    agg_bytes += gamax::size_of(res->get_column(i).type());
-                }
-                sm_bytes += agg_bytes * 256;
-            }
-            // std::cout << "sm_bytes: " << sm_bytes << std::endl; 
-            auto itr = thrust::make_counting_iterator<gamax::size_type>(0);
-            auto agg_fn = partition_groupby_aggregate_kernel<Key, numWindows, decltype(itr)>;
-
-            if(sm_bytes > 48*1024) {
-                CHECK_CUDA_ERROR(cudaFuncSetAttribute(agg_fn, cudaFuncAttributeMaxDynamicSharedMemorySize, sm_bytes));
-            }
-            
-            initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *res_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
-            // the grid size and block size given by cudaOccupancyMaxPotentialBlockSize 
-            // do not work very well for this kernel
-            agg_fn<<<num_units, 512, sm_bytes, stream>>>(
-                partitioned_key->data<Key>(),
-                *val_view,
-                itr,
-                num_units,
-                units_start,
-                units_end,
-                d_num_groups->data<gamax::size_type>(),
-                group_id->data<gamax::size_type>(),
-                static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()),
-                agg_requests.size(),
-                *res_view);
-            
-            gamax::size_type num_groups;
-            cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
-            res->set_rows(num_groups);
-            
-            cudaStreamSynchronize(stream);
-
-            return res;
+            return compute_aggregate<Key, window_size, numWindows>(
+                *partitioned_key, 
+                estimated_num_groups, 
+                num_partitions, 
+                *partitioned_val, 
+                thrust::make_counting_iterator<gamax::size_type>(0),
+                agg_requests, 
+                stream);
         }
+    }
     };
 
 } // unnamed namespace
@@ -314,154 +338,24 @@ std::unique_ptr<gamax::table> groupby(
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
     cudaStream_t stream)
-{
-    constexpr auto log_num_partitions = 16;
-    constexpr auto cg_size = 1;
-    constexpr auto window_size = 1;
-    constexpr auto numWindows = 4096;
-    
-    auto constexpr num_windows = cuco::make_window_extent<cg_size, window_size>(cuco::extent<gamax::size_type, numWindows>{});
+{   
     return type_dispatcher(
         key.get_column(0).type(),
-        partition_groupby_impl<window_size, num_windows.value()>{},
+        partition_groupby_impl<window_size, num_windows.value(), false>{},
         key, val, agg_requests, hint, log_num_partitions, stream);
 }
 
-/*
 std::unique_ptr<gamax::table> groupby_gfur(
     gamax::table& key, 
     gamax::table& val, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
     cudaStream_t stream)
-{
-    if(key.num_columns() > 1) {
-        throw std::runtime_error("Only single-column group keys are supported");
-    }
-    
-    if(key.num_columns() == 0) {
-        throw std::runtime_error("Aggregation only is not supported yet");
-    }
-
-    auto input_num_rows = key.num_rows();
-    auto estimated_num_groups = std::min(input_num_rows, hint.groups_upper_bound);
-
-    int log_num_partitions = 16;
-    int num_partitions = 1 << log_num_partitions;
-
-    auto [partitioned_key, idx_col] = gamax::partition::arg_partition(key.get_column(0), 0, log_num_partitions);
-
-    constexpr gamax::size_type threshold = std::numeric_limits<gamax::size_type>::max() / 2; // TODO: be careful of overflow
-    int max_work_units = num_partitions + (input_num_rows+threshold-1)/threshold;
-
-    auto units_start_ptr = gamax::make_idx_column(max_work_units);
-    auto units_end_ptr = gamax::make_idx_column(max_work_units);
-    auto units_group_ptr = gamax::make_idx_column(max_work_units);
-
-    auto units_start = units_start_ptr->data<gamax::size_type>();
-    auto units_end = units_end_ptr->data<gamax::size_type>();
-    auto units_group = units_group_ptr->data<gamax::size_type>();
-
-    int num_units = 0;
-    
-    {
-        auto partition_ps = gamax::partition::compute_partition_offsets(*partitioned_key, 0, log_num_partitions);
-        gamax::groupby::generate_workunits(partition_ps->data<gamax::size_type>(), num_partitions, threshold, &num_units, units_start, units_end, units_group);
-    }
-
-    std::vector<std::unique_ptr<gamax::column>> final_columns;
-
-    for(auto& req: agg_requests) {
-        auto i = req.column_index;
-        auto agg_kind = req.agg_kind;
-
-        auto& val_col = val.get_column(i);
-
-        auto key_type = key.get_column(0).type();
-
-        gamax::size_type num_groups = 0;
-        auto grouped_key = std::make_unique<gamax::column>(key.get_column(0).type(), estimated_num_groups, true);
-        std::unique_ptr<gamax::column> res_val = nullptr;
-        
-        if(agg_kind == gamax::groupby::aggregation_id::SUM) {
-            if(val.get_column(i).type().id() == gamax::type_id::INT32) {
-                using agg_fn_t = gamax::groupby::Sum<int32_t>;
-                using agg_output_t = agg_fn_t::OutputType;
-
-                auto agg_val = std::make_unique<gamax::column>(gamax::data_type{type_to_id<agg_output_t>()}, estimated_num_groups, true);
-
-                auto val_data = val_col.data<agg_fn_t::InputType>();
-                auto val_itr = thrust::make_permutation_iterator(val_data, idx_col->data<gamax::size_type>());
-
-                if(key_type == gamax::data_type{gamax::type_id::INT32}) {
-                    aggregate<agg_fn_t>(partitioned_key->data<int32_t>(), val_itr, 
-                                    num_units, units_start, units_end, units_group, log_num_partitions, 
-                                    &num_groups,
-                                    grouped_key->data<int32_t>(), agg_val->data<agg_fn_t::OutputType>());
-                }
-                else if(key_type == gamax::data_type{gamax::type_id::INT64}) {
-                    aggregate<agg_fn_t>(partitioned_key->data<int64_t>(), val_itr, 
-                                    num_units, units_start, units_end, units_group, log_num_partitions, 
-                                    &num_groups,
-                                    grouped_key->data<int64_t>(), agg_val->data<agg_fn_t::OutputType>());
-                }
-                else {
-                    throw std::runtime_error("Unsupported key type for SUM aggregation");
-                }
-                
-                res_val = std::move(agg_val);
-            }
-            else {
-                throw std::runtime_error("Unsupported value type for SUM aggregation");
-            }
-        }
-        else if(agg_kind == gamax::groupby::aggregation_id::MAX) {
-            if(val.get_column(i).type().id() == gamax::type_id::INT32) {
-                using agg_fn_t = gamax::groupby::Max<int32_t>;
-                using agg_output_t = agg_fn_t::OutputType;
-
-                auto agg_val = std::make_unique<gamax::column>(gamax::data_type{type_to_id<agg_output_t>()}, estimated_num_groups, true);
-
-                auto val_data = val_col.data<agg_fn_t::InputType>();
-                auto val_itr = thrust::make_permutation_iterator(val_data, idx_col->data<gamax::size_type>());
-
-                if(key_type == gamax::data_type{gamax::type_id::INT32}) {
-                    aggregate<agg_fn_t>(partitioned_key->data<int32_t>(), val_itr, 
-                                    num_units, units_start, units_end, units_group, log_num_partitions, 
-                                    &num_groups,
-                                    grouped_key->data<int32_t>(), agg_val->data<agg_fn_t::OutputType>());
-                }
-                else if(key_type == gamax::data_type{gamax::type_id::INT64}) {
-                    aggregate<agg_fn_t>(partitioned_key->data<int64_t>(), val_itr, 
-                                    num_units, units_start, units_end, units_group, log_num_partitions, 
-                                    &num_groups,
-                                    grouped_key->data<int64_t>(), agg_val->data<agg_fn_t::OutputType>());
-                }
-                else {
-                    throw std::runtime_error("Unsupported key type for MAX aggregation");
-                }
-                
-                res_val = std::move(agg_val);
-            }
-            else {
-                throw std::runtime_error("Unsupported value type for MAX aggregation");
-            }
-        }
-        else {
-            throw std::runtime_error("Unsupported aggregation function");
-        }
-
-        if(final_columns.size() == 0) {
-            grouped_key->set_size(num_groups);
-            final_columns.push_back(std::move(grouped_key));
-        }
-        res_val->set_size(num_groups);
-        final_columns.push_back(std::move(res_val));
-    }
-
-    cudaStreamSynchronize(0);
-
-    return std::make_unique<gamax::table>(std::move(final_columns));
+{   
+    return type_dispatcher(
+        key.get_column(0).type(),
+        partition_groupby_impl<window_size, num_windows.value(), true>{},
+        key, val, agg_requests, hint, log_num_partitions, stream);
 }
-*/
+
 } // namespace gamax::groupby::partition

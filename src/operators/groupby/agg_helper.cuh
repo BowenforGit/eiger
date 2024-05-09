@@ -325,34 +325,4 @@ __inline__ __global__ void initialize_aggregation(
         }
     }
 }
-
-// template<typename IdxIt>
-// __global__ void segment_reduce(
-//     gamax::column* src_cols,
-//     gamax::size_type num_src_cols,
-//     IdxIt src_idx,
-//     gamax::size_type src_start,
-//     gamax::size_type src_end,
-//     gamax::column* dst_cols,
-//     gamax::size_type num_dst_cols,
-//     gamax::size_type dst_idx,
-//     gamax::groupby::aggregation_request* aggs
-// )
-// {
-//     namespace cg = cooperative_groups;
-//     auto grid = cg::this_grid();
-
-//     gamax::table_device_view src(src_cols, num_src_cols);
-//     gamax::table_device_view dst(dst_cols, num_dst_cols);
-
-//     auto num_aggs = num_dst_cols - 1;
-
-//     for(gamax::size_type j = 0; j < num_aggs; j++) {
-//         reduce(
-//             grid,
-//             aggs[j].agg_kind, 
-//             src.get_column(j), src_idx, src_start, src_end,
-//             dst.get_column(j+1), dst_idx);
-//     }
-// }
 } // namespace gamax::groupby::details
