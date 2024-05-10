@@ -5,6 +5,8 @@
 #include <iostream>
 #include <memory>
 #include <vector>
+#include <exception>
+#include <fstream>
 
 #include "operators/groupby/groupby.hpp"
 #include "operators/groupby/aggregation.hpp"
@@ -17,26 +19,33 @@
 #include "groupby_util.cuh"
 
 template<typename KeyT, typename ValueT>
-void check_skip(nvbench::state& state, gamax::groupby::groupby_params const& params) {
+bool check_skip(nvbench::state& state, gamax::groupby::groupby_params const& params) {
     if(sizeof(KeyT) > 4 && params.zipf_factor > 0.0) {
         state.skip("Only study skewness with 32-bit keys.");
+        return true;
     }
 
     if(params.num_aggs > 1 && params.zipf_factor > 0.0) {
         state.skip("Only study skewness with one aggregation");
+        return true;
     }
 
     if(params.zipf_factor > 0.0 && (params.num_groups < 1024 || params.num_items > (1 << 20))) {
         state.skip("Skewness is only for medium number of groups and items.");
+        return true;
     }
 
     if(params.num_groups > params.num_items) {
         state.skip("Number of groups should not be greater than the number of items.");
+        return true;
     }
 
     if(state.get_string("algo") == "sorf_opt" && params.num_groups > 1024) {
         state.skip("Sort optimization is only for small number of groups.");
+        return true;
     }
+
+    return false;
 }
 
 template<typename KeyT, typename ValueT = int32_t>
@@ -51,7 +60,9 @@ void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
     params.num_aggs = state.get_int64("num_aggs");
     params.zipf_factor = state.get_float64("zipf_factor");
 
-    check_skip<KeyT, ValueT>(state, params);
+    if(check_skip<KeyT, ValueT>(state, params)) {
+        return;
+    }
 
     struct groupby_hint hint;
     hint.groups_upper_bound = params.num_groups;
@@ -84,10 +95,20 @@ void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
     state.set_cuda_stream(nvbench::make_cuda_stream_view(0));
     state.add_element_count(params.num_items, "NumElements");
 
-    state.exec(nvbench::exec_tag::sync,
-        [&](nvbench::launch& launch) { 
-        auto res = f(key_table, val_table, requests, hint, launch.get_stream()); 
-    });
+    try
+    {
+        state.exec(nvbench::exec_tag::sync,
+            [&](nvbench::launch& launch) { 
+            auto res = f(key_table, val_table, requests, hint, launch.get_stream()); 
+        });
+    }
+    catch(const std::exception& e)
+    {
+        std::cerr << e.what() << '\n';
+        std::ofstream out("error.txt", std::ios::app);
+        out << e.what() << "\n";
+        params.print(out);
+    }
 }
 
 NVBENCH_BENCH_TYPES(bench_groupby_max,
@@ -97,5 +118,5 @@ NVBENCH_BENCH_TYPES(bench_groupby_max,
   .add_string_axis("algo", {"sort", "sort_opt", "partition", "sort_gfur", "partition_gfur", "hash"})
   .add_int64_power_of_two_axis("num_items", {28, 29})
   .add_int64_power_of_two_axis("num_groups", nvbench::range(2, 26, 4))
-  .add_int64_axis("num_aggs", nvbench::range(1, 3, 1))
+  .add_int64_axis("num_aggs", nvbench::range(1, 2, 1))
   .add_float64_axis("zipf_factor", {0.0, 0.5, 1.0, 1.5, 2.0});

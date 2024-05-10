@@ -47,12 +47,13 @@ struct groupby_params {
     int actual_num_groups {-1};
     int num_aggs {1};
 
-    void print() const {
-        std::cout << "num_items: " << num_items << std::endl;
-        std::cout << "num_groups: " << num_groups << std::endl;
-        std::cout << "zipf_factor: " << zipf_factor << std::endl;
-        std::cout << "actual_num_groups: " << actual_num_groups << std::endl;
-        std::cout << "num_aggs: " << num_aggs << std::endl;
+    template<typename Stream>
+    void print(Stream& out) const {
+        out << "num_items: " << num_items << ", ";
+        out << "num_groups: " << num_groups << ", ";
+        out << "zipf_factor: " << zipf_factor << ", ";
+        out << "actual_num_groups: " << actual_num_groups << ", ";
+        out << "num_aggs: " << num_aggs << std::endl;
     }
 };
 
