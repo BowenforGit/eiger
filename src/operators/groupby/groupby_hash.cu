@@ -62,7 +62,6 @@ namespace {
             if (is_new_key) {
                 sparse_group_ids[idx] = atomicAdd(num_groups, 1);
                 keys_out[sparse_group_ids[idx]] = keys[idx];
-                // TODO: initialize the aggregate results here
             } 
             
             group_ids_loc[idx] = slot->second;
@@ -117,8 +116,7 @@ namespace {
                 final_columns.push_back(
                     gamax::make_column(
                         gamax::groupby::agg_output_data_type(agg.agg_kind, val.get_column(agg.column_index).type()), 
-                        estimated_num_groups, 
-                        true)); // TODO: fix this
+                        estimated_num_groups));
             }
             auto res = std::make_unique<gamax::table>(std::move(final_columns));
             
@@ -139,7 +137,7 @@ namespace {
 
             auto sparse_group_ids = gamax::make_idx_column(input_num_rows, false);
             auto groupid_loc = gamax::make_idx_column(input_num_rows, false);
-            auto d_num_groups = gamax::make_column(gamax::data_type{size_type_id}, 1, true);
+            auto d_num_groups = gamax::make_idx_column(1, true);
 
             compute_groupid_kernel<<<num_tb(input_num_rows, 256), 256, 0, stream>>>(
                 map_ref, 
@@ -161,6 +159,8 @@ namespace {
             auto val_view = table_device_view::create(val);
             auto res_view = table_device_view::create(*res);
 
+            initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *res_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
+            
             compute_aggregation<<<num_tb(input_num_rows, 256), 256, 0, stream>>>(
                 *val_view, 
                 *res_view, 
