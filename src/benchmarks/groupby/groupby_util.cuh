@@ -7,6 +7,7 @@
 #include <thrust/execution_policy.h>
 #include <thrust/shuffle.h>
 #include <thrust/random.h>
+#include <thrust/fill.h>
 
 #include "operators/groupby/groupby.hpp"
 #include "memory/column.hpp"
@@ -31,11 +32,18 @@ enum groupby_algo {
     GROUPBY_NOT_SUPPORTED
 };
 
+enum val_option {
+    SEQ,
+    ALL_ONES,
+    FROM_KEYS
+};
+
 struct groupby_params {
     int num_items {4096};
     int num_groups {1024};
     double zipf_factor {0.0};
     enum groupby_algo algo {GROUPBY_SORT};
+    enum val_option val_opt {SEQ};
     int actual_num_groups {-1};
     int num_aggs {1};
 
@@ -76,7 +84,7 @@ void generate_groupby_data(KeyT* h_keys, ValueT* h_vals, const groupby_params& p
 }
 
 template <typename KeyT>
-void generate_zipf_keys(KeyT* h_keys, const groupby_params& params) {
+void generate_zipf_keys_host(KeyT* h_keys, const groupby_params& params) {
     auto lut = gen_zipf_lut(params.zipf_factor, params.num_groups);
     zipf_distribution_t<KeyT> dist(lut.begin(), lut.end());
     
@@ -92,8 +100,8 @@ void generate_zipf_keys(KeyT* h_keys, const groupby_params& params) {
     }
 }
 
-template <typename Key, typename Value>
-void generate_groupby_data(gamax::table& key_table, gamax::table& val_table, const groupby_params& params) {
+template<typename Key>
+void generate_groupby_keys(gamax::table& key_table, const groupby_params& params) {
     std::vector<std::unique_ptr<gamax::column>> key_vec;
     if(params.zipf_factor == 0.0) {
         auto keys = gamax::make_sequence<Key>(params.num_items, 0, 1);
@@ -104,14 +112,19 @@ void generate_groupby_data(gamax::table& key_table, gamax::table& val_table, con
         key_vec.push_back(std::move(keys));
     } else {
         auto  h_keys = new Key[params.num_items];
-        generate_zipf_keys(h_keys, params);
+        generate_zipf_keys_host(h_keys, params);
         auto d_keys = gamax::make_column_from_host(h_keys, params.num_items);
         key_vec.push_back(std::move(d_keys));
         delete [] h_keys;
     }
     gamax::table kt{std::move(key_vec)};
     key_table = std::move(kt);
-    
+
+    cudaDeviceSynchronize();
+}
+
+template<typename Value>
+void generate_groupby_vals_seq(gamax::table& val_table, const groupby_params& params) {
     std::vector<std::unique_ptr<gamax::column>> vals_vec;
     for(int i = 0; i < params.num_aggs; i++) {
         auto vals = gamax::make_sequence<Value>(params.num_items, 0, 1);
@@ -120,7 +133,57 @@ void generate_groupby_data(gamax::table& key_table, gamax::table& val_table, con
     gamax::table vt{std::move(vals_vec)};
     val_table = std::move(vt);
 
-    std::cout << val_table.num_rows() << " " << val_table.num_columns() << std::endl;
+    cudaDeviceSynchronize();
+}
+
+template<typename Value>
+void generate_groupby_vals_all_ones(gamax::table& val_table, const groupby_params& params) {
+    std::vector<std::unique_ptr<gamax::column>> vals_vec;
+    for(int i = 0; i < params.num_aggs; i++) {
+        auto vals = gamax::make_column<Value>(params.num_items);
+        thrust::fill_n(thrust::device, reinterpret_cast<Value*>(vals->data()), params.num_items, static_cast<Value>(1));
+        vals_vec.push_back(std::move(vals));
+    }
+    gamax::table vt{std::move(vals_vec)};
+    val_table = std::move(vt);
+
+    cudaDeviceSynchronize();
+}
+
+template<typename Key, typename Value, std::enable_if_t<std::is_same_v<Key, Value>, void>* = nullptr>
+void generate_groupby_vals_from_keys(gamax::column& key, gamax::table& val_table, const groupby_params& params) {
+    std::vector<std::unique_ptr<gamax::column>> vals_vec;
+    for(int i = 0; i < params.num_aggs; i++) {
+        auto vals = key.deep_copy();
+        vals_vec.push_back(std::move(vals));
+    }
+    gamax::table vt{std::move(vals_vec)};
+    val_table = std::move(vt);
+
+    cudaDeviceSynchronize();
+}
+
+template <typename Key, typename Value>
+void generate_groupby_data(gamax::table& key_table, gamax::table& val_table, const groupby_params& params) {
+    generate_groupby_keys<Key>(key_table, params);
+
+    switch(params.val_opt) {
+        case val_option::SEQ:
+            generate_groupby_vals_seq<Value>(val_table, params);
+            break;
+        case val_option::ALL_ONES:
+            generate_groupby_vals_all_ones<Value>(val_table, params);
+            break;
+        case val_option::FROM_KEYS:
+            if constexpr(std::is_same_v<Key, Value>) {
+                generate_groupby_vals_from_keys<Key, Value>(key_table.get_column(0), val_table, params);
+            } else {
+                throw std::runtime_error("FROM_KEYS is only supported for Key == Value");
+            }
+            break;
+        default:
+            throw std::runtime_error("Unknown val_option");
+    }
 
     cudaDeviceSynchronize();
     std::cout << "Data generated" << std::endl;

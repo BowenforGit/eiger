@@ -51,6 +51,13 @@ public:
         _size = size;
     }
 
+    std::unique_ptr<column> deep_copy(cudaStream_t stream = cudaStreamDefault) const {
+        auto clone = std::make_unique<column>(_type, _size);
+        cudaMemcpyAsync(clone->data(), data(), _size * gamax::size_of(_type), cudaMemcpyDeviceToDevice, stream);
+        cudaStreamSynchronize(stream);
+        return clone;
+    }
+
     template <typename T = void>
     __host__ __device__ T* data() const noexcept
     {
@@ -67,10 +74,22 @@ std::unique_ptr<column> make_column(data_type type, size_type size, bool clear=f
 std::unique_ptr<column> make_idx_column(size_type size, bool clear=false); 
 void free_column(std::unique_ptr<column> column);
 
+template<typename T>
+std::unique_ptr<column> make_column(size_type size, bool clear=false) {
+    return make_column(data_type{type_to_id<T>()}, size, clear);
+}
+
 template <typename T>
 std::unique_ptr<column> make_column_from_host(T* host_data, size_type num_items) {
     gamax::device_buffer buffer(num_items * sizeof(T), false);
     cudaMemcpy(buffer.data(), host_data, num_items * sizeof(T), cudaMemcpyHostToDevice);
+    return std::make_unique<column>(gamax::data_type{gamax::type_to_id<T>()}, num_items, std::move(buffer));
+}
+
+template <typename T>
+std::unique_ptr<column> make_column_from_device(T* device_data, size_type num_items) {
+    gamax::device_buffer buffer(num_items * sizeof(T), false);
+    cudaMemcpy(buffer.data(), device_data, num_items * sizeof(T), cudaMemcpyDeviceToDevice);
     return std::make_unique<column>(gamax::data_type{gamax::type_to_id<T>()}, num_items, std::move(buffer));
 }
 
