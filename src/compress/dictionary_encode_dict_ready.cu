@@ -7,6 +7,7 @@
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/tuple.h>
 #include <thrust/functional.h>
+#include <utils/device_info.hpp>
 
 namespace gamax::compress {
 namespace {
@@ -67,9 +68,11 @@ template<typename Ref>
                 throw std::runtime_error("Too much shared memory required for the kernel");
             }
 
-            size_t block_size = 256;
-            // size_t grid_size = (keys.size() + block_size - 1) / block_size;
-            size_t grid_size = 6*82;
+            int block_size = 256;
+            int maxActiveBlocks;
+            cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+                &maxActiveBlocks, fn, block_size, shared_mem_size);
+            int grid_size = SM_COUNT * maxActiveBlocks;
             fn<<<grid_size, block_size, shared_mem_size, stream>>>(map_ref, keys.data<Key>(), keys.size(), encoded_keys.data<Encode>());
         }
     };

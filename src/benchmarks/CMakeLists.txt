@@ -14,5 +14,3 @@ foreach(source target IN ZIP_LISTS benchmarkSources benchmarkTargets)
     target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
     target_link_libraries(${target} PRIVATE gamax)
 endforeach()
-
-# target_link_libraries(benchmark_murmur3_hash PRIVATE murmur3)
