@@ -1,5 +1,6 @@
 #include "mem_manager.hpp"
 
+#include <algorithm>
 #include <unordered_map>
 #include <iostream>
 #include <cuda.h>
@@ -9,60 +10,33 @@
 
 #include "utils/check_error.hpp"
 
-std::shared_ptr<UserSpaceMM> mm {nullptr};
+std::shared_ptr<MemoryManager> mm {nullptr};
 
-std::shared_ptr<UserSpaceMM> get_mm() {
-    if(mm.get() == nullptr) {
+std::shared_ptr<MemoryManager> get_mm() {
+    if(!mm) {
+#ifdef USE_CUDA_MEMALLOC
+        mm = std::make_shared<CudaMM>();
+#else
+        std::size_t free, total;
+        cudaMemGetInfo(&free, &total);
+        auto mem_pool_size = 0.95 * free;
         mm = std::make_shared<UserSpaceMM>(mem_pool_size);
+#endif
     }
     return mm;
 }
 
-void delete_mm() {
-    mm.reset();
-}
-
-void debug_cuda_mem_usage() {
-#ifdef USE_CUDA_MEMALLOC
-    size_t free = 0, total = 0;
-    cudaMemGetInfo(&free, &total);
-    std::cout << "Free bytes : " << free << " Total bytes : " << total << std::endl;
-#else
-    auto mm = get_mm();
+void debug_device_mem_usage() {
     std::cout << "Peak memory usage: " << mm->get_peak_mem_used() << " bytes (" << mm->get_peak_mem_used() / 1024 / 1024 / 1024 << " GB)\n";
     std::cout << "Cuurent memory usage: " << mm->get_mem_used() << " bytes (" << mm->get_mem_used() / 1024 / 1024 / 1024 << " GB)\n";
-#endif
 }
 
 void release_all_mem() {
 #ifdef USE_CUDA_MEMALLOC
     std::cout << "Cannot release all memory with the CUDA memory allocator\n";
 #else
-    delete_mm();
+    mm.reset();
 #endif
-}
-
-namespace gamax::details {
-    void alloc_by_cuda(void** ptr, bool clear, size_t sz, cudaStream_t stream) {
-        CHECK_CUDA_ERROR(cudaMallocAsync(ptr, sz, stream));
-        if(clear) CHECK_CUDA_ERROR(cudaMemsetAsync(*ptr, 0, sz, stream));
-    }
-
-    size_t get_cuda_free_mem() {
-        size_t free = 0, total = 0;
-        cudaMemGetInfo(&free, &total);
-        std::cout << free << std::endl;
-
-        return free;
-    }
-
-    void alloc_by_rmm_mempool(void** ptr, bool clear, size_t sz, cudaStream_t stream) {
-        get_mm()->allocate(ptr, clear, sz, stream);
-    }
-
-    void free_rmm_mempool(void* ptr, cudaStream_t stream) {
-        get_mm()->release(ptr, stream);
-    }
 }
 
 UserSpaceMM::UserSpaceMM(const size_t kInitialPoolSize, const size_t kAlignBits) : align_bits(kAlignBits) {
@@ -106,14 +80,6 @@ void UserSpaceMM::release(void* ptr, cudaStream_t stream) {
         std::cout << "!!WARNING!! Potential double-free: " 
                     << ptr << " is not allocated through MemoryManager.\n";
     }
-}
-
-size_t UserSpaceMM::get_peak_mem_used() const {
-    return peak_mem_used;
-}
-
-size_t UserSpaceMM::get_mem_used() const {
-    return mem_used;
 }
 
 // find a block in the free list that is at least as large as sz
@@ -187,4 +153,25 @@ char* UserSpaceMM::roundup(const char* ptr) {
 bool UserSpaceMM::can_alloc(const block_type& block, const size_t sz) {
     auto ptr = roundup(block.data);
     return ptr + sz < block.data + block.sz;
+}
+
+void CudaMM::allocate(void** ptr, bool clear, size_t sz, cudaStream_t stream)
+{
+    CHECK_CUDA_ERROR(cudaMallocAsync(ptr, sz, stream));
+    if(clear) CHECK_CUDA_ERROR(cudaMemsetAsync(*ptr, 0, sz, stream));
+
+    mem_used += sz;
+    peak_mem_used = std::max(peak_mem_used, mem_used);
+    alloc_map[*ptr] = sz;
+}
+
+void CudaMM::release(void* ptr, cudaStream_t stream)
+{
+    auto found = alloc_map.find(ptr);
+    if(found == alloc_map.end()) {
+        throw std::runtime_error("Freeing a non-allocated pointer in CUDA Memory Manager.");
+    }
+    mem_used -= found->second;
+    CHECK_CUDA_ERROR(cudaFreeAsync(ptr, stream));
+    alloc_map.erase(found);
 }
