@@ -80,7 +80,7 @@ void check_groupby_result(KeyT* h_keys, KeyT* ret_keys, int* ret_vals, int num_g
     if(params.zipf_factor == 0.0) {
         for(int i = 0; i < num_groups; i++) {
             sum += ret_keys[i];
-            EXPECT_EQ(ret_vals[i], params.num_items / params.num_groups);
+            ASSERT_EQ(ret_vals[i], params.num_items / params.num_groups);
         }
         EXPECT_EQ(sum, ((unsigned long long)params.num_groups - 1) * (unsigned long long)params.num_groups / 2);
     } else {

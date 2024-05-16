@@ -25,8 +25,8 @@ bool check_skip(nvbench::state& state, gamax::groupby::groupby_params const& par
         return true;
     }
 
-    if(params.num_aggs > 1 && params.zipf_factor > 0.0) {
-        state.skip("Only study skewness with one aggregation");
+    if(params.num_aggs > 2 && params.zipf_factor > 0.0) {
+        state.skip("Only study skewness with fewer than 2 aggregations");
         return true;
     }
 
@@ -40,7 +40,7 @@ bool check_skip(nvbench::state& state, gamax::groupby::groupby_params const& par
         return true;
     }
 
-    if(state.get_string("algo") == "sorf_opt" && params.num_groups > 1024) {
+    if(state.get_string("algo") == "sort_opt" && params.num_groups > (1 << 16)) {
         state.skip("Sort optimization is only for small number of groups.");
         return true;
     }
@@ -117,6 +117,6 @@ NVBENCH_BENCH_TYPES(bench_groupby_max,
   .set_type_axes_names({"Key"})
   .add_string_axis("algo", {"sort", "sort_opt", "partition", "sort_gfur", "partition_gfur", "hash"})
   .add_int64_power_of_two_axis("num_items", {28, 29})
-  .add_int64_power_of_two_axis("num_groups", nvbench::range(2, 26, 4))
-  .add_int64_axis("num_aggs", nvbench::range(1, 2, 1))
+  .add_int64_power_of_two_axis("num_groups", nvbench::range(2, 26, 2))
+  .add_int64_axis("num_aggs", nvbench::range(1, 4, 1))
   .add_float64_axis("zipf_factor", {0.0, 0.5, 1.0, 1.5, 2.0});

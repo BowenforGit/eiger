@@ -81,12 +81,13 @@ namespace {
 
         #pragma unroll
         for(int t = get_cuda_tid(); t < num_items; t += nthreads()) {
+            auto gid = group_ids[t];
             #pragma unroll
             for(gamax::size_type i = 0; i < num_aggs; i++) {
                 aggregate(
                     aggs[i].agg_kind,
                     val.get_column(aggs[i].column_index), t,
-                    res.get_column(i+1), group_ids[t]);
+                    res.get_column(i+1), gid);
             }
         }
     }
@@ -120,7 +121,7 @@ namespace {
             }
             auto res = std::make_unique<gamax::table>(std::move(final_columns));
             
-            constexpr double load_factor = 0.75;
+            constexpr double load_factor = 0.5;
             std::size_t map_capacity = std::ceil(estimated_num_groups / load_factor);
             Key constexpr empty_key_sentinel     = -1; // FIXME: handle negative values and unsigned values correctly 
             gamax::size_type constexpr empty_value_sentinel = -1;      
@@ -168,10 +169,11 @@ namespace {
                 static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()), 
                 agg_requests.size());
             
+            gamax::size_type num_groups;
+            cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
+
             cudaStreamSynchronize(stream);
 
-            gamax::size_type num_groups;
-            cudaMemcpy(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost);
             res->set_rows(num_groups);
 
             return res;

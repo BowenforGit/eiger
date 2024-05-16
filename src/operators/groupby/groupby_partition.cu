@@ -22,7 +22,7 @@
 namespace gamax::groupby::partition {
 namespace {
 
-constexpr auto log_num_partitions = 16;
+// constexpr auto log_num_partitions = 16;
 constexpr auto cg_size = 1;
 constexpr auto window_size = 1;
 constexpr auto numWindows = 4096;
@@ -70,6 +70,8 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
     
     for(int i = blockIdx.x; i < num_units; i += gridDim.x) {
         if(block.thread_rank() == 0) u->num_groups_local = 0;
+        const auto ustart = units_start[i];
+        const auto uend = units_end[i];
 
         auto raw_ref =
             cuco::static_map_ref{cuco::empty_key<Key>{-1}, // TODO: reconsider the sentinel value
@@ -83,9 +85,9 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
         auto insert_and_find_ref = std::move(raw_ref).with(cuco::op::insert_and_find);
 
         #pragma unroll
-        for(int t = block.thread_rank(); t < units_end[i] - units_start[i]; t += block.size()) {
-            auto idx = t+units_start[i];
-            auto [slot, is_new_key] = insert_and_find_ref.insert_and_find(cuco::pair{key_arr[idx] % NumWindows, idx});
+        for(int t = block.thread_rank(); t < uend - ustart; t += block.size()) {
+            auto idx = t+ustart;
+            auto [slot, is_new_key] = insert_and_find_ref.insert_and_find(cuco::pair{key_arr[idx], idx});
             if(is_new_key) {
                 auto t_group_id = atomicAdd(&(u->num_groups_local), 1); // block-scope group id
                 group_id[idx] = (groupid_write_mask | t_group_id); // flag that his is a group id not a location
@@ -100,44 +102,49 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
         }
         block.sync();
 
+        auto block_offset = u->block_offset;
+        auto num_groups_local = u->num_groups_local;
+        block.sync();
 
-        if(u->num_groups_local == 1) {
+
+        if(num_groups_local == 1) {
             if(block.thread_rank() == 0) {
-                res[0].data<Key>()[u->block_offset] = key_arr[units_start[i]];
+                res[0].data<Key>()[block_offset] = key_arr[ustart];
             }
             for(gamax::size_type k = 0; k < num_aggs; k++) {
                 gamax::groupby::details::reduce(
                     block,
                     aggs[k].agg_kind,
                     values.get_column(aggs[k].column_index), 
-                    val_idx, units_start[i], units_end[i],
-                    res.get_column(k+1), u->block_offset);
+                    val_idx, ustart, uend,
+                    res.get_column(k+1), block_offset);
             }
-        } else if(u->num_groups_local <= 256) { // TODO: re-evaluate this condition
-            void* agg_buffer = reinterpret_cast<void*>(u+1);
+        } else if(num_groups_local <= 256) { // TODO: re-evaluate this condition
+            // void* agg_buffer = reinterpret_cast<void*>(u+1);
+            void* agg_buffer = reinterpret_cast<void*>(temp);
 
             // initialize the aggregation buffer in SMEM
             auto cur_agg_buffer = agg_buffer;
 
             #pragma unroll
-            for(gamax::size_type t = block.thread_rank(); t < u->num_groups_local; t += block.size()) {
+            for(gamax::size_type t = block.thread_rank(); t < num_groups_local; t += block.size()) {
                 #pragma unroll
                 for(gamax::size_type k = 0; k < num_aggs; k++) {
                     init_agg(aggs[k].agg_kind, values.get_column(k).type(), cur_agg_buffer, t);
-                    cur_agg_buffer = reinterpret_cast<void*>(reinterpret_cast<char*>(cur_agg_buffer) + (u->num_groups_local)*gamax::size_of(res.get_column(k+1).type()));
+                    cur_agg_buffer = reinterpret_cast<void*>(reinterpret_cast<char*>(cur_agg_buffer) + (num_groups_local)*gamax::size_of(res.get_column(k+1).type()));
                 }
             }
             block.sync();
             
             #pragma unroll
-            for(int t = block.thread_rank(); t < units_end[i] - units_start[i]; t += block.size()) {
-                auto idx = t+units_start[i];
+            for(int t = block.thread_rank(); t < uend - ustart; t += block.size()) {
+                const auto idx = t+ustart;
 
                 gamax::size_type l_group_id {-1}; // block-local group id
                 auto gl = group_loc[idx];
-                if((gl & groupid_write_mask) == groupid_write_mask) { // the first inserter
+                if((gl & groupid_read_mask) != gl) { // the first inserter
                     l_group_id = (gl & groupid_read_mask);
-                    res[0].data<Key>()[u->block_offset+l_group_id] = key_arr[idx];
+                    res[0].data<Key>()[block_offset+l_group_id] = key_arr[idx];
                 } else {
                     l_group_id = (group_id[gl] & groupid_read_mask);
                 }
@@ -150,7 +157,7 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
                         aggs[k].agg_kind,
                         values.get_column(aggs[k].column_index), val_idx[idx],
                         cur_agg_buffer, l_group_id);
-                    cur_agg_buffer = reinterpret_cast<void*>(reinterpret_cast<char*>(cur_agg_buffer) + (u->num_groups_local)*gamax::size_of(res.get_column(k+1).type()));
+                    cur_agg_buffer = reinterpret_cast<void*>(reinterpret_cast<char*>(cur_agg_buffer) + (num_groups_local)*gamax::size_of(res.get_column(k+1).type()));
                 }
             }
             block.sync();
@@ -159,21 +166,21 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
             copy_agg_from_smem_to_global(
                 block,
                 res,
-                u->block_offset,
+                block_offset,
                 agg_buffer,
-                u->num_groups_local,
+                num_groups_local,
                 num_aggs);
         } else {
-            for(int t = block.thread_rank(); t < units_end[i] - units_start[i]; t += block.size()) {
-                auto idx = t+units_start[i];
+            for(int t = block.thread_rank(); t < uend - ustart; t += block.size()) {
+                auto idx = t+ustart;
 
                 gamax::size_type g_group_id {-1}; // global group id
                 auto gl = group_loc[idx];
-                if((gl & groupid_write_mask) == groupid_write_mask) { // the first inserter
-                    g_group_id = u->block_offset + (gl & groupid_read_mask);
+                if((gl & groupid_read_mask) != gl) { // the first inserter
+                    g_group_id = block_offset + (gl & groupid_read_mask);
                     res[0].data<Key>()[g_group_id] = key_arr[idx];
                 } else {
-                    g_group_id = u->block_offset + (group_id[gl] & groupid_read_mask);
+                    g_group_id = block_offset + (group_id[gl] & groupid_read_mask);
                 }
 
                 #pragma unroll
@@ -193,13 +200,14 @@ template<typename Key, int window_size, int numWindows, typename Itr>
 std::unique_ptr<gamax::table> compute_aggregate(
     gamax::column& partitioned_key,
     const gamax::size_type estimated_num_groups,
-    const gamax::size_type num_partitions,
+    const gamax::size_type log_num_partitions,
     gamax::table& val,
     Itr itr,
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     cudaStream_t stream)
 {
     auto input_num_rows = partitioned_key.size();
+    const auto num_partitions = (1 << log_num_partitions);
 
     constexpr gamax::size_type threshold = std::numeric_limits<gamax::size_type>::max() / 2; // TODO: be careful of overflow
     int max_work_units = num_partitions + (input_num_rows+threshold-1)/threshold;
@@ -247,7 +255,7 @@ std::unique_ptr<gamax::table> compute_aggregate(
         for(int i = 1; i < res->num_columns(); i++) {
             agg_bytes += gamax::size_of(res->get_column(i).type());
         }
-        sm_bytes += agg_bytes * 256;
+        sm_bytes = std::max(agg_bytes * 256, sm_bytes);
     }
     // std::cout << "sm_bytes: " << sm_bytes << std::endl; 
     auto agg_fn = partition_groupby_aggregate_kernel<Key, numWindows, decltype(itr)>;
@@ -259,7 +267,7 @@ std::unique_ptr<gamax::table> compute_aggregate(
     auto d_num_groups = gamax::make_idx_column(1, true);
     // the grid size and block size given by cudaOccupancyMaxPotentialBlockSize 
     // do not work very well for this kernel
-    agg_fn<<<num_units, 512, sm_bytes, stream>>>(
+    agg_fn<<<num_units, 768, sm_bytes, stream>>>(
         partitioned_key.data<Key>(),
         *val_view,
         itr,
@@ -289,12 +297,12 @@ struct partition_groupby_impl {
             gamax::table& val,
             std::vector<gamax::groupby::aggregation_request>& agg_requests,
             gamax::groupby::groupby_hint& hint,
-            const int log_num_partitions,
             cudaStream_t stream = cudaStreamDefault)
     {
         gamax::size_type estimated_num_groups = std::min(key.num_rows(), hint.groups_upper_bound);
         
-        int num_partitions = (1 << log_num_partitions);
+        // int log_num_partitions = (estimated_num_groups * 8 / (1 << 8) > numWindows) ? 16 : 8;
+        int log_num_partitions = 16;
 
         if constexpr (kUseGFUR) {
             auto [partitioned_key, permutation_idx] = gamax::partition::arg_partition(key.get_column(0), 0, log_num_partitions, nullptr, 0, stream);
@@ -302,7 +310,7 @@ struct partition_groupby_impl {
             return compute_aggregate<Key, window_size, numWindows>(
                 *partitioned_key, 
                 estimated_num_groups, 
-                num_partitions, 
+                log_num_partitions, 
                 val, 
                 permutation_idx->data<gamax::size_type>(),
                 agg_requests, 
@@ -321,7 +329,7 @@ struct partition_groupby_impl {
             return compute_aggregate<Key, window_size, numWindows>(
                 *partitioned_key, 
                 estimated_num_groups, 
-                num_partitions, 
+                log_num_partitions, 
                 *partitioned_val, 
                 thrust::make_counting_iterator<gamax::size_type>(0),
                 agg_requests, 
@@ -342,7 +350,7 @@ std::unique_ptr<gamax::table> groupby(
     return type_dispatcher(
         key.get_column(0).type(),
         partition_groupby_impl<window_size, num_windows.value(), false>{},
-        key, val, agg_requests, hint, log_num_partitions, stream);
+        key, val, agg_requests, hint, stream);
 }
 
 std::unique_ptr<gamax::table> groupby_gfur(
@@ -355,7 +363,7 @@ std::unique_ptr<gamax::table> groupby_gfur(
     return type_dispatcher(
         key.get_column(0).type(),
         partition_groupby_impl<window_size, num_windows.value(), true>{},
-        key, val, agg_requests, hint, log_num_partitions, stream);
+        key, val, agg_requests, hint, stream);
 }
 
 } // namespace gamax::groupby::partition

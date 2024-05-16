@@ -280,7 +280,7 @@ std::unique_ptr<gamax::table> groupby(
             grouped = true;
         }
         else {
-            if(hint.optimize_sort && num_groups <= 2048) {
+            if(hint.optimize_sort && num_groups <= (1 << 16)) {
                 if(encoded_key.get() == nullptr) {
                     encoded_key = gamax::compress::dictionary_encode(
                         key.get_column(0), 
