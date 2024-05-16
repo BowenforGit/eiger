@@ -26,11 +26,20 @@ template<typename Ref>
         auto insert_ref = map.make_copy(g, sm_buffer, cuco::thread_scope_block);
         auto find_ref   = std::move(insert_ref).with(cuco::op::find);
 
+        constexpr unsigned int tile_size = Ref::cg_size;
+
         #pragma unroll
         for (size_t i = get_cuda_tid(); i < num_items; i += nthreads())
         {
-            auto found_pair_it = find_ref.find(keys[i]);
-            encoded_keys[i] = found_pair_it->second;
+            #pragma unroll
+            for(auto j = 0; j < tile_size; j++) {
+                auto k = (i - i % tile_size) + j;
+                auto tile = cooperative_groups::tiled_partition<tile_size>(g);
+                auto found_pair_it = find_ref.find(tile, keys[k]);
+                if(tile.thread_rank() == 0) {
+                    encoded_keys[k] = found_pair_it->second;
+                }
+            }
         }
     }
 
@@ -43,7 +52,7 @@ template<typename Ref>
             gamax::column& encoded_keys, 
             cudaStream_t stream) 
         {
-            constexpr double load_factor = 0.75;
+            constexpr double load_factor = 0.3;
             gamax::size_type map_capacity = std::ceil(dict.size() / load_factor);
             Key constexpr empty_key_sentinel     = -1; // FIXME: handle negative values and unsigned values correctly 
             Encode constexpr empty_value_sentinel = -1;    
@@ -57,23 +66,25 @@ template<typename Ref>
             
             auto pairs_begin = thrust::make_zip_iterator(thrust::make_tuple(dict.data<Key>(), thrust::make_counting_iterator<Encode>(0)));
             map.insert(pairs_begin, pairs_begin + dict.size(), cuco::cuda_stream_ref{stream});
-            auto map_ref = map.ref(cuco::insert);
+            map.find(keys.data<Key>(), keys.data<Key>() + keys.size(), encoded_keys.data<Encode>(), cuco::cuda_stream_ref{stream});
 
-            auto fn = dict_ready_dict_enc_hash_kernel<decltype(map_ref)>;
+            // auto map_ref = map.ref(cuco::insert);
 
-            size_t shared_mem_size = sizeof(typename decltype(map_ref)::window_type) * map_ref.capacity();
-            if(shared_mem_size > 48 * 1024 && shared_mem_size <= 96 * 1024) {
-                CHECK_CUDA_ERROR(cudaFuncSetAttribute(fn, cudaFuncAttributeMaxDynamicSharedMemorySize, shared_mem_size));
-            } else if(shared_mem_size > 96 * 1024) {
-                throw std::runtime_error("Too much shared memory required for the kernel");
-            }
+            // auto fn = dict_ready_dict_enc_hash_kernel<decltype(map_ref)>;
 
-            int block_size = 256;
-            int maxActiveBlocks;
-            cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-                &maxActiveBlocks, fn, block_size, shared_mem_size);
-            int grid_size = SM_COUNT * maxActiveBlocks;
-            fn<<<grid_size, block_size, shared_mem_size, stream>>>(map_ref, keys.data<Key>(), keys.size(), encoded_keys.data<Encode>());
+            // size_t shared_mem_size = sizeof(typename decltype(map_ref)::window_type) * map_ref.capacity();
+            // if(shared_mem_size > 48 * 1024 && shared_mem_size <= 96 * 1024) {
+            //     CHECK_CUDA_ERROR(cudaFuncSetAttribute(fn, cudaFuncAttributeMaxDynamicSharedMemorySize, shared_mem_size));
+            // } else if(shared_mem_size > 96 * 1024) {
+            //     throw std::runtime_error("Too much shared memory required for the kernel");
+            // }
+
+            // int block_size = 256;
+            // int maxActiveBlocks;
+            // cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+            //     &maxActiveBlocks, fn, block_size, shared_mem_size);
+            // int grid_size = SM_COUNT * maxActiveBlocks;
+            // fn<<<grid_size, block_size, shared_mem_size, stream>>>(map_ref, keys.data<Key>(), keys.size(), encoded_keys.data<Encode>());
         }
     };
 } // unnamed namespace
@@ -93,6 +104,7 @@ std::unique_ptr<gamax::column> dictionary_encode(
     } else {
         throw std::runtime_error("Unsupported encoded type");
     }
+    cudaStreamSynchronize(stream);
     return encoded_col;
 }
 }
