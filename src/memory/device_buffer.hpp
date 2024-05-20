@@ -20,6 +20,7 @@ public:
     __host__ __device__ device_buffer(device_buffer&& other) noexcept 
         : data_(other.data_)
         , size_(other.size_) {
+            /* We avoid using std::exchange because it does not work for the device code */
             other.data_ = nullptr;
             other.size_ = 0;
         }

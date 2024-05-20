@@ -7,42 +7,9 @@
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/tuple.h>
 #include <thrust/functional.h>
-#include <utils/device_info.hpp>
 
 namespace gamax::compress {
 namespace {
-template<typename Ref>
-    __global__ void dict_ready_dict_enc_hash_kernel(
-        Ref map,
-        typename Ref::key_type const* const keys,
-        const gamax::size_type num_items,
-        typename Ref::mapped_type* encoded_keys)
-    {
-        extern __shared__ int16_t temp[];
-        
-        auto sm_buffer = reinterpret_cast<typename Ref::window_type *>(temp);
-        
-        auto g          = cooperative_groups::this_thread_block();
-        auto insert_ref = map.make_copy(g, sm_buffer, cuco::thread_scope_block);
-        auto find_ref   = std::move(insert_ref).with(cuco::op::find);
-
-        constexpr unsigned int tile_size = Ref::cg_size;
-
-        #pragma unroll
-        for (size_t i = get_cuda_tid(); i < num_items; i += nthreads())
-        {
-            #pragma unroll
-            for(auto j = 0; j < tile_size; j++) {
-                auto k = (i - i % tile_size) + j;
-                auto tile = cooperative_groups::tiled_partition<tile_size>(g);
-                auto found_pair_it = find_ref.find(tile, keys[k]);
-                if(tile.thread_rank() == 0) {
-                    encoded_keys[k] = found_pair_it->second;
-                }
-            }
-        }
-    }
-
     template<typename Encode>
     struct dict_ready_dict_enc_helper {
         template<typename Key>
@@ -67,24 +34,6 @@ template<typename Ref>
             auto pairs_begin = thrust::make_zip_iterator(thrust::make_tuple(dict.data<Key>(), thrust::make_counting_iterator<Encode>(0)));
             map.insert(pairs_begin, pairs_begin + dict.size(), cuco::cuda_stream_ref{stream});
             map.find(keys.data<Key>(), keys.data<Key>() + keys.size(), encoded_keys.data<Encode>(), cuco::cuda_stream_ref{stream});
-
-            // auto map_ref = map.ref(cuco::insert);
-
-            // auto fn = dict_ready_dict_enc_hash_kernel<decltype(map_ref)>;
-
-            // size_t shared_mem_size = sizeof(typename decltype(map_ref)::window_type) * map_ref.capacity();
-            // if(shared_mem_size > 48 * 1024 && shared_mem_size <= 96 * 1024) {
-            //     CHECK_CUDA_ERROR(cudaFuncSetAttribute(fn, cudaFuncAttributeMaxDynamicSharedMemorySize, shared_mem_size));
-            // } else if(shared_mem_size > 96 * 1024) {
-            //     throw std::runtime_error("Too much shared memory required for the kernel");
-            // }
-
-            // int block_size = 256;
-            // int maxActiveBlocks;
-            // cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-            //     &maxActiveBlocks, fn, block_size, shared_mem_size);
-            // int grid_size = SM_COUNT * maxActiveBlocks;
-            // fn<<<grid_size, block_size, shared_mem_size, stream>>>(map_ref, keys.data<Key>(), keys.size(), encoded_keys.data<Encode>());
         }
     };
 } // unnamed namespace
@@ -96,7 +45,8 @@ std::unique_ptr<gamax::column> dictionary_encode(
     cudaStream_t stream)
 {
     auto encoded_col = gamax::make_column(encoded_type, column.size());
-    // double_type_dispatcher(column.type(), encoded_type, dict_ready_dict_enc_helper{}, column, dict, *encoded_col, stream);
+
+    /* somehow using double_type_dispatcher will not compile, so I have to write it explicitly */
     if(encoded_type.id() == gamax::type_id::INT16) {
         type_dispatcher(column.type(), dict_ready_dict_enc_helper<int16_t>{}, column, dict, *encoded_col, stream);
     } else if(encoded_type.id() == gamax::type_id::INT32) {
