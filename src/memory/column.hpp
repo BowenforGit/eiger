@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <cuda.h>
 
 #include "memory/device_buffer.hpp"
 #include "types/data_type.hpp"
@@ -23,7 +24,7 @@ public:
         , _type(type)
         , _data(num_rows * gamax::size_of(type), clear) {}
     
-    explicit column(gamax::device_buffer&& buffer, size_type size, data_type type) 
+    __host__ __device__ explicit column(gamax::device_buffer&& buffer, size_type size, data_type type) 
     : _data(std::move(buffer))
     , _size(size)
     , _type(type) {}
