@@ -87,5 +87,13 @@ CPMAddPackage(
      "BUILD_EXAMPLES OFF"
 )
 
+CPMAddPackage(
+    NAME NVTX
+    GITHUB_REPOSITORY NVIDIA/NVTX
+    GIT_TAG v3.1.0-c-cpp
+    GIT_SHALLOW TRUE)
+
+target_link_libraries(common INTERFACE nvtx3-cpp)
+
 add_subdirectory(nvbench)
 add_subdirectory(src)
