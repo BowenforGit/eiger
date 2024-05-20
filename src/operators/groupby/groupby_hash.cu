@@ -3,10 +3,9 @@
 #include <cmath>
 #include <cuco/static_map.cuh>
 #include <cuda.h>
-#include <cuda/std/atomic>
 #include <memory>
 #include <stdexcept>
-#include <thrust/functional.h>
+#include <thrust/functional.h> // thrust::equal_to
 #include <type_traits>
 
 #include "utils/utils.cuh"
@@ -19,6 +18,8 @@
 #include "types/data_type.hpp"
 #include "utils/transform.cuh"
 #include "agg_helper.cuh"
+#include <utils/device_info.hpp>
+
 
 namespace gamax::groupby::hash {
 namespace {
@@ -73,15 +74,17 @@ namespace {
     __global__ void compute_aggregation(
         gamax::table_device_view val,
         gamax::table_device_view res,
-        gamax::size_type* group_ids,
-        gamax::groupby::aggregation_request* aggs,
+        const gamax::size_type* __restrict__ sparse_group_ids,
+        const gamax::size_type* __restrict__ group_ids_loc,
+        const gamax::groupby::aggregation_request* __restrict__ aggs,
         const gamax::size_type num_aggs) 
     {
         auto num_items = val.num_rows();
 
         #pragma unroll
         for(int t = get_cuda_tid(); t < num_items; t += nthreads()) {
-            auto gid = group_ids[t];
+            const auto loc = group_ids_loc[t];
+            const auto gid = sparse_group_ids[loc];
             #pragma unroll
             for(gamax::size_type i = 0; i < num_aggs; i++) {
                 aggregate(
@@ -89,6 +92,84 @@ namespace {
                     val.get_column(aggs[i].column_index), t,
                     res.get_column(i+1), gid);
             }
+        }
+    }
+
+    __global__ void compute_aggregation_block(
+        gamax::table_device_view val,
+        gamax::table_device_view res,
+        const gamax::size_type num_groups,
+        const gamax::size_type* __restrict__ sparse_group_ids,
+        const gamax::size_type* __restrict__ group_ids_loc,
+        const gamax::groupby::aggregation_request* __restrict__ aggs,
+        const gamax::size_type num_aggs) 
+    {
+        const auto num_items = val.num_rows();
+
+        auto const block = cooperative_groups::this_thread_block();
+
+        extern __shared__ int16_t temp[];
+        char* agg_buffer = reinterpret_cast<char*>(temp);
+
+        // initialize aggregation buffer
+        char* cur_agg_buffer;
+        
+        #pragma unroll
+        for(gamax::size_type t = block.thread_rank(); t < num_groups; t += block.size()) {
+            cur_agg_buffer = agg_buffer;
+
+            #pragma unroll
+            for(gamax::size_type k = 0; k < num_aggs; k++) {
+                init_agg(aggs[k].agg_kind, val.get_column(k).type(), cur_agg_buffer, t);
+                cur_agg_buffer = cur_agg_buffer + (num_groups)*gamax::size_of(res.get_column(k+1).type());
+            }
+        }
+        block.sync();
+
+        // aggregate into the shared memory buffer
+        #pragma unroll
+        for(int t = get_cuda_tid(); t < num_items; t += nthreads()) {
+            const auto loc = group_ids_loc[t];
+            const auto gid = sparse_group_ids[loc];
+
+            cur_agg_buffer = agg_buffer;
+
+            #pragma unroll
+            for(gamax::size_type i = 0; i < num_aggs; i++) {
+                block_aggregate(
+                    aggs[i].agg_kind,
+                    val.get_column(aggs[i].column_index), t,
+                    cur_agg_buffer, gid);
+                cur_agg_buffer = cur_agg_buffer + (num_groups)*gamax::size_of(res.get_column(i+1).type());
+            }
+        }
+        block.sync();
+
+        cur_agg_buffer = agg_buffer;
+
+        gamax::size_type last_i = 0;
+        
+        #pragma unroll
+        for(gamax::size_type t = block.thread_rank(); t < num_groups*num_aggs; t += block.size()) {
+            const gamax::size_type i = t / num_groups; // which request
+            const gamax::size_type j = t % num_groups; // which group
+            
+            #pragma unroll
+            for(int k = last_i; k < i; k++) {
+                cur_agg_buffer = cur_agg_buffer + (num_groups)*gamax::size_of(res.get_column(k+1).type());
+            }
+            last_i = i;
+            
+            auto out_type = res.get_column(i+1).type();
+            gamax::column temp_col(gamax::device_buffer(
+                                        cur_agg_buffer, 
+                                        num_groups*gamax::size_of(out_type)), 
+                                    num_groups, 
+                                    out_type);
+            aggregate(
+                aggs[i].agg_kind,
+                temp_col, j,
+                res.get_column(i+1), j);
         }
     }
 
@@ -122,7 +203,7 @@ namespace {
             auto res = std::make_unique<gamax::table>(std::move(final_columns));
             
             constexpr double load_factor = 0.5;
-            std::size_t map_capacity = std::ceil(estimated_num_groups / load_factor);
+            std::size_t map_capacity = std::ceil(std::max(4096, estimated_num_groups) / load_factor);
             Key constexpr empty_key_sentinel     = -1; // FIXME: handle negative values and unsigned values correctly 
             gamax::size_type constexpr empty_value_sentinel = -1;      
             auto cuco_allocator = *get_thrust_allocator<cuco::pair<Key, gamax::size_type>>(stream);   
@@ -148,34 +229,57 @@ namespace {
                 sparse_group_ids->data<gamax::size_type>(), 
                 groupid_loc->data<gamax::size_type>(),
                 d_num_groups->data<gamax::size_type>());
-
-            auto group_ids = gamax::make_idx_column(input_num_rows, false);
-            gamax::util::device::gather(
-                groupid_loc->data<gamax::size_type>(), 
-                sparse_group_ids->data<gamax::size_type>(), 
-                group_ids->data<gamax::size_type>(), 
-                input_num_rows, 
-                stream);
+            
+            gamax::size_type num_groups;
+            cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
 
             auto val_view = table_device_view::create(val);
             auto res_view = table_device_view::create(*res);
 
             initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *res_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
             
-            compute_aggregation<<<num_tb(input_num_rows, 256), 256, 0, stream>>>(
-                *val_view, 
-                *res_view, 
-                group_ids->data<gamax::size_type>(), 
-                static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()), 
-                agg_requests.size());
+            std::size_t agg_bytes = 0;
+            for(int i = 1; i < res->num_columns(); i++) {
+                agg_bytes += gamax::size_of(res->get_column(i).type());
+            }
             
-            gamax::size_type num_groups;
-            cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
+            constexpr std::size_t max_shared_mem_size = MAX_SMEM_BYTES;
+            /* When the number of groups becomes larger, 
+            it is no longer efficient to aggregate in SMEM 
+            even though it goes not go beyond SMEM's capacity.
+            Experimentally, we found 2048 to be the threshold */
+            const auto smem_groups = std::min(max_shared_mem_size / agg_bytes, 2048UL);
+
+            if(num_groups > smem_groups) {
+                compute_aggregation<<<num_tb(input_num_rows, 768), 768, 0, stream>>>(
+                    *val_view, 
+                    *res_view, 
+                    sparse_group_ids->data<gamax::size_type>(), 
+                    groupid_loc->data<gamax::size_type>(), 
+                    static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()), 
+                    agg_requests.size());
+            } else {
+                const std::size_t sm_bytes = num_groups * agg_bytes;
+                auto agg_fn = compute_aggregation_block;
+                if(sm_bytes > 48*1024) {
+                    CHECK_CUDA_ERROR(cudaFuncSetAttribute(compute_aggregation_block, cudaFuncAttributeMaxDynamicSharedMemorySize, sm_bytes));
+                }
+                // std::cout << "sm_bytes: " << sm_bytes << std::endl;
+                agg_fn<<<num_tb(input_num_rows, 768), 768, sm_bytes, stream>>>(
+                    *val_view, 
+                    *res_view, 
+                    num_groups,
+                    sparse_group_ids->data<gamax::size_type>(), 
+                    groupid_loc->data<gamax::size_type>(), 
+                    static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()), 
+                    agg_requests.size());
+                CHECK_LAST_CUDA_ERROR();
+            }
 
             cudaStreamSynchronize(stream);
 
             res->set_rows(num_groups);
-
             return res;
         }
     };

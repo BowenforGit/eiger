@@ -22,7 +22,6 @@
 namespace gamax::groupby::partition {
 namespace {
 
-// constexpr auto log_num_partitions = 16;
 constexpr auto cg_size = 1;
 constexpr auto window_size = 1;
 constexpr auto numWindows = 4096;
@@ -128,6 +127,8 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
 
             #pragma unroll
             for(gamax::size_type t = block.thread_rank(); t < num_groups_local; t += block.size()) {
+                cur_agg_buffer = agg_buffer;
+                
                 #pragma unroll
                 for(gamax::size_type k = 0; k < num_aggs; k++) {
                     init_agg(aggs[k].agg_kind, values.get_column(k).type(), cur_agg_buffer, t);
