@@ -7,6 +7,7 @@
 #include <vector>
 #include <exception>
 #include <fstream>
+#include <nvtx3/nvtx3.hpp>
 
 #include "operators/groupby/groupby.hpp"
 #include "operators/groupby/aggregation.hpp"
@@ -30,7 +31,7 @@ bool check_skip(nvbench::state& state, gamax::groupby::groupby_params const& par
         return true;
     }
 
-    if(params.zipf_factor > 0.0 && (params.num_groups < 1024 || params.num_items > (1 << 20))) {
+    if(params.zipf_factor > 0.0 && (params.num_groups < 1024 || params.num_groups > (1 << 20))) {
         state.skip("Skewness is only for medium number of groups and items.");
         return true;
     }
@@ -100,6 +101,8 @@ void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
         state.exec(nvbench::exec_tag::sync,
             [&](nvbench::launch& launch) { 
             auto res = f(key_table, val_table, requests, hint, launch.get_stream()); 
+            cudaStreamSynchronize(launch.get_stream());
+            nvtx3::mark("GroupBy Done");
         });
     }
     catch(const std::exception& e)
