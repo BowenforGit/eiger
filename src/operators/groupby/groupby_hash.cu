@@ -51,21 +51,18 @@ namespace {
         const gamax::size_type num_items,
         Key* keys_out,
         gamax::size_type* sparse_group_ids,
-        gamax::size_type* group_ids_loc,
         gamax::size_type* num_groups)
     {
         int64_t const loop_stride = gridDim.x * blockDim.x;
         int64_t idx               = blockDim.x * blockIdx.x + threadIdx.x;
 
         while (idx < num_items) {
-            auto [slot, is_new_key] = map_ref.insert_and_find(cuco::pair{keys[idx], idx});
+            auto is_new_key = map_ref.insert(cuco::pair{keys[idx], idx});
             
             if (is_new_key) {
                 sparse_group_ids[idx] = atomicAdd(num_groups, 1);
                 keys_out[sparse_group_ids[idx]] = keys[idx];
             } 
-            
-            group_ids_loc[idx] = slot->second;
             
             idx += loop_stride;
         }
@@ -213,12 +210,11 @@ namespace {
                                     thrust::equal_to<Key>{},
                                     cuco::linear_probing<1, cuco::default_hash_function<Key>>{}
                                     , {}, {},
-                                    cuco_allocator
+                                    cuco_allocator, stream
                                     };
-            auto map_ref = map.ref(cuco::insert_and_find);
+            auto map_ref = map.ref(cuco::insert);
 
             auto sparse_group_ids = gamax::make_idx_column(input_num_rows, false);
-            auto groupid_loc = gamax::make_idx_column(input_num_rows, false);
             auto d_num_groups = gamax::make_idx_column(1, true);
 
             compute_groupid_kernel<<<num_tb(input_num_rows, 256), 256, 0, stream>>>(
@@ -227,9 +223,11 @@ namespace {
                 input_num_rows, 
                 res->get_column(0).data<Key>(),
                 sparse_group_ids->data<gamax::size_type>(), 
-                groupid_loc->data<gamax::size_type>(),
                 d_num_groups->data<gamax::size_type>());
-            
+
+            auto groupid_loc = gamax::make_idx_column(input_num_rows, false);
+            map.find(key.get_column(0).data<Key>(), key.get_column(0).data<Key>() + input_num_rows, groupid_loc->data<gamax::size_type>(), cuco::cuda_stream_ref{stream});
+
             gamax::size_type num_groups;
             cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
             cudaStreamSynchronize(stream);
