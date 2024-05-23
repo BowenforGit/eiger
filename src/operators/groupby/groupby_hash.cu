@@ -1,7 +1,7 @@
 #include "operators/groupby/groupby_hash.hpp"
 
 #include <cmath>
-#include <cuco/static_map.cuh>
+#include <cuco/static_set.cuh>
 #include <cuda.h>
 #include <memory>
 #include <stdexcept>
@@ -44,25 +44,28 @@ namespace {
         }
     }
 
-    template<typename Key, typename Map>
+    template<typename Key, typename Set>
     __global__ void compute_groupid_kernel(
-        Map map_ref,
+        Set set_ref,
         Key* keys,
         const gamax::size_type num_items,
         Key* keys_out,
         gamax::size_type* sparse_group_ids,
+        gamax::size_type* group_ids_loc,
         gamax::size_type* num_groups)
     {
         int64_t const loop_stride = gridDim.x * blockDim.x;
         int64_t idx               = blockDim.x * blockIdx.x + threadIdx.x;
 
         while (idx < num_items) {
-            auto is_new_key = map_ref.insert(cuco::pair{keys[idx], idx});
+            auto [iter, is_new_key] = set_ref.insert_and_find(idx);
             
             if (is_new_key) {
                 sparse_group_ids[idx] = atomicAdd(num_groups, 1);
                 keys_out[sparse_group_ids[idx]] = keys[idx];
             } 
+
+            group_ids_loc[idx] = *iter;
             
             idx += loop_stride;
         }
@@ -170,6 +173,27 @@ namespace {
         }
     }
 
+    template <typename T>
+    struct my_equal {
+        my_equal(T const* data) : _data{data} {}
+        __device__ constexpr bool operator()(gamax::size_type lhs, gamax::size_type rhs) const
+        {
+            // Check all 4 elements of a tuple to determine if two tuples are identical
+            return _data[lhs] == _data[rhs];
+        }
+        T const* _data;
+    };
+
+    template <typename T>
+    struct my_hasher {
+        my_hasher(T const* data) : _data{data} {}
+        __device__ auto operator()(gamax::size_type index) const
+        {
+            return cuco::default_hash_function<T>{}(_data[index]);
+        }
+        T const* _data;
+    };
+
     struct hash_groupby_fast_impl {
         template<typename Key>
         std::unique_ptr<gamax::table> operator()(
@@ -199,34 +223,49 @@ namespace {
             }
             auto res = std::make_unique<gamax::table>(std::move(final_columns));
             
-            constexpr double load_factor = 0.5;
+            constexpr double load_factor = 0.25;
             std::size_t map_capacity = std::ceil(std::max(4096, estimated_num_groups) / load_factor);
-            Key constexpr empty_key_sentinel     = -1; // FIXME: handle negative values and unsigned values correctly 
-            gamax::size_type constexpr empty_value_sentinel = -1;      
+            gamax::size_type constexpr empty_key_sentinel     = -1; // FIXME: handle negative values and unsigned values correctly 
+            // gamax::size_type constexpr empty_value_sentinel = -1;      
             auto cuco_allocator = *get_thrust_allocator<cuco::pair<Key, gamax::size_type>>(stream);   
-            auto map = cuco::static_map{map_capacity,
+            // auto map = cuco::static_map{map_capacity,
+            //                         cuco::empty_key{empty_key_sentinel},
+            //                         cuco::empty_value{empty_value_sentinel},
+            //                         thrust::equal_to<Key>{},
+            //                         cuco::linear_probing<1, cuco::default_hash_function<Key>>{}
+            //                         , {}, {},
+            //                         cuco_allocator, stream
+            //                         };
+            // auto map_ref = map.ref(cuco::insert);
+
+            Key* key_ptr = key.get_column(0).data<Key>();
+
+            auto set = cuco::static_set{estimated_num_groups,
+                                    load_factor,
                                     cuco::empty_key{empty_key_sentinel},
-                                    cuco::empty_value{empty_value_sentinel},
-                                    thrust::equal_to<Key>{},
-                                    cuco::linear_probing<1, cuco::default_hash_function<Key>>{}
-                                    , {}, {},
-                                    cuco_allocator, stream
+                                    my_equal<Key>{key_ptr},
+                                    cuco::linear_probing<1, my_hasher<Key>>{my_hasher{key_ptr}},
+                                    cuco::thread_scope_device,
+                                    cuco::storage<1>{},
+                                    cuco_allocator, 
+                                    stream
                                     };
-            auto map_ref = map.ref(cuco::insert);
+            auto set_ref = set.ref(cuco::insert_and_find);
 
             auto sparse_group_ids = gamax::make_idx_column(input_num_rows, false);
+            auto groupid_loc = gamax::make_idx_column(input_num_rows, false);
             auto d_num_groups = gamax::make_idx_column(1, true);
 
             compute_groupid_kernel<<<num_tb(input_num_rows, 256), 256, 0, stream>>>(
-                map_ref, 
+                set_ref, 
                 key.get_column(0).data<Key>(), 
                 input_num_rows, 
                 res->get_column(0).data<Key>(),
                 sparse_group_ids->data<gamax::size_type>(), 
+                groupid_loc->data<gamax::size_type>(), 
                 d_num_groups->data<gamax::size_type>());
 
-            auto groupid_loc = gamax::make_idx_column(input_num_rows, false);
-            map.find(key.get_column(0).data<Key>(), key.get_column(0).data<Key>() + input_num_rows, groupid_loc->data<gamax::size_type>(), cuco::cuda_stream_ref{stream});
+            // map.find(key.get_column(0).data<Key>(), key.get_column(0).data<Key>() + input_num_rows, groupid_loc->data<gamax::size_type>(), cuco::cuda_stream_ref{stream});
 
             gamax::size_type num_groups;
             cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
@@ -247,10 +286,11 @@ namespace {
             it is no longer efficient to aggregate in SMEM 
             even though it goes not go beyond SMEM's capacity.
             Experimentally, we found 2048 to be the threshold */
-            const auto smem_groups = std::min(max_shared_mem_size / agg_bytes, 2048UL);
+            const auto smem_groups = std::min(max_shared_mem_size / agg_bytes, 16384UL);
 
             if(num_groups > smem_groups) {
-                compute_aggregation<<<num_tb(input_num_rows, 768), 768, 0, stream>>>(
+                 compute_aggregation<<<num_tb(input_num_rows, 1024), 1024, 0, stream>>>(
+                // compute_aggregation<<<108*2, 1024, 0, stream>>>(
                     *val_view, 
                     *res_view, 
                     sparse_group_ids->data<gamax::size_type>(), 
@@ -264,7 +304,12 @@ namespace {
                     CHECK_CUDA_ERROR(cudaFuncSetAttribute(compute_aggregation_block, cudaFuncAttributeMaxDynamicSharedMemorySize, sm_bytes));
                 }
                 // std::cout << "sm_bytes: " << sm_bytes << std::endl;
-                agg_fn<<<num_tb(input_num_rows, 768), 768, sm_bytes, stream>>>(
+                // agg_fn<<<num_tb(input_num_rows, 768), 768, sm_bytes, stream>>>(
+		int maxActiveBlocks;
+  cudaOccupancyMaxActiveBlocksPerMultiprocessor( &maxActiveBlocks,
+                                                 agg_fn, 1024,
+                                                 0);
+                agg_fn<<<108*maxActiveBlocks, 1024, sm_bytes, stream>>>(
                     *val_view, 
                     *res_view, 
                     num_groups,
