@@ -41,10 +41,12 @@ bool check_skip(nvbench::state& state, gamax::groupby::groupby_params const& par
         return true;
     }
 
+    /*
     if(state.get_string("algo") == "sort_opt" && params.num_groups > (1 << 16)) {
         state.skip("Sort optimization is only for small number of groups.");
         return true;
     }
+    */
 
     return false;
 }

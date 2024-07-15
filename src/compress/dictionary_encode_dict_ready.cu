@@ -7,6 +7,7 @@
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/tuple.h>
 #include <thrust/functional.h>
+#include <cuda/stream_ref>
 
 namespace gamax::compress {
 namespace {
@@ -32,8 +33,8 @@ namespace {
                                         {}, {}, cuco_allocator};
             
             auto pairs_begin = thrust::make_zip_iterator(thrust::make_tuple(dict.data<Key>(), thrust::make_counting_iterator<Encode>(0)));
-            map.insert(pairs_begin, pairs_begin + dict.size(), cuco::cuda_stream_ref{stream});
-            map.find(keys.data<Key>(), keys.data<Key>() + keys.size(), encoded_keys.data<Encode>(), cuco::cuda_stream_ref{stream});
+            map.insert(pairs_begin, pairs_begin + dict.size(), cuda::stream_ref{stream});
+            map.find(keys.data<Key>(), keys.data<Key>() + keys.size(), encoded_keys.data<Encode>(), cuda::stream_ref{stream});
         }
     };
 } // unnamed namespace
@@ -47,9 +48,10 @@ std::unique_ptr<gamax::column> dictionary_encode(
     auto encoded_col = gamax::make_column(encoded_type, column.size());
 
     /* somehow using double_type_dispatcher will not compile, so I have to write it explicitly */
-    if(encoded_type.id() == gamax::type_id::INT16) {
-        type_dispatcher(column.type(), dict_ready_dict_enc_helper<int16_t>{}, column, dict, *encoded_col, stream);
-    } else if(encoded_type.id() == gamax::type_id::INT32) {
+    // if(encoded_type.id() == gamax::type_id::INT16) {
+     //   type_dispatcher(column.type(), dict_ready_dict_enc_helper<int16_t>{}, column, dict, *encoded_col, stream);
+    // } 
+    if(encoded_type.id() == gamax::type_id::INT32) {
         type_dispatcher(column.type(), dict_ready_dict_enc_helper<int32_t>{}, column, dict, *encoded_col, stream);
     } else {
         throw std::runtime_error("Unsupported encoded type");
