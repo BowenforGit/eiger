@@ -26,6 +26,18 @@ void check_join_solvable(
     if(hint.mat_algo == gamax::join::INDEX_CLUSTER) {
         throw std::runtime_error("Index cluster materialization algorithm is not supported");
     }
+
+    if(left[0].type() != right[0].type()) {
+        throw std::runtime_error("Join columns cannot have different types");
+    }
+
+    if (left.num_columns() == 0 || right.num_columns() == 0) {
+        throw std::runtime_error("Empty table");
+    }
+    
+    if (left.num_columns() == 1 || right.num_columns() == 1) {
+        throw std::runtime_error("Left and right table should have at least 1 payload column");
+    }
 }
 }
 
@@ -39,10 +51,9 @@ std::unique_ptr<gamax::table> inner_eq_join(
     
     switch (hint.join_algo) {
         case gamax::join::SORT:
-            // return hint.mat_algo == gamax::join::GFUR ?
-            //     detail::ieq_sort_merge_join_gfur(left, right, hint, stream) :
-            //     detail::ieq_sort_merge_join_gftr(left, right, hint, stream);
-            return detail::ieq_sort_merge_join_gftr(left, right, hint, stream);
+            return hint.mat_algo == gamax::join::GFUR ?
+                detail::ieq_sort_merge_join_gfur(left, right, hint, stream) :
+                detail::ieq_sort_merge_join_gftr(left, right, hint, stream);
         case gamax::join::HASH:
             // return detail::ieq_hash_join(left, right, hint, stream);
         case gamax::join::PARTITION:

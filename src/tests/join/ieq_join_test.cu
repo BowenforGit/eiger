@@ -113,6 +113,7 @@ namespace {
     }
 
 IEQ_JOIN_TEST_CASE_SUITE(IEQ_SORT_MERGE_JOIN_GFTR, gamax::join::join_algo::SORT, gamax::join::materialization_algo::GFTR)
+IEQ_JOIN_TEST_CASE_SUITE(IEQ_SORT_MERGE_JOIN_GFUR, gamax::join::join_algo::SORT, gamax::join::materialization_algo::GFUR)
 
 int main(int argc, char **argv) {
   testing::InitGoogleTest(&argc, argv);
