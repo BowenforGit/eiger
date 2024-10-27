@@ -12,6 +12,10 @@ set(srcs
     memory/table.cu
     memory/mem_manager.cu
     data_gen/table_gen.cu
+    operators/join/materialize.cu
+    operators/join/sort_merge_join.cu
+    operators/join/join.cu
+    tests/test_helper.cu
     utils/transform.cu
 )
 
