@@ -21,6 +21,17 @@ sort_column_pair(
     size_t temp_storage_bytes = 0, 
     cudaStream_t stream = 0);
 
+std::pair<std::unique_ptr<gamax::column>, std::unique_ptr<gamax::column>> 
+sort_column_pair(
+    gamax::column_view key_col, 
+    gamax::column_view val_col, 
+    int begin_bit = 0,
+    int end_bit = -1,
+    gamax::sort_order order = gamax::sort_order::ASCENDING, 
+    void* d_temp_storage = nullptr, 
+    size_t temp_storage_bytes = 0, 
+    cudaStream_t stream = 0);
+
 std::unique_ptr<gamax::column>
 sort_column(
     gamax::column& col,
@@ -30,6 +41,17 @@ sort_column(
     void* d_temp_storage = nullptr,
     size_t temp_storage_bytes = 0,
     cudaStream_t stream = 0);
+
+std::unique_ptr<gamax::column>
+sort_column(
+    gamax::column_view col,
+    int begin_bit = 0,
+    int end_bit = -1,
+    gamax::sort_order order = gamax::sort_order::ASCENDING,
+    void* d_temp_storage = nullptr,
+    size_t temp_storage_bytes = 0,
+    cudaStream_t stream = 0);
+
 
 std::pair<std::unique_ptr<gamax::column>, std::unique_ptr<gamax::column>> 
 argsort(
