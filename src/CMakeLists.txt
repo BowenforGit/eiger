@@ -11,6 +11,8 @@ set(srcs
     memory/column.cu
     memory/table.cu
     memory/mem_manager.cu
+    data_gen/table_gen.cu
+    utils/transform.cu
 )
 
 add_library(gamax SHARED ${srcs})

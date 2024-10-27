@@ -14,6 +14,15 @@ All credit to the original author: Cagri Balkesen <cagri.balkesen@inf.ethz.ch>
 #include <algorithm>
 #include <cstdlib>
 #include <atomic>
+#include <memory>
+#include <thrust/random.h>
+#include <thrust/generate.h>
+#include <thrust/execution_policy.h>
+#include <thrust/iterator/counting_iterator.h>
+
+#include "memory/column.hpp"
+#include "utils/transform.hpp"
+#include "memory/mem_manager.hpp"
 
 template<typename T> using zipf_distribution_t = std::discrete_distribution<T>;
 // #define RAND_RANGE(N) ((double)rand() / ((double)RAND_MAX + 1) * (N))
@@ -273,3 +282,79 @@ void adjust_selectivity(T* keys, const size_t n, const double selectivity, const
     std::default_random_engine e(seed);
     std::shuffle(keys, keys+n, e);
 }
+
+namespace gamax::datagen::device {
+
+template<typename T>
+struct uniform_int_gen
+{
+    using result_type = T;
+
+    T a, b;
+
+    __host__ __device__
+    uniform_int_gen(T _a, T _b) : a(_a), b(_b) {};
+
+    __host__ __device__
+    T operator()(const gamax::size_type idx) const
+    {
+        thrust::default_random_engine rng;
+        thrust::uniform_int_distribution<T> dist(a, b);
+        rng.discard(idx);
+
+        return dist(rng);
+    }
+};
+
+template<typename Generator,
+         typename T = typename Generator::result_type>
+std::unique_ptr<gamax::column> generate(
+    Generator gen,
+    const gamax::size_type n,
+    cudaStream_t stream = cudaStreamDefault) 
+{
+    static_assert(std::is_same_v<T, typename Generator::result_type>);
+    
+    auto ret = gamax::make_column<T>(n);
+    auto itr = thrust::make_counting_iterator<gamax::size_type>(0);
+    thrust::transform(
+        thrust::cuda::par(*get_thrust_allocator()).on(stream),
+        itr, itr+n,
+        ret->template data<T>(), // TODO: figure out why sometimes only this form works
+        gen
+    );
+
+    cudaStreamSynchronize(stream);
+
+    return ret;
+}
+
+std::unique_ptr<gamax::column> generate_from_values(
+    gamax::column_view values, // set of values to sample from
+    const gamax::size_type n,
+    const bool shuffle = true, 
+    const int seed = 42,
+    cudaStream_t stream = cudaStreamDefault) 
+{
+    const auto num_values = values.size();
+    const auto type_bytes = gamax::size_of(values.type());
+
+    auto ret = std::make_unique<gamax::column>(values.type(), n);
+    
+    gamax::size_type offset = 0;
+    while(offset < n) {
+        auto n_copy = std::min(n - offset, num_values);
+        ret->mutable_view(offset).copy_from(values, n_copy, stream);
+        offset += n_copy;
+    }
+
+    cudaStreamSynchronize(stream);
+
+    if(shuffle) {
+        return gamax::util::device::shuffle(ret->view(), seed, stream);
+    } else {
+        return ret;
+    }
+}
+
+} // namespace gamax::datagen::device
