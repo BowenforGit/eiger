@@ -9,6 +9,82 @@
 #include "utils/sequence.cuh"
 
 namespace gamax {
+
+class column_view_base {
+public:
+    column_view_base() = default;
+
+    column_view_base(void* data, size_type size, data_type type, const size_type offset = 0) 
+        : _data(data), _size(size - offset), _type(type), _offset(offset) {
+            if(offset > size) {
+                throw std::runtime_error("Offset is greater than the size of the column");
+            }
+        }
+
+    __host__ __device__ size_type size() const noexcept {
+        return _size;
+    }
+
+    __host__ __device__ data_type type() const noexcept {
+        return _type;
+    }
+
+protected:
+    void* _data {nullptr};
+    size_type _size {0};
+    data_type _type;
+    size_type _offset {0};
+};
+
+class column_view : public column_view_base {
+public:
+    column_view() = default;
+
+    column_view(void* data, size_type size, data_type type, const size_type offset = 0) 
+        : column_view_base(data, size, type, offset) {}
+
+    template <typename T>
+    __host__ __device__ const T* data() const noexcept {
+        return static_cast<const T*>(_data) + _offset;
+    }
+
+    __host__ __device__ const void* data() const noexcept {
+        return static_cast<char*>(_data) + _offset * gamax::size_of(_type);
+    }
+};
+
+class mutable_column_view : public column_view_base {
+public:
+    mutable_column_view() = default;
+
+    mutable_column_view(void* data, size_type size, data_type type, const size_type offset = 0) 
+        : column_view_base(data, size, type, offset) {}
+    
+    void set_size (size_type size) noexcept{
+        _size = size;
+    }
+
+    template <typename T>
+    __host__ __device__ T* data() const noexcept {
+        return static_cast<T*>(_data) + _offset;
+    }
+
+    __host__ __device__ void* data() const noexcept {
+        return static_cast<char*>(_data) + _offset * gamax::size_of(_type);
+    }
+
+    void copy_from(column_view const& other, const gamax::size_type n, cudaStream_t stream = cudaStreamDefault) {
+        if(_type != other.type()) {
+            throw std::runtime_error("Cannot copy between columns of different types");
+        }
+        if(_size < n || other.size() < n) {
+            throw std::runtime_error("Column is too small to copy from other");
+        }
+        
+        cudaMemcpyAsync(this->data(), other.data(), n * gamax::size_of(_type), cudaMemcpyDeviceToDevice, stream);
+    }
+};
+
 class column {
 public:
     column() = default;
@@ -65,6 +141,14 @@ public:
         return static_cast<T*>(_data.data());
     }
 
+    column_view view(const size_type offset = 0) const {
+        return column_view(_data.data(), _size, _type, offset);
+    }
+
+    mutable_column_view mutable_view(const size_type offset = 0) {
+        return mutable_column_view(_data.data(), _size, _type, offset);
+    }
+
 private:
     gamax::device_buffer _data;
     gamax::size_type _size {0}; // number of elements in the column
@@ -107,6 +191,16 @@ std::unique_ptr<column> make_sequence(
     
     auto col = make_column(data_type{type_to_id<T>()}, size);
     gamax::utils::device::create_sequence(col->data<T>(), size, start, step);
+    return col;
+}
+
+template<typename column_view_type>
+std::unique_ptr<column> make_column_from_view(
+    column_view_type const& view, 
+    cudaStream_t stream = cudaStreamDefault) 
+{
+    auto col = make_column(view.type(), view.size());
+    cudaMemcpyAsync(col->data(), view.data(), view.size() * gamax::size_of(view.type()), cudaMemcpyDeviceToDevice, stream);
     return col;
 }
 } // namespace gamax
