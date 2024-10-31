@@ -9,23 +9,26 @@
 namespace gamax {
 
 namespace experimental {
-class table_device_view {
+template <typename column_view_t>
+class table_device_view_base {
 public:
-    table_device_view() = delete;
-    table_device_view(table_device_view const&) = default; // shallow copy
-    table_device_view(table_device_view&&)      = default;
-    __host__ __device__ ~table_device_view() {}
+    using column_view = column_view_t;
+
+    table_device_view_base() = delete;
+    table_device_view_base(table_device_view_base const&) = default; // shallow copy
+    table_device_view_base(table_device_view_base&&)      = default;
+    __host__ __device__ ~table_device_view_base() {}
     
-    __host__ table_device_view(std::vector<column_view> const& cols, cudaStream_t stream = cudaStreamDefault) {
+    __host__ table_device_view_base(std::vector<column_view_t> const& cols, cudaStream_t stream = cudaStreamDefault) {
         _num_columns = cols.size();
-        allocate_mem(&_columns, false, _num_columns*sizeof(gamax::column_view), stream);
+        allocate_mem(&_columns, false, _num_columns*sizeof(column_view_t), stream);
 
         for (gamax::size_type i = 0; i < _num_columns; ++i) {
-            cudaMemcpyAsync(&_columns[i], &cols[i], sizeof(gamax::column_view), cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(&_columns[i], &cols[i], sizeof(column_view_t), cudaMemcpyHostToDevice, stream);
         }
     }
     
-    __host__ __device__ table_device_view(gamax::column_view* columns, gamax::size_type num_columns) 
+    __host__ __device__ table_device_view_base(column_view_t* columns, gamax::size_type num_columns) 
         : _columns(columns)
         , _num_columns(num_columns) {}
 
@@ -33,19 +36,19 @@ public:
         return _num_columns;
     }
 
-    __device__ gamax::size_type num_rows() const noexcept {
+   __host__  __device__ gamax::size_type num_rows() const noexcept {
         return num_columns() > 0 ? _columns[0].size() : 0;
     }
 
-    __device__ gamax::column_view& get_column(gamax::size_type column_index) {
+    __host__ __device__ column_view_t& get_column(gamax::size_type column_index) {
         return _columns[column_index];
     }
 
-    __device__ gamax::column_view& operator[](gamax::size_type column_index) {
+    __host__ __device__ column_view_t& operator[](gamax::size_type column_index) {
         return get_column(column_index);
     }
 
-    __device__ gamax::column_view* columns() {
+    __host__ __device__ column_view_t* columns() {
         return _columns;
     }
 
@@ -54,19 +57,30 @@ public:
     }
 
 private:
-    gamax::column_view* _columns {nullptr};
+    column_view_t* _columns {nullptr};
     gamax::size_type _num_columns {0};
 };
+
+using table_device_view = table_device_view_base<gamax::column_view>;
+using mutable_table_device_view = table_device_view_base<gamax::mutable_column_view>;
 } // namespace experimental
 
-class table_view {
+template<typename column_view_t>
+class table_view_base {
 public:
-    table_view() = default;
-    ~table_view() = default;
+    using column_view = column_view_t;
+    using device_view_t = experimental::table_device_view_base<column_view_t>;
 
-    table_view(std::vector<std::unique_ptr<column>> const& cols) : _columns(cols.size()) {
+    table_view_base() = default;
+    ~table_view_base() = default;
+
+    table_view_base(std::vector<std::unique_ptr<column>> const& cols) : _columns(cols.size()) {
         for (int i = 0; i < cols.size(); ++i) {
-            _columns[i] = cols[i]->view();
+            if constexpr (std::is_const_v<std::remove_pointer_t<decltype(std::declval<column_view_t>().data())>>) {
+                _columns[i] = cols[i]->view();
+            } else {
+                _columns[i] = cols[i]->mutable_view();
+            }
         }
     }
 
@@ -78,23 +92,26 @@ public:
         return num_columns() > 0 ? _columns[0].size() : 0;
     }
 
-    column_view get_column(size_type column_index) const {
+    column_view_t get_column(size_type column_index) const {
         return _columns.at(column_index);
     }
 
-    column_view operator[](size_type column_index) const {
+    column_view_t operator[](size_type column_index) const {
         return get_column(column_index);
     }
 
     auto device_view(cudaStream_t stream = cudaStreamDefault) {
-        auto deleter = [](gamax::experimental::table_device_view* t) { t->destroy(); };
-        return std::unique_ptr<gamax::experimental::table_device_view, decltype(deleter)>{
-            new gamax::experimental::table_device_view(_columns, stream), deleter};
+        auto deleter = [](device_view_t* t) { t->destroy(); };
+        return std::unique_ptr<device_view_t, decltype(deleter)>{
+            new device_view_t(_columns, stream), deleter};
     }
 
 private:
-    std::vector<column_view> _columns {};
+    std::vector<column_view_t> _columns {};
 };
+
+using table_view = table_view_base<column_view>;
+using mutable_table_view = table_view_base<mutable_column_view>;
 
 class table {
 public:
@@ -136,6 +153,10 @@ public:
 
     table_view view() const {
         return table_view(_columns);
+    }
+
+    mutable_table_view mutable_view() const {
+        return mutable_table_view(_columns);
     }
 
 private:

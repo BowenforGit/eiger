@@ -14,10 +14,14 @@ class column_view_base {
 public:
     column_view_base() = default;
 
-    column_view_base(void* data, size_type size, data_type type, const size_type offset = 0) 
+    __host__ __device__ column_view_base(void* data, size_type size, data_type type, const size_type offset = 0) 
         : _data(data), _size(size - offset), _type(type), _offset(offset) {
             if(offset > size) {
+#ifndef __CUDA_ARCH__
                 throw std::runtime_error("Offset is greater than the size of the column");
+#else
+                gamax_assert("Offset is greater than the size of the column");
+#endif
             }
         }
 
@@ -40,7 +44,7 @@ class column_view : public column_view_base {
 public:
     column_view() = default;
 
-    column_view(void* data, size_type size, data_type type, const size_type offset = 0) 
+    __host__ __device__ column_view(void* data, size_type size, data_type type, const size_type offset = 0) 
         : column_view_base(data, size, type, offset) {}
 
     template <typename T>
@@ -57,7 +61,7 @@ class mutable_column_view : public column_view_base {
 public:
     mutable_column_view() = default;
 
-    mutable_column_view(void* data, size_type size, data_type type, const size_type offset = 0) 
+    __host__ __device__ mutable_column_view(void* data, size_type size, data_type type, const size_type offset = 0) 
         : column_view_base(data, size, type, offset) {}
     
     void set_size (size_type size) noexcept{
@@ -141,11 +145,11 @@ public:
         return static_cast<T*>(_data.data());
     }
 
-    column_view view(const size_type offset = 0) const {
+    __host__ __device__ column_view view(const size_type offset = 0) const {
         return column_view(_data.data(), _size, _type, offset);
     }
 
-    mutable_column_view mutable_view(const size_type offset = 0) {
+    __host__ __device__ mutable_column_view mutable_view(const size_type offset = 0) {
         return mutable_column_view(_data.data(), _size, _type, offset);
     }
 
