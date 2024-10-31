@@ -15,9 +15,9 @@ namespace {
     struct dict_ready_dict_enc_helper {
         template<typename Key>
         void operator()(
-            const gamax::column& keys, 
-            const gamax::column& dict, 
-            gamax::column& encoded_keys, 
+            const gamax::column_view keys, 
+            const gamax::column_view dict, 
+            gamax::mutable_column_view encoded_keys, 
             cudaStream_t stream) 
         {
             constexpr double load_factor = 0.3;
@@ -40,8 +40,8 @@ namespace {
 } // unnamed namespace
 
 std::unique_ptr<gamax::column> dictionary_encode(
-    const gamax::column& column, 
-    const gamax::column& dict,
+    const gamax::column_view column, 
+    const gamax::column_view dict,
     const gamax::data_type encoded_type,
     cudaStream_t stream)
 {
@@ -52,11 +52,20 @@ std::unique_ptr<gamax::column> dictionary_encode(
      //   type_dispatcher(column.type(), dict_ready_dict_enc_helper<int16_t>{}, column, dict, *encoded_col, stream);
     // } 
     if(encoded_type.id() == gamax::type_id::INT32) {
-        type_dispatcher(column.type(), dict_ready_dict_enc_helper<int32_t>{}, column, dict, *encoded_col, stream);
+        type_dispatcher(column.type(), dict_ready_dict_enc_helper<int32_t>{}, column, dict, encoded_col->mutable_view(), stream);
     } else {
         throw std::runtime_error("Unsupported encoded type");
     }
     cudaStreamSynchronize(stream);
     return encoded_col;
+}
+
+std::unique_ptr<gamax::column> dictionary_encode(
+    const gamax::column& column, 
+    const gamax::column& dict,
+    const gamax::data_type encoded_type,
+    cudaStream_t stream)
+{
+    return dictionary_encode(column.view(), dict.view(), encoded_type, stream);
 }
 }

@@ -9,7 +9,6 @@
 #include "operators/groupby/groupby.hpp"
 #include "operators/groupby/groupby_sort.hpp"
 #include "operators/groupby/aggregation.hpp"
-#include "operators/groupby/load_balancer.cuh"
 #include "operators/groupby/agg_func.cuh"
 #include "operators/sort/sort.hpp"
 #include "types/data_type.hpp"
@@ -23,10 +22,10 @@ template<typename F, typename ValT>
 struct reduce_by_key_aggregator_helper {
     template<typename KeyT>
     void operator() (
-        gamax::column& key, 
-        gamax::column& val, 
-        gamax::column& result_key,
-        gamax::column& result_val,
+        gamax::column_view key, 
+        gamax::column_view val, 
+        gamax::mutable_column_view result_key,
+        gamax::mutable_column_view result_val,
         gamax::size_type* d_num_groups,
         gamax::size_type* permutation_idx = nullptr) {
 
@@ -44,10 +43,10 @@ struct reduce_by_key_aggregator_helper {
 
     template<typename KeyT>
     void operator() (
-        gamax::column& key, 
-        gamax::column& val, 
+        gamax::column_view key, 
+        gamax::column_view val, 
         const gamax::size_type num_groups,
-        gamax::column& result_val,
+        gamax::mutable_column_view result_val,
         gamax::size_type* permutation_idx = nullptr) {
 
         using AggT = typename F::OutputType;
@@ -69,10 +68,10 @@ template<gamax::groupby::aggregation_id agg_kind>
 struct dispatch_key_type_helper {
     template<typename ValT>
     void operator() (
-        gamax::column& key, 
-        gamax::column& val, 
-        gamax::column& result_key,
-        gamax::column& result_val,
+        gamax::column_view key, 
+        gamax::column_view val, 
+        gamax::mutable_column_view result_key,
+        gamax::mutable_column_view result_val,
         gamax::size_type* d_num_groups,
         gamax::size_type* permutation_idx = nullptr) {
 
@@ -92,10 +91,10 @@ struct dispatch_key_type_helper {
 
     template<typename ValT>
     void operator() (
-        gamax::column& key, 
-        gamax::column& val, 
+        gamax::column_view key, 
+        gamax::column_view val, 
         const gamax::size_type num_groups,
-        gamax::column& result_val,
+        gamax::mutable_column_view result_val,
         gamax::size_type* permutation_idx = nullptr) {
 
         using F = typename agg_fn_mapper<agg_kind, ValT>::F;
@@ -115,10 +114,10 @@ struct dispatch_key_type_helper {
 template<gamax::groupby::aggregation_id agg_kind>
 struct dispatch_val_type_helper {
     void operator() (
-        gamax::column& key, 
-        gamax::column& val, 
-        gamax::column& result_key,
-        gamax::column& result_val,
+        gamax::column_view key, 
+        gamax::column_view val, 
+        gamax::mutable_column_view result_key,
+        gamax::mutable_column_view result_val,
         gamax::size_type* d_num_groups,
         gamax::size_type* permutation_idx = nullptr) {
         
@@ -135,10 +134,10 @@ struct dispatch_val_type_helper {
     }
 
     void operator() (
-        gamax::column& key, 
-        gamax::column& val, 
+        gamax::column_view key, 
+        gamax::column_view val, 
         const gamax::size_type num_groups,
-        gamax::column& result_val,
+        gamax::mutable_column_view result_val,
         gamax::size_type* permutation_idx = nullptr) {
 
         gamax::type_dispatcher(
@@ -169,10 +168,10 @@ void dispatch_aggregate(gamax::groupby::aggregation_id agg_kind, Ts&&... args) {
 
 void aggregate(
     gamax::groupby::aggregation_id agg_kind, 
-    gamax::column& key, 
-    gamax::column& val, 
-    gamax::column& result_key,
-    gamax::column& result_val,
+    gamax::column_view key, 
+    gamax::column_view val, 
+    gamax::mutable_column_view result_key,
+    gamax::mutable_column_view result_val,
     gamax::size_type& num_groups,
     gamax::size_type* permutation_idx = nullptr) {
 
@@ -183,16 +182,16 @@ void aggregate(
 
 void aggregate(
     gamax::groupby::aggregation_id agg_kind, 
-    gamax::column& key, 
-    gamax::column& val, 
+    gamax::column_view key, 
+    gamax::column_view val, 
     const gamax::size_type num_groups,
-    gamax::column& result_val,
+    gamax::mutable_column_view result_val,
     gamax::size_type* permutation_idx = nullptr) {
 
     dispatch_aggregate(agg_kind, key, val, num_groups, result_val, permutation_idx);
 }
 
-void check_solvable(gamax::table& key, gamax::table& val, std::vector<gamax::groupby::aggregation_request>& agg_requests) {
+void check_solvable(gamax::table_view const& key, gamax::table_view const& val, std::vector<gamax::groupby::aggregation_request>& agg_requests) {
     if(key.num_columns() > 1) {
         throw std::runtime_error("Only single-column group keys are supported");
     }
@@ -234,8 +233,8 @@ void extract_groupby_hint(
 } // unnamed namespace
 
 std::unique_ptr<gamax::table> groupby(
-    gamax::table& key, 
-    gamax::table& val, 
+    gamax::table_view key, 
+    gamax::table_view val, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
     cudaStream_t stream) 
@@ -269,7 +268,7 @@ std::unique_ptr<gamax::table> groupby(
             auto unique_keys = gamax::make_column(key_type, estimated_num_groups);
             auto agg_val = gamax::make_column(val_type, estimated_num_groups);
             
-            aggregate(agg_kind, *sorted_key, *sorted_val, *unique_keys, *agg_val, num_groups);
+            aggregate(agg_kind, sorted_key->view(), sorted_val->view(), unique_keys->mutable_view(), agg_val->mutable_view(), num_groups);
 
             unique_keys->set_size(num_groups);
             agg_val->set_size(num_groups);
@@ -284,7 +283,8 @@ std::unique_ptr<gamax::table> groupby(
                 if(encoded_key.get() == nullptr) {
                     encoded_key = gamax::compress::dictionary_encode(
                         key.get_column(0), 
-                        *(final_columns.front()), 
+                        // *(final_columns.front()), 
+                        final_columns.front()->view(),
                         data_type{type_id::INT32}, 
                         stream);
                 }
@@ -298,13 +298,13 @@ std::unique_ptr<gamax::table> groupby(
                     v++;
                     return 8 * gamax::size_of(encoded_key->type()) - __builtin_clz(v);
                 } (num_groups);
-                std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(*encoded_key, val.get_column(i), 0, end_bit);
+                std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(encoded_key->view(), val.get_column(i), 0, end_bit);
             } else {
                 std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(key.get_column(0), val.get_column(i), begin_bit, end_bit);
             }
 
             auto agg_val = gamax::make_column(val_type, num_groups);
-            aggregate(agg_kind, *sorted_key, *sorted_val, num_groups, *agg_val);
+            aggregate(agg_kind, sorted_key->view(), sorted_val->view(), num_groups, agg_val->mutable_view());
             final_columns.push_back(std::move(agg_val));
         }
     }
@@ -315,8 +315,8 @@ std::unique_ptr<gamax::table> groupby(
 }
 
 std::unique_ptr<gamax::table> groupby_gfur(
-    gamax::table& key, 
-    gamax::table& val, 
+    gamax::table_view key, 
+    gamax::table_view val, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
     cudaStream_t stream) 
@@ -346,7 +346,7 @@ std::unique_ptr<gamax::table> groupby_gfur(
         if(!grouped) {
             auto agg_val = gamax::make_column(val_type, estimated_num_groups);
             auto unique_keys = gamax::make_column(key_type, estimated_num_groups);
-            aggregate(agg_kind, *sorted_key, val.get_column(i), *unique_keys, *agg_val, num_groups, idx_col->data<gamax::size_type>());
+            aggregate(agg_kind, sorted_key->view(), val.get_column(i), unique_keys->mutable_view(), agg_val->mutable_view(), num_groups, idx_col->data<gamax::size_type>());
             unique_keys->set_size(num_groups);
             agg_val->set_size(num_groups);
             final_columns.push_back(std::move(unique_keys));
@@ -355,7 +355,7 @@ std::unique_ptr<gamax::table> groupby_gfur(
             grouped = true;
         } else {
             auto agg_val = gamax::make_column(val_type, num_groups);
-            aggregate(agg_kind, *sorted_key, val.get_column(i), num_groups, *agg_val, idx_col->data<gamax::size_type>());
+            aggregate(agg_kind, sorted_key->view(), val.get_column(i), num_groups, agg_val->mutable_view(), idx_col->data<gamax::size_type>());
             final_columns.push_back(std::move(agg_val));
         }
     }
@@ -363,6 +363,26 @@ std::unique_ptr<gamax::table> groupby_gfur(
     cudaStreamSynchronize(0);
 
     return std::make_unique<gamax::table>(std::move(final_columns));
+}
+
+std::unique_ptr<gamax::table> groupby(
+    gamax::table& key, 
+    gamax::table& val, 
+    std::vector<gamax::groupby::aggregation_request>& agg_requests,
+    gamax::groupby::groupby_hint& hint,
+    cudaStream_t stream)
+{
+    return groupby(key.view(), val.view(), agg_requests, hint, stream);
+}
+
+std::unique_ptr<gamax::table> groupby_gfur(
+    gamax::table& key, 
+    gamax::table& val, 
+    std::vector<gamax::groupby::aggregation_request>& agg_requests,
+    gamax::groupby::groupby_hint& hint,
+    cudaStream_t stream)
+{
+    return groupby_gfur(key.view(), val.view(), agg_requests, hint, stream);
 }
 
 } // namespace gamax::groupby::sort

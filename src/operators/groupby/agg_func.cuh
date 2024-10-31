@@ -46,8 +46,8 @@ struct Sum {
     }
 
     __device__ __forceinline__ void operator() (
-                                        column& src, gamax::size_type src_idx, 
-                                        column& dst, gamax::size_type dst_idx) const {
+                                        gamax::column_view src, gamax::size_type src_idx, 
+                                        gamax::mutable_column_view dst, gamax::size_type dst_idx) const {
         this->global_update(dst_idx, dst.data<OutputType>(), src.data<ValT>()[src_idx]);
     }
 };
@@ -89,8 +89,8 @@ struct Max {
     }
 
     __device__ __forceinline__ void operator() (
-                                        column& src, gamax::size_type src_idx, 
-                                        column& dst, gamax::size_type dst_idx) const {
+                                        gamax::column_view src, gamax::size_type src_idx, 
+                                        gamax::mutable_column_view dst, gamax::size_type dst_idx) const {
         this->global_update(dst_idx, dst.data<OutputType>(), src.data<ValT>()[src_idx]);
     }
 };

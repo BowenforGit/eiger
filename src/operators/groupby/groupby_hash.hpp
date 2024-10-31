@@ -20,4 +20,11 @@ std::unique_ptr<gamax::table> groupby(
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
     cudaStream_t stream = cudaStreamDefault);
+
+std::unique_ptr<gamax::table> groupby(
+    gamax::table_view key, 
+    gamax::table_view val, 
+    std::vector<gamax::groupby::aggregation_request>& agg_requests,
+    gamax::groupby::groupby_hint& hint,
+    cudaStream_t stream = cudaStreamDefault);
 } // namespace gamax::groupby::hash

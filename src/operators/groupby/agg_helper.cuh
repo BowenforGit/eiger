@@ -5,7 +5,7 @@
 
 #include "aggregation.hpp"
 #include "memory/column.hpp"
-#include "memory/table_device_view.hpp"
+// #include "memory/table_device_view.hpp"
 #include "types/type_dispatcher.hpp"
 #include "types/data_type.hpp"
 
@@ -14,9 +14,9 @@ template<gamax::groupby::aggregation_id agg_kind>
 struct dispatch_val_type_helper {
     template<typename T>
     __device__ __forceinline__ void operator()(
-        gamax::column& src,
+        gamax::column_view src,
         gamax::size_type src_idx,
-        gamax::column& dst,
+        gamax::mutable_column_view dst,
         gamax::size_type dst_idx)
     {
         using F = typename gamax::groupby::agg_fn_mapper<agg_kind, T>::F;
@@ -25,7 +25,7 @@ struct dispatch_val_type_helper {
 
     template<typename T>
     __device__ __forceinline__ void operator()(
-        gamax::column& src,
+        gamax::column_view src,
         gamax::size_type src_idx,
         void* dst,
         gamax::size_type dst_idx)
@@ -42,11 +42,11 @@ struct dispatch_val_type_helper {
     template<typename T, typename Group, typename IdxIt>
     __device__ __forceinline__ void operator()(
         Group const& group,
-        gamax::column& src,
+        gamax::column_view src,
         IdxIt& src_idx,
         gamax::size_type src_start,
         gamax::size_type src_end,
-        gamax::column& dst,
+        gamax::mutable_column_view dst,
         gamax::size_type dst_idx)
     {
         namespace cg = cooperative_groups;
@@ -89,9 +89,9 @@ struct dispatch_val_type_helper {
     }
 
     __device__ __forceinline__ void operator()(
-        gamax::column& src,
+        gamax::column_view src,
         gamax::size_type src_idx,
-        gamax::column& dst,
+        gamax::mutable_column_view dst,
         gamax::size_type dst_idx)
     {
 
@@ -107,11 +107,11 @@ struct dispatch_val_type_helper {
     template<typename Group, typename IdxIt>
     __device__ __forceinline__ void operator()(
         Group const& group,
-        gamax::column& src,
+        gamax::column_view src,
         IdxIt& src_idx,
         gamax::size_type src_start,
         gamax::size_type src_end,
-        gamax::column& dst,
+        gamax::mutable_column_view dst,
         gamax::size_type dst_idx)
     {
 
@@ -141,7 +141,7 @@ struct dispatch_val_type_helper {
     }
 
     __device__ __forceinline__ void operator()(
-        gamax::column& src,
+        gamax::column_view src,
         gamax::size_type src_idx,
         void* dst,
         gamax::size_type dst_idx)
@@ -173,9 +173,9 @@ __device__ __forceinline__ void dispatch_type_aggregate(gamax::groupby::aggregat
 
 __device__ __forceinline__ void aggregate(
     gamax::groupby::aggregation_id agg_kind,
-    gamax::column& src,
+    gamax::column_view src,
     gamax::size_type src_idx,
-    gamax::column& dst,
+    gamax::mutable_column_view dst,
     gamax::size_type dst_idx)
 {
     dispatch_type_aggregate(
@@ -190,11 +190,11 @@ template<typename Group, typename IdxIt>
 __device__ __forceinline__ void reduce(
     Group const& group,
     gamax::groupby::aggregation_id agg_kind,
-    gamax::column& src,
+    gamax::column_view src,
     IdxIt& src_idx,
     gamax::size_type src_start,
     gamax::size_type src_end,
-    gamax::column& dst,
+    gamax::mutable_column_view dst,
     gamax::size_type dst_idx
 )
 {
@@ -211,7 +211,7 @@ __device__ __forceinline__ void reduce(
 
 __device__ __forceinline__ void block_aggregate(
     gamax::groupby::aggregation_id agg_kind,
-    gamax::column& src,
+    gamax::column_view src,
     gamax::size_type src_idx,
     void* dst,
     gamax::size_type dst_idx)
@@ -229,7 +229,7 @@ struct copy_agg_from_smem_to_global_helper {
     template<typename T>
     __device__ __forceinline__ void operator()(
         const TyGroup& group,
-        gamax::column& agg,
+        gamax::mutable_column_view agg,
         const gamax::size_type offset,
         void* block_agg,
         const gamax::size_type num_items)
@@ -241,7 +241,7 @@ struct copy_agg_from_smem_to_global_helper {
 template<typename TyGroup>
 __device__ __forceinline__ void copy_agg_from_smem_to_global(
     const TyGroup& group,
-    gamax::column& agg,
+    gamax::mutable_column_view agg,
     const gamax::size_type offset,
     void* block_agg, 
     const gamax::size_type num_items)
@@ -259,7 +259,7 @@ __device__ __forceinline__ void copy_agg_from_smem_to_global(
 template<typename TyGroup>
 __device__ __forceinline__ void copy_agg_from_smem_to_global(
     const TyGroup& group,
-    table_device_view& res,
+    gamax::experimental::mutable_table_device_view res,
     const gamax::size_type offset,
     void* block_agg, 
     const gamax::size_type num_groups,
@@ -284,7 +284,7 @@ __device__ __forceinline__ void copy_agg_from_smem_to_global(
 __device__ __forceinline__ void init_agg(
     gamax::groupby::aggregation_id agg_kind,
     gamax::data_type src_type,
-    gamax::column& dst,
+    gamax::mutable_column_view dst,
     gamax::size_type dst_idx)
 {
     dispatch_type_aggregate(
@@ -308,8 +308,8 @@ __device__ __forceinline__ void init_agg(
 }
 
 __inline__ __global__ void initialize_aggregation(
-    gamax::table_device_view src,
-    gamax::table_device_view res,
+    gamax::experimental::table_device_view src,
+    gamax::experimental::mutable_table_device_view res,
     gamax::groupby::aggregation_request* aggs)
 {
     auto num_groups = res.num_rows();

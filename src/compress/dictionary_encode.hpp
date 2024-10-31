@@ -21,6 +21,12 @@ std::unique_ptr<gamax::column> dictionary_encode(
     const data_type encode_type = data_type{type_id::INT32},
     cudaStream_t stream = cudaStreamDefault);
 
+std::unique_ptr<gamax::column> dictionary_encode(
+    const gamax::column_view column, 
+    const gamax::column_view dict,
+    const data_type encode_type = data_type{type_id::INT32},
+    cudaStream_t stream = cudaStreamDefault);
+
 std::pair<std::unique_ptr<gamax::column>, gamax::size_type> dictionary_encode(
     const gamax::table& table, 
     const gamax::size_type dictionary_size_hint = 0,

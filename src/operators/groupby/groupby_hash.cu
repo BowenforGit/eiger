@@ -11,12 +11,11 @@
 #include "utils/utils.cuh"
 #include "memory/column.hpp"
 #include "memory/table.hpp"
-#include "memory/table_device_view.hpp"
+// #include "memory/table_device_view.hpp"
 #include "operators/groupby/groupby.hpp"
 #include "operators/groupby/aggregation.hpp"
 #include "operators/groupby/agg_func.cuh"
 #include "types/data_type.hpp"
-#include "utils/transform.cuh"
 #include "agg_helper.cuh"
 #include <utils/device_info.hpp>
 
@@ -25,7 +24,7 @@ namespace gamax::groupby::hash {
 namespace {
     using namespace gamax::groupby::details;
 
-    void check_solvable(gamax::table& key, gamax::table& val, std::vector<gamax::groupby::aggregation_request>& agg_requests) {
+    void check_solvable(gamax::table_view key, gamax::table_view val, std::vector<gamax::groupby::aggregation_request>& agg_requests) {
         if(key.num_columns() > 1) {
             throw std::runtime_error("Only single-column group keys are supported");
         }
@@ -47,12 +46,12 @@ namespace {
     template<typename Key, typename Set>
     __global__ void compute_groupid_kernel(
         Set set_ref,
-        Key* keys,
+        const Key* keys,
         const gamax::size_type num_items,
         Key* keys_out,
-        gamax::size_type* sparse_group_ids,
-        gamax::size_type* group_ids_loc,
-        gamax::size_type* num_groups)
+        gamax::size_type* __restrict__ sparse_group_ids,
+        gamax::size_type* __restrict__ group_ids_loc,
+        gamax::size_type* __restrict__ num_groups)
     {
         int64_t const loop_stride = gridDim.x * blockDim.x;
         int64_t idx               = blockDim.x * blockIdx.x + threadIdx.x;
@@ -72,8 +71,8 @@ namespace {
     }
 
     __global__ void compute_aggregation(
-        gamax::table_device_view val,
-        gamax::table_device_view res,
+        gamax::experimental::table_device_view val,
+        gamax::experimental::mutable_table_device_view res,
         const gamax::size_type* __restrict__ sparse_group_ids,
         const gamax::size_type* __restrict__ group_ids_loc,
         const gamax::groupby::aggregation_request* __restrict__ aggs,
@@ -96,8 +95,8 @@ namespace {
     }
 
     __global__ void compute_aggregation_block(
-        gamax::table_device_view val,
-        gamax::table_device_view res,
+        gamax::experimental::table_device_view val,
+        gamax::experimental::mutable_table_device_view res,
         const gamax::size_type num_groups,
         const gamax::size_type* __restrict__ sparse_group_ids,
         const gamax::size_type* __restrict__ group_ids_loc,
@@ -168,37 +167,37 @@ namespace {
                                     out_type);
             aggregate(
                 aggs[i].agg_kind,
-                temp_col, j,
+                temp_col.view(), j,
                 res.get_column(i+1), j);
         }
     }
 
     template <typename T>
     struct my_equal {
-        my_equal(T const* data) : _data{data} {}
+        my_equal(const T* data) : _data{data} {}
         __device__ constexpr bool operator()(gamax::size_type lhs, gamax::size_type rhs) const
         {
             // Check all 4 elements of a tuple to determine if two tuples are identical
             return _data[lhs] == _data[rhs];
         }
-        T const* _data;
+        const T* _data;
     };
 
     template <typename T>
     struct my_hasher {
-        my_hasher(T const* data) : _data{data} {}
+        my_hasher(const T* data) : _data{data} {}
         __device__ auto operator()(gamax::size_type index) const
         {
             return cuco::default_hash_function<T>{}(_data[index]);
         }
-        T const* _data;
+        const T* _data;
     };
 
     struct hash_groupby_fast_impl {
         template<typename Key>
         std::unique_ptr<gamax::table> operator()(
-            gamax::table& key,
-            gamax::table& val,
+            gamax::table_view key,
+            gamax::table_view val,
             std::vector<gamax::groupby::aggregation_request>& agg_requests,
             gamax::groupby::groupby_hint& hint,
             cudaStream_t stream = cudaStreamDefault)
@@ -238,7 +237,7 @@ namespace {
             //                         };
             // auto map_ref = map.ref(cuco::insert);
 
-            Key* key_ptr = key.get_column(0).data<Key>();
+            auto key_ptr = key.get_column(0).data<Key>();
 
             auto set = cuco::static_set{estimated_num_groups,
                                     load_factor,
@@ -271,8 +270,10 @@ namespace {
             cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
             cudaStreamSynchronize(stream);
 
-            auto val_view = table_device_view::create(val);
-            auto res_view = table_device_view::create(*res);
+            // auto val_view = table_device_view::create(val);
+            // auto res_view = table_device_view::create(*res);
+            auto val_view = val.device_view(stream);
+            auto res_view = res->mutable_view().device_view(stream); // mutable
 
             initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *res_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
             
@@ -290,7 +291,6 @@ namespace {
 
             if(num_groups > smem_groups) {
                  compute_aggregation<<<num_tb(input_num_rows, 1024), 1024, 0, stream>>>(
-                // compute_aggregation<<<108*2, 1024, 0, stream>>>(
                     *val_view, 
                     *res_view, 
                     sparse_group_ids->data<gamax::size_type>(), 
@@ -305,11 +305,9 @@ namespace {
                 }
                 // std::cout << "sm_bytes: " << sm_bytes << std::endl;
                 // agg_fn<<<num_tb(input_num_rows, 768), 768, sm_bytes, stream>>>(
-		int maxActiveBlocks;
-  cudaOccupancyMaxActiveBlocksPerMultiprocessor( &maxActiveBlocks,
-                                                 agg_fn, 1024,
-                                                 0);
-                agg_fn<<<108*maxActiveBlocks, 1024, sm_bytes, stream>>>(
+                int maxActiveBlocks;
+                cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxActiveBlocks, agg_fn, 1024, 0);
+                agg_fn<<<SM_COUNT*maxActiveBlocks, 1024, sm_bytes, stream>>>(
                     *val_view, 
                     *res_view, 
                     num_groups,
@@ -330,11 +328,11 @@ namespace {
 
 // currently only sum and max are supported
 std::unique_ptr<gamax::table> groupby(
-    gamax::table& key, 
-    gamax::table& val, 
+    gamax::table_view key, 
+    gamax::table_view val, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream) 
+    cudaStream_t stream)
 {
     check_solvable(key, val, agg_requests);
     
@@ -342,5 +340,15 @@ std::unique_ptr<gamax::table> groupby(
         key.get_column(0).type(),
         hash_groupby_fast_impl{},
         key, val, agg_requests, hint, stream);
+}
+    
+std::unique_ptr<gamax::table> groupby(
+    gamax::table& key, 
+    gamax::table& val, 
+    std::vector<gamax::groupby::aggregation_request>& agg_requests,
+    gamax::groupby::groupby_hint& hint,
+    cudaStream_t stream) 
+{
+    return groupby(key.view(), val.view(), agg_requests, hint, stream);
 }
 } // namespace gamax::groupby::hash

@@ -34,17 +34,17 @@ template<typename Key,
          typename IdxIt,
          int cg_size = 1,
          int window_size = 1>
-__global__ void partition_groupby_aggregate_kernel(Key* keys,
-                                            table_device_view values, 
+__global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
+                                            gamax::experimental::table_device_view values, 
                                             IdxIt val_idx,
                                             const gamax::size_type num_units,
-                                            gamax::size_type* units_start, 
-                                            gamax::size_type* units_end, 
-                                            gamax::size_type* num_groups,
-                                            gamax::size_type* group_id,
-                                            gamax::groupby::aggregation_request* aggs,
+                                            gamax::size_type* __restrict__ units_start, 
+                                            gamax::size_type* __restrict__ units_end, 
+                                            gamax::size_type* __restrict__ num_groups,
+                                            gamax::size_type* __restrict__ group_id,
+                                            gamax::groupby::aggregation_request* __restrict__ aggs,
                                             const gamax::size_type num_aggs,
-                                            table_device_view res) 
+                                            gamax::experimental::mutable_table_device_view res) 
 {
     constexpr gamax::size_type groupid_write_mask = 0x80000000;
     constexpr gamax::size_type groupid_read_mask = 0x7FFFFFFF;
@@ -199,10 +199,10 @@ __global__ void partition_groupby_aggregate_kernel(Key* keys,
 
 template<typename Key, int window_size, int numWindows, typename Itr>
 std::unique_ptr<gamax::table> compute_aggregate(
-    gamax::column& partitioned_key,
+    gamax::column_view partitioned_key,
     const gamax::size_type estimated_num_groups,
     const gamax::size_type log_num_partitions,
-    gamax::table& val,
+    gamax::table_view val,
     Itr itr,
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     cudaStream_t stream)
@@ -242,12 +242,14 @@ std::unique_ptr<gamax::table> compute_aggregate(
                 estimated_num_groups));
     }
     auto res = std::make_unique<gamax::table>(std::move(final_columns));
-    auto res_view = table_device_view::create(*res, stream);
+    // auto res_view = table_device_view::create(*res, stream);
+    auto res_view = res->mutable_view().device_view(stream);
     
     auto d_agg_req_buf = std::make_unique<gamax::device_buffer>(sizeof(gamax::groupby::aggregation_request) * agg_requests.size(), false);
     cudaMemcpy(d_agg_req_buf->data(), agg_requests.data(), d_agg_req_buf->size(), cudaMemcpyHostToDevice);
 
-    auto val_view = table_device_view::create(val, stream);
+    // auto val_view = table_device_view::create(val, stream);
+    auto val_view = val.device_view(stream);
     initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *res_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
     
     std::size_t sm_bytes = numWindows * sizeof(cuco::window<cuco::pair<Key, gamax::size_type>, window_size>) + sizeof(gamax::size_type)*2;
@@ -294,8 +296,8 @@ template<int window_size, int numWindows, bool kUseGFUR = false>
 struct partition_groupby_impl {
     template<typename Key>
     std::unique_ptr<gamax::table> operator()(
-            gamax::table& key,
-            gamax::table& val,
+            gamax::table_view key,
+            gamax::table_view val,
             std::vector<gamax::groupby::aggregation_request>& agg_requests,
             gamax::groupby::groupby_hint& hint,
             cudaStream_t stream = cudaStreamDefault)
@@ -309,7 +311,7 @@ struct partition_groupby_impl {
             auto [partitioned_key, permutation_idx] = gamax::partition::arg_partition(key.get_column(0), 0, log_num_partitions, nullptr, 0, stream);
 
             return compute_aggregate<Key, window_size, numWindows>(
-                *partitioned_key, 
+                partitioned_key->view(), 
                 estimated_num_groups, 
                 log_num_partitions, 
                 val, 
@@ -328,10 +330,10 @@ struct partition_groupby_impl {
             auto partitioned_val = std::make_unique<gamax::table>(std::move(partitioned_val_cols));
             
             return compute_aggregate<Key, window_size, numWindows>(
-                *partitioned_key, 
+                partitioned_key->view(), 
                 estimated_num_groups, 
                 log_num_partitions, 
-                *partitioned_val, 
+                partitioned_val->view(), 
                 thrust::make_counting_iterator<gamax::size_type>(0),
                 agg_requests, 
                 stream);
@@ -342,8 +344,8 @@ struct partition_groupby_impl {
 } // unnamed namespace
 
 std::unique_ptr<gamax::table> groupby(
-    gamax::table& key, 
-    gamax::table& val, 
+    gamax::table_view key, 
+    gamax::table_view val, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
     cudaStream_t stream)
@@ -355,8 +357,8 @@ std::unique_ptr<gamax::table> groupby(
 }
 
 std::unique_ptr<gamax::table> groupby_gfur(
-    gamax::table& key, 
-    gamax::table& val, 
+    gamax::table_view key, 
+    gamax::table_view val, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
     cudaStream_t stream)
@@ -365,6 +367,26 @@ std::unique_ptr<gamax::table> groupby_gfur(
         key.get_column(0).type(),
         partition_groupby_impl<window_size, num_windows.value(), true>{},
         key, val, agg_requests, hint, stream);
+}
+
+std::unique_ptr<gamax::table> groupby(
+    gamax::table& key, 
+    gamax::table& val, 
+    std::vector<gamax::groupby::aggregation_request>& agg_requests,
+    gamax::groupby::groupby_hint& hint,
+    cudaStream_t stream)
+{   
+    return groupby(key.view(), val.view(), agg_requests, hint, stream);
+}
+
+std::unique_ptr<gamax::table> groupby_gfur(
+    gamax::table& key, 
+    gamax::table& val, 
+    std::vector<gamax::groupby::aggregation_request>& agg_requests,
+    gamax::groupby::groupby_hint& hint,
+    cudaStream_t stream)
+{   
+    return groupby_gfur(key.view(), val.view(), agg_requests, hint, stream);
 }
 
 } // namespace gamax::groupby::partition
