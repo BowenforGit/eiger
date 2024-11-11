@@ -8,3 +8,5 @@ exp_results/
 *.csv
 *_stdout.txt
 build/
+src-hip/
+hip/
