@@ -186,7 +186,7 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
 
                 #pragma unroll
                 for(gamax::size_type k = 0; k < num_aggs; k++) {
-                    aggregate(
+                    gamax::groupby::details::aggregate(
                         aggs[k].agg_kind,
                         values.get_column(aggs[k].column_index), val_idx[idx],
                         res.get_column(k+1), g_group_id);

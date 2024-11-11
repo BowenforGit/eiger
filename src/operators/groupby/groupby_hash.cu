@@ -86,7 +86,7 @@ namespace {
             const auto gid = sparse_group_ids[loc];
             #pragma unroll
             for(gamax::size_type i = 0; i < num_aggs; i++) {
-                aggregate(
+                gamax::groupby::details::aggregate(
                     aggs[i].agg_kind,
                     val.get_column(aggs[i].column_index), t,
                     res.get_column(i+1), gid);
@@ -165,7 +165,7 @@ namespace {
                                         num_groups*gamax::size_of(out_type)), 
                                     num_groups, 
                                     out_type);
-            aggregate(
+            gamax::groupby::details::aggregate(
                 aggs[i].agg_kind,
                 temp_col.view(), j,
                 res.get_column(i+1), j);

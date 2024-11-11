@@ -183,8 +183,21 @@ std::unique_ptr<column> make_column_from_device(T* device_data, size_type num_it
 }
 
 template <typename T>
-void copy_column_to_host(column const& col, T* host_data) {
+void copy_column_to_host(column_view col, T* host_data) {
     cudaMemcpy(host_data, col.data<T>(), col.size() * sizeof(T), cudaMemcpyDeviceToHost);
+}
+
+template <typename T>
+void copy_column_to_host(column const& col, T* host_data) {
+    // cudaMemcpy(host_data, col.data<T>(), col.size() * sizeof(T), cudaMemcpyDeviceToHost);
+    copy_column_to_host(col.view(), host_data);
+}
+
+template <typename T>
+std::unique_ptr<T[]> copy_column_to_host(column_view col) {
+    std::unique_ptr<T[]> host_col(new T[col.size()]);
+    copy_column_to_host(col, host_col.get());
+    return host_col;
 }
 
 template<typename T = gamax::size_type>

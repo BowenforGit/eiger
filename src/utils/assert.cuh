@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <cassert>
 
 /**
  * @brief `assert`-like macro for device code

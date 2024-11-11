@@ -152,19 +152,7 @@ struct dispatch_val_type_helper {
     }
 };
 
-template<typename... Ts>
-void dispatch_aggregate(gamax::groupby::aggregation_id agg_kind, Ts&&... args) {
-    switch(agg_kind) {
-        case gamax::groupby::aggregation_id::SUM:
-            dispatch_val_type_helper<gamax::groupby::aggregation_id::SUM>{}(std::forward<Ts>(args)...);
-            break;
-        case gamax::groupby::aggregation_id::MAX:
-            dispatch_val_type_helper<gamax::groupby::aggregation_id::MAX>{}(std::forward<Ts>(args)...);
-            break;
-        default:
-            throw std::runtime_error("Unsupported aggregation function");
-    }
-}
+DISPATCH_AGGREGATE(dispatch_val_type_helper)
 
 void aggregate(
     gamax::groupby::aggregation_id agg_kind, 
