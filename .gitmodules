@@ -4,6 +4,6 @@
 [submodule "cuCollections"]
 	path = cuCollections
 	url = https://github.com/NVIDIA/cuCollections.git
-[submodule "hipify_torch"]
-	path = hipify_torch
+[submodule "tools/hipify_torch"]
+	path = tools/hipify_torch
 	url = https://github.com/ROCm/hipify_torch.git
