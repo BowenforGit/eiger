@@ -1,45 +1,81 @@
 cmake_minimum_required(VERSION 3.23.1 FATAL_ERROR)
 
-# if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-#   set(CMAKE_CUDA_ARCHITECTURES 86)
-# endif()
-
-project(
-    GPUOPS 
-    LANGUAGES CXX CUDA)
+project(GPUOPS LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-option(USE_CUDA_MEMALLOC "Use CUDA to manage memory allocation and deallocation. [Default=OFF]" OFF)
+option(USE_ROCM "Use ROCm instead of CUDA. [Default=OFF]" OFF)
+if(USE_ROCM)
+    message(STATUS "Using ROCm.")
+    enable_language(HIP)
+    set(SubDirName "hip")
+    set(LangGPU "HIP")
+else()
+    message(STATUS "Using CUDA.")
+    enable_language(CUDA)
+    set(SubDirName "cuda")
+    set(LangGPU "CUDA")
+endif()
 
 add_library(common INTERFACE)
-target_compile_features(common INTERFACE cxx_std_17 cuda_std_17)
 
-set(NVCC_COMPILER_FLAGS "")
-list(APPEND NVCC_COMPILER_FLAGS -gencode arch=compute_${CMAKE_CUDA_ARCHITECTURES},code=sm_${CMAKE_CUDA_ARCHITECTURES})
-list(APPEND NVCC_COMPILER_FLAGS --expt-relaxed-constexpr --expt-extended-lambda --extended-lambda)
-list(APPEND NVCC_COMPILER_FLAGS -Xptxas="-v" -lineinfo)
-list(APPEND NVCC_COMPILER_FLAGS -Xcompiler -fopenmp -O3 --compile)
+if(USE_ROCM)
+    target_compile_features(common INTERFACE cxx_std_17)
+else()
+    target_compile_features(common INTERFACE cxx_std_17 cuda_std_17)
+endif()
 
-target_compile_options(
-    common
-    INTERFACE
-    $<$<COMPILE_LANGUAGE:CUDA>:${NVCC_COMPILER_FLAGS}>
+find_package(OpenMP REQUIRED)
+MESSAGE(STATUS "OpenMP_CXX_LIBRARIES: ${OpenMP_CXX_LIBRARIES}")
+MESSAGE(STATUS "OpenMP_CXX_INCLUDE_DIRS: ${OpenMP_CXX_INCLUDE_DIRS}")
+MESSAGE(STATUS "OpenMP_CXX_FLAGS: ${OpenMP_CXX_FLAGS}")
+
+if(USE_ROCM)
+    if("${OpenMP_CXX_INCLUDE_DIRS}" STREQUAL "")
+        list(GET OpenMP_CXX_LIBRARIES 0 OpenMP_CXX_INCLUDE_DIRS)
+        cmake_path(GET OpenMP_CXX_INCLUDE_DIRS PARENT_PATH OpenMP_CXX_INCLUDE_DIRS)
+        cmake_path(APPEND OpenMP_CXX_INCLUDE_DIRS "include")
+        message(STATUS "OpenMP_CXX_INCLUDE_DIRS is manually set to ${OpenMP_CXX_INCLUDE_DIRS}")
+    endif()
+    target_compile_options(
+        common
+        INTERFACE
+        -O3 
+        -Wno-unused-result 
+        -Wno-non-c-typedef-for-linkage
+        -fopenmp=libgomp
+        -I${OpenMP_CXX_INCLUDE_DIRS}
 )
+    target_compile_definitions(
+        common
+        INTERFACE 
+        $<$<COMPILE_LANGUAGE:HIP>:ROCm_${CMAKE_HIP_ARCHITECTURES}>
+    )
+else()
+    message(STATUS "CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
+    set(NVCC_COMPILER_FLAGS "")
+    list(APPEND NVCC_COMPILER_FLAGS -gencode arch=compute_${CMAKE_CUDA_ARCHITECTURES},code=sm_${CMAKE_CUDA_ARCHITECTURES})
+    list(APPEND NVCC_COMPILER_FLAGS --expt-relaxed-constexpr --expt-extended-lambda --extended-lambda)
+    list(APPEND NVCC_COMPILER_FLAGS -Xptxas="-v" -lineinfo)
+    list(APPEND NVCC_COMPILER_FLAGS -Xcompiler -fopenmp -O3 --compile)
+
+    target_compile_options(
+        common
+        INTERFACE
+        $<$<COMPILE_LANGUAGE:CUDA>:${NVCC_COMPILER_FLAGS}>
+    )
+    target_compile_definitions(
+        common
+        INTERFACE 
+        $<$<COMPILE_LANGUAGE:CUDA>:SM${CMAKE_CUDA_ARCHITECTURES}0>
+    )
+endif()
 
 target_include_directories(
     common 
     INTERFACE 
-    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/>/"
-)
-
-message(STATUS "CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
-
-target_compile_definitions(
-    common
-    INTERFACE 
-    $<$<COMPILE_LANGUAGE:CUDA>:SM${CMAKE_CUDA_ARCHITECTURES}0>
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/${SubDirName}/>/"
 )
 
 if(CMAKE_BUILD_TYPE MATCHES Debug)
@@ -52,12 +88,13 @@ target_compile_definitions(
     $<$<CONFIG:Debug>:DEBUG>
 )
 
+option(USE_CUDA_MEMALLOC "Use CUDA to manage memory allocation and deallocation. [Default=OFF]" OFF)
 if(USE_CUDA_MEMALLOC)
     message(STATUS "Using CUDA to manage memory allocation and deallocation.")
     target_compile_definitions(
         common 
         INTERFACE
-        $<$<COMPILE_LANGUAGE:CUDA>:USE_CUDA_MEMALLOC>
+        $<$<COMPILE_LANGUAGE:${LangGPU}>:USE_CUDA_MEMALLOC>
     )
 endif()
 
@@ -77,23 +114,46 @@ file(
 )
 include(${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake)
 
-CPMAddPackage(
-  NAME cuco
-  GITHUB_REPOSITORY NVIDIA/cuCollections
-  GIT_TAG d92aefb3b64d45c945566d01b9dc500b197095eb
-  OPTIONS
-     "BUILD_TESTS OFF"
-     "BUILD_BENCHMARKS OFF"
-     "BUILD_EXAMPLES OFF"
-)
+if(USE_ROCM)
+    CPMAddPackage(
+        NAME hipco
+        GITHUB_REPOSITORY ROCm/hipCollections
+        GIT_TAG main
+        OPTIONS
+            "BUILD_TESTS OFF"
+            "BUILD_BENCHMARKS OFF"
+            "BUILD_EXAMPLES OFF"
+    )
+else()
+    CPMAddPackage(
+        NAME cuco
+        GITHUB_REPOSITORY NVIDIA/cuCollections
+        GIT_TAG d92aefb3b64d45c945566d01b9dc500b197095eb
+        OPTIONS
+            "BUILD_TESTS OFF"
+            "BUILD_BENCHMARKS OFF"
+            "BUILD_EXAMPLES OFF"
+    )
 
-CPMAddPackage(
-    NAME NVTX
-    GITHUB_REPOSITORY NVIDIA/NVTX
-    GIT_TAG v3.1.0-c-cpp
-    GIT_SHALLOW TRUE)
+    CPMAddPackage(
+        NAME NVTX
+        GITHUB_REPOSITORY NVIDIA/NVTX
+        GIT_TAG v3.1.0-c-cpp
+        GIT_SHALLOW TRUE)
+    target_link_libraries(common INTERFACE nvtx3-cpp)
+    
+    add_subdirectory(nvbench)
+endif()
 
-target_link_libraries(common INTERFACE nvtx3-cpp)
+# hipify the code
+if(USE_ROCM)
+    execute_process(
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/build_amd.py
+        RESULT_VARIABLE hipify_return_value
+    )
+    if (NOT hipify_return_value EQUAL 0)
+        message(FATAL_ERROR "Failed to hipify files!")
+    endif()
+endif()
 
-add_subdirectory(nvbench)
-add_subdirectory(src)
+add_subdirectory(src/${SubDirName})

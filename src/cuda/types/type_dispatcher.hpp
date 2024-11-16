@@ -100,7 +100,7 @@ __host__ __device__ __forceinline__ constexpr decltype(auto) type_dispatcher(gam
     //   return f.template operator()<typename IdTypeMap<type_id::BOOL8>::type>(
     //     std::forward<Ts>(args)...);
     default: {
-#ifndef __CUDA_ARCH__
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
       throw std::runtime_error("Invalid type_id.");
 #else
       GAMAX_UNREACHABLE("Invalid type_id.");

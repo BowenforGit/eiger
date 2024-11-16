@@ -1,7 +1,10 @@
 #pragma once
 
 #include <cuda.h>
+
+#ifdef __NVCC__
 #include <cooperative_groups/memcpy_async.h>
+#endif
 
 #include "aggregation.hpp"
 #include "memory/column.hpp"
@@ -224,6 +227,7 @@ __device__ __forceinline__ void block_aggregate(
         dst_idx);
 }
 
+#ifdef __NVCC__
 template<typename TyGroup>
 struct copy_agg_from_smem_to_global_helper {
     template<typename T>
@@ -280,6 +284,7 @@ __device__ __forceinline__ void copy_agg_from_smem_to_global(
 
     cooperative_groups::wait(group);
 }
+#endif
 
 __device__ __forceinline__ void init_agg(
     gamax::groupby::aggregation_id agg_kind,

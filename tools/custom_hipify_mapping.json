@@ -1,0 +1,27 @@
+{
+    "custom_map" : {
+        "cuco/aow_storage.cuh": "hipco/aow_storage.cuh",
+        "cuco/extent.cuh": "hipco/extent.cuh",
+        "cuco/hash_functions.cuh": "hipco/hash_functions.cuh",
+        "cuco/pair.cuh": "hipco/pair.cuh",
+        "cuco/probe_sequences.cuh": "hipco/probe_sequences.cuh",
+        "cuco/probing_scheme.cuh": "hipco/probing_scheme.cuh",
+        "cuco/sentinel.cuh": "hipco/sentinel.cuh",
+        "cuco/static_map.cuh": "hipco/static_map.cuh",
+        "cuco/static_map_ref.cuh": "hipco/static_map_ref.cuh",
+        "cuco/static_multimap.cuh": "hipco/static_multimap.cuh",
+        "cuco/static_set.cuh": "hipco/static_set.cuh",
+        "cuco/static_set_ref.cuh": "hipco/static_set_ref.cuh",
+        "cuco/storage.cuh": "hipco/storage.cuh",
+        "cuco::default_hash_function": "hipco::default_hash_function",
+        "cuco::pair": "hipco::pair",
+        "cuco::empty_key": "hipco::empty_key",
+        "cuco::empty_value": "hipco::empty_value",
+        "cuco::thread_scope_device": "hip::thread_scope_device",
+        "cuco::": "hipco::experimental::",
+        "cub::": "hipcub::",
+        "cuda/stream_ref": "hipco/cuda_stream_ref.hpp",
+        "cuda::stream_ref": "hipco::experimental::cuda_stream_ref",
+        "cub/block/block_shuffle.cuh": "hipcub/block/block_shuffle.hpp"
+    }
+}

@@ -244,8 +244,10 @@ namespace {
                                     cuco::empty_key{empty_key_sentinel},
                                     my_equal<Key>{key_ptr},
                                     cuco::linear_probing<1, my_hasher<Key>>{my_hasher{key_ptr}},
+#ifdef __NVCC__ // only supported for CUCO
                                     cuco::thread_scope_device,
                                     cuco::storage<1>{},
+#endif
                                     cuco_allocator, 
                                     stream
                                     };
@@ -300,9 +302,11 @@ namespace {
             } else {
                 const std::size_t sm_bytes = num_groups * agg_bytes;
                 auto agg_fn = compute_aggregation_block;
+#ifdef __NVCC__ // only works for CUDA because AMD will ignore
                 if(sm_bytes > 48*1024) {
                     CHECK_CUDA_ERROR(cudaFuncSetAttribute(compute_aggregation_block, cudaFuncAttributeMaxDynamicSharedMemorySize, sm_bytes));
                 }
+#endif
                 // std::cout << "sm_bytes: " << sm_bytes << std::endl;
                 // agg_fn<<<num_tb(input_num_rows, 768), 768, sm_bytes, stream>>>(
                 int maxActiveBlocks;

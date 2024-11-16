@@ -7,6 +7,6 @@ exp_results/
 *.ncu-rep
 *.csv
 *_stdout.txt
-build/
+build*/
 src-hip/
 hip/

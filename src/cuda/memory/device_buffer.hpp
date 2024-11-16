@@ -8,7 +8,7 @@ namespace gamax {
 class device_buffer {
 public:
     __host__ __device__ device_buffer(void* data, size_t size) : data_(data), size_(size) {}
-    device_buffer(size_t size, bool clear = false) : size_(size) {
+    __host__ device_buffer(size_t size, bool clear = false) : size_(size) {
         allocate_mem(&data_, clear, size_);
     }
     
@@ -27,7 +27,9 @@ public:
     
     __host__ __device__ device_buffer& operator=(device_buffer&& other) noexcept {
         if (this != &other) {
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
             release_mem(data_);
+#endif
             data_ = std::exchange(other.data_, nullptr);
             size_ = std::exchange(other.size_, 0);
         }
@@ -35,8 +37,8 @@ public:
     }
 
     __host__ __device__ ~device_buffer() {
-#ifndef __CUDA_ARCH__
         if(data_ == nullptr) return;
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
         release_mem(data_);
 #endif
     }

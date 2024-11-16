@@ -30,10 +30,20 @@ namespace {
                                         cuco::empty_value{empty_value_sentinel},
                                         thrust::equal_to<Key>{},
                                         cuco::linear_probing<1, cuco::default_hash_function<Key>>{},
-                                        {}, {}, cuco_allocator};
+#ifdef __NVCC__
+                                        {}, {}, 
+#endif
+                                        cuco_allocator};
             
             auto pairs_begin = thrust::make_zip_iterator(thrust::make_tuple(dict.data<Key>(), thrust::make_counting_iterator<Encode>(0)));
+#ifdef __NVCC__
             map.insert(pairs_begin, pairs_begin + dict.size(), cuda::stream_ref{stream});
+#elif defined(__HIP_PLATFORM_AMD__)
+            auto pairs_it = thrust::make_transform_iterator(pairs_begin, [=] __device__ (auto i) {
+                return thrust::make_pair(thrust::get<0>(i), thrust::get<1>(i));
+            });
+            map.insert(pairs_it, pairs_it + dict.size(), cuda::stream_ref{stream});     
+#endif
             map.find(keys.data<Key>(), keys.data<Key>() + keys.size(), encoded_keys.data<Encode>(), cuda::stream_ref{stream});
         }
     };

@@ -78,14 +78,14 @@ struct Max {
     __device__ __forceinline__ ResultT thread_local_update(
                                         const ResultT& local_agg,
                                         const ValT& val) const {
-        return cub::max(local_agg, val);
+        return local_agg > val ? local_agg : val;
     }
 
     template<typename T, typename U>
     __device__ __forceinline__ OutputType operator() (
                                         const T& a,
                                         const U& b) const {
-        return cub::max(static_cast<OutputType>(a), static_cast<OutputType>(b));
+        return static_cast<OutputType>(a) > static_cast<OutputType>(b) ? static_cast<OutputType>(a) : static_cast<OutputType>(b);
     }
 
     __device__ __forceinline__ void operator() (

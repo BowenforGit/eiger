@@ -17,7 +17,7 @@ public:
     __host__ __device__ column_view_base(void* data, size_type size, data_type type, const size_type offset = 0) 
         : _data(data), _size(size - offset), _type(type), _offset(offset) {
             if(offset > size) {
-#ifndef __CUDA_ARCH__
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
                 throw std::runtime_error("Offset is greater than the size of the column");
 #else
                 gamax_assert("Offset is greater than the size of the column");
@@ -91,7 +91,7 @@ public:
 
 class column {
 public:
-    column() = default;
+    column() = delete;
     ~column() = default;
     column& operator=(column const& other) = delete;
     column(column const& other)            = delete; // disallow copy constructor to because the column has the exclusive ownership of the data

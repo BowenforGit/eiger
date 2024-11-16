@@ -3,21 +3,21 @@ include(GoogleTest)
 
 set(testSources 
     groupby/groupby_sort_test.cu
-    groupby/groupby_partition_test.cu
+    # groupby/groupby_partition_test.cu
     groupby/groupby_hash_test.cu
-    compress/dictionary_encode_test.cu
+    # compress/dictionary_encode_test.cu
     compress/dictionary_encode_dict_ready_test.cu
-    join/ieq_join_test.cu
+    # join/ieq_join_test.cu
     aggregate/aggregate_test.cu
 )
 
 set(testTargets 
     test_groupby_sort
-    test_groupby_partition
+    # test_groupby_partition
     test_groupby_hash
-    test_dictionary_encode
+    # test_dictionary_encode
     test_dictionary_encode_dict_ready
-    test_ieq_join
+    # test_ieq_join
     test_aggregate
 )
     

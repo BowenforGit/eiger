@@ -1,28 +1,31 @@
-find_package(OpenMP)
-
 set(srcs
     operators/groupby/groupby_sort.cu
-    operators/groupby/groupby_partition.cu
+    # operators/groupby/groupby_partition.cu
     operators/groupby/groupby_hash.cu
     operators/groupby/aggregate.cu
     operators/sort/sort.cu
     operators/partition/partition.cu
-    compress/dictionary_encode.cu
+    # compress/dictionary_encode.cu
     compress/dictionary_encode_dict_ready.cu
     memory/column.cu
     memory/table.cu
     memory/mem_manager.cu
     data_gen/table_gen.cu
-    operators/join/materialize.cu
-    operators/join/sort_merge_join.cu
-    operators/join/join.cu
+    # operators/join/materialize.cu
+    # operators/join/sort_merge_join.cu
+    # operators/join/join.cu
     tests/test_helper.cu
     utils/transform.cu
 )
 
 add_library(gamax SHARED ${srcs})
 target_link_libraries(gamax PRIVATE common)
-target_link_libraries(gamax PUBLIC cuco)
+
+if(USE_ROCM)
+    target_link_libraries(gamax PUBLIC hipco)
+else()
+    target_link_libraries(gamax PUBLIC cuco)
+    add_subdirectory(benchmarks)
+endif()
 
 add_subdirectory(tests)
-add_subdirectory(benchmarks)
