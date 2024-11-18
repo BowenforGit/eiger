@@ -9,6 +9,7 @@ set(testSources
     compress/dictionary_encode_dict_ready_test.cu
     # join/ieq_join_test.cu
     aggregate/aggregate_test.cu
+    sort/sort_partition_test.cu
 )
 
 set(testTargets 
@@ -19,6 +20,7 @@ set(testTargets
     test_dictionary_encode_dict_ready
     # test_ieq_join
     test_aggregate
+    test_sort_partition
 )
     
 foreach(source target IN ZIP_LISTS testSources testTargets)
