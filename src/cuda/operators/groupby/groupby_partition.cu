@@ -7,7 +7,6 @@
 #include <cuco/static_map.cuh>
 
 #include "utils/utils.cuh"
-#include "containers/agg_hashmap.cuh"
 #include "memory/column.hpp"
 #include "memory/table.hpp"
 #include "memory/table_device_view.hpp"
@@ -368,25 +367,4 @@ std::unique_ptr<gamax::table> groupby_gfur(
         partition_groupby_impl<window_size, num_windows.value(), true>{},
         key, val, agg_requests, hint, stream);
 }
-
-std::unique_ptr<gamax::table> groupby(
-    gamax::table& key, 
-    gamax::table& val, 
-    std::vector<gamax::groupby::aggregation_request>& agg_requests,
-    gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream)
-{   
-    return groupby(key.view(), val.view(), agg_requests, hint, stream);
-}
-
-std::unique_ptr<gamax::table> groupby_gfur(
-    gamax::table& key, 
-    gamax::table& val, 
-    std::vector<gamax::groupby::aggregation_request>& agg_requests,
-    gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream)
-{   
-    return groupby_gfur(key.view(), val.view(), agg_requests, hint, stream);
-}
-
 } // namespace gamax::groupby::partition

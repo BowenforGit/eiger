@@ -352,25 +352,4 @@ std::unique_ptr<gamax::table> groupby_gfur(
 
     return std::make_unique<gamax::table>(std::move(final_columns));
 }
-
-std::unique_ptr<gamax::table> groupby(
-    gamax::table& key, 
-    gamax::table& val, 
-    std::vector<gamax::groupby::aggregation_request>& agg_requests,
-    gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream)
-{
-    return groupby(key.view(), val.view(), agg_requests, hint, stream);
-}
-
-std::unique_ptr<gamax::table> groupby_gfur(
-    gamax::table& key, 
-    gamax::table& val, 
-    std::vector<gamax::groupby::aggregation_request>& agg_requests,
-    gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream)
-{
-    return groupby_gfur(key.view(), val.view(), agg_requests, hint, stream);
-}
-
 } // namespace gamax::groupby::sort

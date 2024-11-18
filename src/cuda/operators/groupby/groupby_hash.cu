@@ -345,14 +345,4 @@ std::unique_ptr<gamax::table> groupby(
         hash_groupby_fast_impl{},
         key, val, agg_requests, hint, stream);
 }
-    
-std::unique_ptr<gamax::table> groupby(
-    gamax::table& key, 
-    gamax::table& val, 
-    std::vector<gamax::groupby::aggregation_request>& agg_requests,
-    gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream) 
-{
-    return groupby(key.view(), val.view(), agg_requests, hint, stream);
-}
 } // namespace gamax::groupby::hash

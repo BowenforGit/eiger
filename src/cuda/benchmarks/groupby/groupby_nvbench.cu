@@ -7,7 +7,10 @@
 #include <vector>
 #include <exception>
 #include <fstream>
+
+#ifdef __NVCC__
 #include <nvtx3/nvtx3.hpp>
+#endif
 
 #include "operators/groupby/groupby.hpp"
 #include "operators/groupby/aggregation.hpp"
@@ -83,12 +86,15 @@ void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
 
     auto algo = state.get_string("algo");
     auto f = gamax::groupby::sort::groupby;
-    if(algo == "partition") {
-        f = gamax::groupby::partition::groupby;
-    } else if(algo == "sort_gfur") {
+    // auto f = [](gamax::table& key_table, gamax::table& val_table, std::vector<gamax::groupby::aggregation_request>& requests, gamax::groupby::groupby_hint& hint, cudaStream_t stream) {
+    //     return gamax::groupby::sort::groupby(key_table, val_table, requests, hint, stream);
+    // };
+    if(algo == "sort_gfur") {
         f = gamax::groupby::sort::groupby_gfur;
-    } else if(algo == "partition_gfur") {
-        f = gamax::groupby::partition::groupby_gfur;
+    // } else if(algo == "partition") {
+    //     f = gamax::groupby::partition::groupby;
+    // } else if(algo == "partition_gfur") {
+    //     f = gamax::groupby::partition::groupby_gfur;
     } else if(algo == "hash") {
         f = gamax::groupby::hash::groupby;
     } else if(algo == "sort_opt") {
@@ -102,9 +108,11 @@ void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
     {
         state.exec(nvbench::exec_tag::sync,
             [&](nvbench::launch& launch) { 
-            auto res = f(key_table, val_table, requests, hint, launch.get_stream()); 
+            auto res = f(key_table.view(), val_table.view(), requests, hint, launch.get_stream()); 
             cudaStreamSynchronize(launch.get_stream());
+#ifdef __NVCC__
             nvtx3::mark("GroupBy Done");
+#endif
         });
     }
     catch(const std::exception& e)
