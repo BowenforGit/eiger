@@ -18,4 +18,8 @@ table::table(std::vector<std::unique_ptr<column>>&& columns) : _columns{std::mov
     }
   }
 }
+
+std::unique_ptr<table> make_table(std::vector<std::unique_ptr<column>>&& columns) {
+    return std::make_unique<table>(std::move(columns));
+}
 }

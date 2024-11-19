@@ -18,6 +18,7 @@ set(testSources
     # join/ieq_join_test.cu
     aggregate/aggregate_test.cu
     sort/sort_partition_test.cu
+    memory/table_test.cu
 )
 
 set(testTargets 
@@ -29,6 +30,7 @@ set(testTargets
     # test_ieq_join
     test_aggregate
     test_sort_partition
+    test_table
 )
 
 set(testHelperFiles

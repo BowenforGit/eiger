@@ -77,6 +77,10 @@ public:
         return static_cast<char*>(_data) + _offset * gamax::size_of(_type);
     }
 
+    __host__ __device__ column_view view() const {
+        return column_view(_data, _size, _type, _offset);
+    }
+
     void copy_from(column_view const& other, const gamax::size_type n, cudaStream_t stream = cudaStreamDefault) {
         if(_type != other.type()) {
             throw std::runtime_error("Cannot copy between columns of different types");

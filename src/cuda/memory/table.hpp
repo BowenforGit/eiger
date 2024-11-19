@@ -84,6 +84,8 @@ public:
         }
     }
 
+    table_view_base(std::vector<column_view_t> const& cols) : _columns(cols) {}
+
     int num_columns() const noexcept {
         return _columns.size();
     }
@@ -104,6 +106,14 @@ public:
         auto deleter = [](device_view_t* t) { t->destroy(); };
         return std::unique_ptr<device_view_t, decltype(deleter)>{
             new device_view_t(_columns, stream), deleter};
+    }
+
+    auto select_columns(std::vector<size_type> const& column_indices) const {
+        std::vector<column_view_t> selected_columns(column_indices.size());
+        for (size_type i = 0; i < column_indices.size(); ++i) {
+            selected_columns[i] = _columns[column_indices[i]];
+        }
+        return table_view_base<column_view_t>(selected_columns);
     }
 
 private:
@@ -162,4 +172,6 @@ public:
 private:
     std::vector<std::unique_ptr<column>> _columns {};
 };
+
+std::unique_ptr<table> make_table(std::vector<std::unique_ptr<column>>&& columns);
 }
