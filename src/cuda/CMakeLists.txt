@@ -29,22 +29,27 @@ endif()
 
 set(srcs
     operators/groupby/groupby_sort.cu
-    # operators/groupby/groupby_partition.cu
     operators/groupby/groupby_hash.cu
     operators/groupby/aggregate.cu
     operators/sort/sort.cu
     operators/partition/partition.cu
-    # compress/dictionary_encode.cu
     compress/dictionary_encode_dict_ready.cu
     memory/column.cu
     memory/table.cu
     memory/mem_manager.cu
     data_gen/table_gen.cu
-    # operators/join/materialize.cu
-    # operators/join/sort_merge_join.cu
-    # operators/join/join.cu
     utils/transform.cu
-)
+    )
+    
+if(USE_CUDA)
+    list(APPEND srcs
+        compress/dictionary_encode.cu
+        operators/groupby/groupby_partition.cu
+        operators/join/materialize.cu
+        operators/join/sort_merge_join.cu
+        operators/join/join.cu
+    )
+endif()
 
 add_library(gamax SHARED ${srcs})
 target_link_libraries(gamax PRIVATE common)

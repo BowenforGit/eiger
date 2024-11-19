@@ -11,33 +11,27 @@ include(GoogleTest) # Include CMake module to use gtest_discover_tests
 
 set(testSources 
     groupby/groupby_sort_test.cu
-    # groupby/groupby_partition_test.cu
     groupby/groupby_hash_test.cu
-    # compress/dictionary_encode_test.cu
     compress/dictionary_encode_dict_ready_test.cu
-    # join/ieq_join_test.cu
     aggregate/aggregate_test.cu
     sort/sort_partition_test.cu
     memory/table_test.cu
 )
 
-set(testTargets 
-    test_groupby_sort
-    # test_groupby_partition
-    test_groupby_hash
-    # test_dictionary_encode
-    test_dictionary_encode_dict_ready
-    # test_ieq_join
-    test_aggregate
-    test_sort_partition
-    test_table
-)
+if(USE_CUDA)
+    list(APPEND testSources
+        groupby/groupby_partition_test.cu
+        compress/dictionary_encode_test.cu
+        join/ieq_join_test.cu
+    )
+endif()
 
 set(testHelperFiles
     test_helper.cu
 )
     
-foreach(source target IN ZIP_LISTS testSources testTargets)
+foreach(source IN LISTS testSources)
+    string(REGEX REPLACE ".*/(.*)_test.cu" "test_\\1" target ${source})
     message(STATUS "Adding test target: ${target} with source: ${source}")
     add_executable(${target} ${source} ${testHelperFiles})
     target_link_libraries(${target} PRIVATE common)

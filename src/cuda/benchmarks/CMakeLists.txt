@@ -19,13 +19,9 @@ set(benchmarkSources
     compress/dict_enc_nvbench.cu
 )
 
-set(benchmarkTargets 
-    benchmark_groupby
-    benchmark_dict_enc
-)
-
-foreach(source target IN ZIP_LISTS benchmarkSources benchmarkTargets)
-    message(STATUS "Adding test target: ${target} with source: ${source}")
+foreach(source IN LISTS benchmarkSources)
+    string(REGEX REPLACE ".*/(.*)_nvbench.cu" "benchmark_\\1" target ${source})
+    message(STATUS "Adding benchmark target: ${target} with source: ${source}")
     add_executable(${target} ${source})
     target_link_libraries(${target} PRIVATE common)
     target_link_libraries(${target} PRIVATE nvbench::main)
