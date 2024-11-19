@@ -5,17 +5,23 @@ GaMax is a GPU-accelerated query engine that introduces the GPU acceleration to 
 Currently, GaMax is under active development and has supported
 
 - Inner eq-join
+    * Sort-based
 - Grouped aggregation (with a single group key)
+    * Hash-based
+    * Sort-based
+    * Partition-based
 - Dictionary encoding
+- Aggregation
 
 ## Dependencies
 
 - CMake 3.23.1+
 - GNU Make
+- CUDA
 
 ## Code Structure
 
-All non-third-party source code are located in the `src/` directory, including the tests and benchmarks code. 
+All non-third-party source code are located in the `src/cuda` directory, including the tests and benchmarks code. 
 
 - `atomics/` - wrappers and implementations of atomic operations.
 - `benchmarks` - benchmarks based on NVIDIA NVBench.
@@ -32,7 +38,7 @@ All non-third-party source code are located in the `src/` directory, including t
 ## Get GaMax
 
 ```sh
-git clone --recursive git@gitlab.inf.ethz.ch:wubo/vldb24-artifact.git
+git clone --recursive git@gitlab.inf.ethz.ch:wubo/gamax.git
 ```
 
 ## Build GaMax
@@ -42,13 +48,12 @@ GaMax uses CMake and Make to build the source code in an out-of-source manner. I
 ```sh
 # in the project root directory
 mkdir build && cd build
-# fill in your own build type and targeting cuda architecture
+# fill in your own build type (Release or Debug) and targeting cuda architecture
 cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86 ..
-# pass the number of compilation threads to the -j flag based on available CPU cores
-cmake --build . -- -j 12
+cmake --build . -- -j
 ```
 
-All the build files and executables are located in the `build/` directory, which mirrors the source directory hierarchy. For example, the test and benchmark executables are located in `build/src/tests` and `build/src/benchmarks` respectively. 
+All the build files and executables are located in the `build/` directory, which mirrors the source directory hierarchy. For example, the test and benchmark executables are located in `build/src/cuda/tests` and `build/src/cuda/benchmarks` respectively. 
 
 ## Contributing
 
