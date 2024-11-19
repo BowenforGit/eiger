@@ -20,6 +20,34 @@
 
 namespace gamax::datagen::device {
 namespace {
+    std::unique_ptr<gamax::column> generate_from_values(
+    gamax::column_view values, // set of values to sample from
+    const gamax::size_type n,
+    const bool shuffle = true, 
+    const int seed = 42,
+    cudaStream_t stream = cudaStreamDefault) 
+    {
+        const auto num_values = values.size();
+        const auto type_bytes = gamax::size_of(values.type());
+
+        auto ret = std::make_unique<gamax::column>(values.type(), n);
+        
+        gamax::size_type offset = 0;
+        while(offset < n) {
+            auto n_copy = std::min(n - offset, num_values);
+            ret->mutable_view(offset).copy_from(values, n_copy, stream);
+            offset += n_copy;
+        }
+
+        cudaStreamSynchronize(stream);
+
+        if(shuffle) {
+            return gamax::util::device::shuffle(ret->view(), seed, stream);
+        } else {
+            return ret;
+        }
+    }
+    
     struct apply_match_ratio_impl {
         template<typename T>
         void operator()(
@@ -125,7 +153,7 @@ namespace {
             return fk_zipf(seq->view(), card, ncols, zipf_factor, seed);
         }
     };
-}
+} // namespace
 
     std::unique_ptr<gamax::table>
     generate_table(
@@ -134,7 +162,7 @@ namespace {
         const gamax::size_type ncols,
         const int seed)
     {
-        auto keys = gamax::datagen::device::generate_from_values(src, card, true, seed);
+        auto keys = generate_from_values(src, card, true, seed);
 
         auto t = std::make_unique<gamax::table>();
         for(gamax::size_type i = 0; i < ncols; i++) {

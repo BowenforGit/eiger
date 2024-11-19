@@ -328,33 +328,4 @@ std::unique_ptr<gamax::column> generate(
 
     return ret;
 }
-
-std::unique_ptr<gamax::column> generate_from_values(
-    gamax::column_view values, // set of values to sample from
-    const gamax::size_type n,
-    const bool shuffle = true, 
-    const int seed = 42,
-    cudaStream_t stream = cudaStreamDefault) 
-{
-    const auto num_values = values.size();
-    const auto type_bytes = gamax::size_of(values.type());
-
-    auto ret = std::make_unique<gamax::column>(values.type(), n);
-    
-    gamax::size_type offset = 0;
-    while(offset < n) {
-        auto n_copy = std::min(n - offset, num_values);
-        ret->mutable_view(offset).copy_from(values, n_copy, stream);
-        offset += n_copy;
-    }
-
-    cudaStreamSynchronize(stream);
-
-    if(shuffle) {
-        return gamax::util::device::shuffle(ret->view(), seed, stream);
-    } else {
-        return ret;
-    }
-}
-
 } // namespace gamax::datagen::device
