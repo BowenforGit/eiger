@@ -10,3 +10,4 @@ exp_results/
 build*/
 src-hip/
 hip/
+compile_commands.json

@@ -14,7 +14,7 @@ std::shared_ptr<MemoryManager> mm {nullptr};
 
 std::shared_ptr<MemoryManager> get_mm() {
     if(!mm) {
-#ifdef USE_CUDA_MEMALLOC
+#ifdef USE_DEFAULT_MEMALLOC
         mm = std::make_shared<CudaMM>();
 #else
         std::size_t free, total;
@@ -32,7 +32,7 @@ void debug_device_mem_usage() {
 }
 
 void release_all_mem() {
-#ifdef USE_CUDA_MEMALLOC
+#ifdef USE_DEFAULT_MEMALLOC
     std::cout << "Cannot release all memory with the CUDA memory allocator\n";
 #else
     mm.reset();

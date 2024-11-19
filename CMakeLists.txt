@@ -2,28 +2,51 @@ cmake_minimum_required(VERSION 3.23.1 FATAL_ERROR)
 
 project(GPUOPS LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+option(USE_CUDA "Use CUDA. [Default=ON]" OFF)
+option(USE_ROCM "Use ROCm. [Default=OFF]" OFF)
+option(BUILD_TEST "Build tests. [Default=ON]" ON)
+option(BUILD_BENCHMARK "Build benchmarks. [Default=ON]" ON)
+option(USE_DEFAULT_MEMALLOC "Use the default memory allocation and deallocation. [Default=OFF]" OFF)
 
-option(USE_ROCM "Use ROCm instead of CUDA. [Default=OFF]" OFF)
-if(USE_ROCM)
-    message(STATUS "Using ROCm.")
-    enable_language(HIP)
-    set(SubDirName "hip")
-    set(LangGPU "HIP")
-else()
-    message(STATUS "Using CUDA.")
+if (NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+MESSAGE(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+    set(USE_CUDA ON)
+    MESSAGE(STATUS "CUDA is enabled.")
     enable_language(CUDA)
     set(SubDirName "cuda")
     set(LangGPU "CUDA")
+else()
+    check_language(HIP)
+    if(CMAKE_HIP_COMPILER)
+        set(USE_ROCM ON)
+        MESSAGE(STATUS "ROCm is enabled.")
+        enable_language(HIP)
+        set(SubDirName "hip")
+        set(LangGPU "HIP")
+    else()
+        MESSAGE(FATAL_ERROR "Neither CUDA nor ROCm is enabled.")
+    endif()
 endif()
 
 add_library(common INTERFACE)
 
 if(USE_ROCM)
-    target_compile_features(common INTERFACE cxx_std_17)
-else()
+    target_compile_features(common INTERFACE cxx_std_17 hip_std_17)
+else(USE_CUDA)
     target_compile_features(common INTERFACE cxx_std_17 cuda_std_17)
+endif()
+
+# manually set the include path for ROCm platform
+# so that find_package(OpenMP) can find the OpenMP headers
+if(USE_ROCM)
+    set(OpenMP_CXX_INCLUDE_DIR "/usr/lib/gcc/x86_64-linux-gnu/11/include")
 endif()
 
 find_package(OpenMP REQUIRED)
@@ -32,33 +55,33 @@ MESSAGE(STATUS "OpenMP_CXX_INCLUDE_DIRS: ${OpenMP_CXX_INCLUDE_DIRS}")
 MESSAGE(STATUS "OpenMP_CXX_FLAGS: ${OpenMP_CXX_FLAGS}")
 
 if(USE_ROCM)
-    if("${OpenMP_CXX_INCLUDE_DIRS}" STREQUAL "")
-        list(GET OpenMP_CXX_LIBRARIES 0 OpenMP_CXX_INCLUDE_DIRS)
-        cmake_path(GET OpenMP_CXX_INCLUDE_DIRS PARENT_PATH OpenMP_CXX_INCLUDE_DIRS)
-        cmake_path(APPEND OpenMP_CXX_INCLUDE_DIRS "include")
-        message(STATUS "OpenMP_CXX_INCLUDE_DIRS is manually set to ${OpenMP_CXX_INCLUDE_DIRS}")
-    endif()
+    set(HIP_COMPILER_FLAGS "")
+    list(APPEND HIP_COMPILER_FLAGS -O3)
+    list(APPEND HIP_COMPILER_FLAGS -Wno-unused-result -Wno-non-c-typedef-for-linkage)
+    target_include_directories(
+        common
+        INTERFACE
+        ${OpenMP_CXX_INCLUDE_DIRS}
+    )
     target_compile_options(
         common
         INTERFACE
-        -O3 
-        -Wno-unused-result 
-        -Wno-non-c-typedef-for-linkage
-        -fopenmp=libgomp
-        -I${OpenMP_CXX_INCLUDE_DIRS}
-)
+        $<$<COMPILE_LANGUAGE:HIP>:${HIP_COMPILER_FLAGS}>
+    )
     target_compile_definitions(
         common
         INTERFACE 
         $<$<COMPILE_LANGUAGE:HIP>:ROCm_${CMAKE_HIP_ARCHITECTURES}>
     )
-else()
+else(USE_CUDA)
     message(STATUS "CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
+    
+    # no need to set the -gencode flag for because cmake will automatically add it based on CMAKE_CUDA_ARCHITECTURES
+    # no need to add -fopenmp because it is automatically added by cmake when linking to OpenMP::OpenMP_CXX
     set(NVCC_COMPILER_FLAGS "")
-    list(APPEND NVCC_COMPILER_FLAGS -gencode arch=compute_${CMAKE_CUDA_ARCHITECTURES},code=sm_${CMAKE_CUDA_ARCHITECTURES})
     list(APPEND NVCC_COMPILER_FLAGS --expt-relaxed-constexpr --expt-extended-lambda --extended-lambda)
     list(APPEND NVCC_COMPILER_FLAGS -Xptxas="-v" -lineinfo)
-    list(APPEND NVCC_COMPILER_FLAGS -Xcompiler -fopenmp -O3 --compile)
+    list(APPEND NVCC_COMPILER_FLAGS -Xcompiler -O3 --compile)
 
     target_compile_options(
         common
@@ -78,32 +101,20 @@ target_include_directories(
     "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/${SubDirName}/>/"
 )
 
-if(CMAKE_BUILD_TYPE MATCHES Debug)
-    message(STATUS "Debug build.")
-endif()
-
 target_compile_definitions(
     common 
     INTERFACE
     $<$<CONFIG:Debug>:DEBUG>
 )
 
-option(USE_CUDA_MEMALLOC "Use CUDA to manage memory allocation and deallocation. [Default=OFF]" OFF)
-if(USE_CUDA_MEMALLOC)
+if(USE_DEFAULT_MEMALLOC)
     message(STATUS "Using CUDA to manage memory allocation and deallocation.")
     target_compile_definitions(
         common 
         INTERFACE
-        $<$<COMPILE_LANGUAGE:${LangGPU}>:USE_CUDA_MEMALLOC>
+        $<$<COMPILE_LANGUAGE:${LangGPU}>:USE_DEFAULT_MEMALLOC>
     )
 endif()
-
-include(FetchContent)
-FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
-)
-find_package(GTest)
 
 # download CPM.cmake
 file(
@@ -113,37 +124,6 @@ file(
   EXPECTED_HASH SHA256=cc155ce02e7945e7b8967ddfaff0b050e958a723ef7aad3766d368940cb15494
 )
 include(${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake)
-
-if(USE_ROCM)
-    CPMAddPackage(
-        NAME hipco
-        GITHUB_REPOSITORY ROCm/hipCollections
-        GIT_TAG main
-        OPTIONS
-            "BUILD_TESTS OFF"
-            "BUILD_BENCHMARKS OFF"
-            "BUILD_EXAMPLES OFF"
-    )
-else()
-    CPMAddPackage(
-        NAME cuco
-        GITHUB_REPOSITORY NVIDIA/cuCollections
-        GIT_TAG d92aefb3b64d45c945566d01b9dc500b197095eb
-        OPTIONS
-            "BUILD_TESTS OFF"
-            "BUILD_BENCHMARKS OFF"
-            "BUILD_EXAMPLES OFF"
-    )
-
-    CPMAddPackage(
-        NAME NVTX
-        GITHUB_REPOSITORY NVIDIA/NVTX
-        GIT_TAG v3.1.0-c-cpp
-        GIT_SHALLOW TRUE)
-    target_link_libraries(common INTERFACE nvtx3-cpp)
-    
-    add_subdirectory(nvbench)
-endif()
 
 # hipify the code
 if(USE_ROCM)

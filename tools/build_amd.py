@@ -77,8 +77,8 @@ if args.output_directory:
 print(f"Output directory: {out_dir}")
 
 if args.clean:
-    os.system(f"find {os.path.join(proj_dir, "src/")} -name 'hip' -type d -exec rm -rf {{}} +")
-    os.system(f"find {os.path.join(proj_dir, "build/")} -name 'hip' -type d -exec rm -rf {{}} +")
+    os.system(f"find {os.path.join(proj_dir, 'src/')} -name 'hip' -type d -exec rm -rf {{}} +")
+    os.system(f"find {os.path.join(proj_dir, 'build/')} -name 'hip' -type d -exec rm -rf {{}} +")
     os.system(f"find {proj_dir} -name '*_hip.*' -type f -delete")
     os.system(f"find {proj_dir} -name '*.hip' -type f -delete")
     sys.exit(0)
@@ -87,6 +87,7 @@ includes = [
     "src/cuda/*",
     "src/cuda/CMakeLists.txt",
     "src/cuda/tests/CMakeLists.txt",
+    "src/cuda/benchmarks/CMakeLists.txt",
     # "build/_deps/cuco-src/*",
 ]
 

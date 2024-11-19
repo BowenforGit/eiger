@@ -1,5 +1,13 @@
+CPMAddPackage(
+    NAME googletest
+    GITHUB_REPOSITORY google/googletest
+    GIT_TAG v1.15.2
+    OPTIONS
+        "BUILD_GMOCK OFF"
+)
+
 enable_testing()
-include(GoogleTest)
+include(GoogleTest) # Include CMake module to use gtest_discover_tests
 
 set(testSources 
     groupby/groupby_sort_test.cu
@@ -22,10 +30,14 @@ set(testTargets
     test_aggregate
     test_sort_partition
 )
+
+set(testHelperFiles
+    test_helper.cu
+)
     
 foreach(source target IN ZIP_LISTS testSources testTargets)
     message(STATUS "Adding test target: ${target} with source: ${source}")
-    add_executable(${target} ${source})
+    add_executable(${target} ${source} ${testHelperFiles})
     target_link_libraries(${target} PRIVATE common)
     target_link_libraries(${target} PRIVATE GTest::gtest_main)
     target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)

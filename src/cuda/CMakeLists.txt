@@ -1,3 +1,32 @@
+if(USE_ROCM)
+    CPMAddPackage(
+        NAME hipco
+        GITHUB_REPOSITORY ROCm/hipCollections
+        GIT_TAG main
+        OPTIONS
+            "BUILD_TESTS OFF"
+            "BUILD_BENCHMARKS OFF"
+            "BUILD_EXAMPLES OFF"
+    )
+else(USE_CUDA)
+    CPMAddPackage(
+        NAME cuco
+        GITHUB_REPOSITORY NVIDIA/cuCollections
+        GIT_TAG d92aefb3b64d45c945566d01b9dc500b197095eb
+        OPTIONS
+            "BUILD_TESTS OFF"
+            "BUILD_BENCHMARKS OFF"
+            "BUILD_EXAMPLES OFF"
+    )
+
+    CPMAddPackage(
+        NAME NVTX
+        GITHUB_REPOSITORY NVIDIA/NVTX
+        GIT_TAG v3.1.0-c-cpp
+        GIT_SHALLOW TRUE)
+    target_link_libraries(common INTERFACE nvtx3-cpp)
+endif()
+
 set(srcs
     operators/groupby/groupby_sort.cu
     # operators/groupby/groupby_partition.cu
@@ -14,18 +43,18 @@ set(srcs
     # operators/join/materialize.cu
     # operators/join/sort_merge_join.cu
     # operators/join/join.cu
-    tests/test_helper.cu
     utils/transform.cu
 )
 
 add_library(gamax SHARED ${srcs})
 target_link_libraries(gamax PRIVATE common)
+target_link_libraries(gamax PRIVATE OpenMP::OpenMP_CXX)
 
 if(USE_ROCM)
     target_link_libraries(gamax PUBLIC hipco)
-else()
+else(USE_CUDA)
     target_link_libraries(gamax PUBLIC cuco)
-    add_subdirectory(benchmarks)
 endif()
-
+    
+add_subdirectory(benchmarks)
 add_subdirectory(tests)

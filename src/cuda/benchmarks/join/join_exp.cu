@@ -655,7 +655,7 @@ int main(int argc, char** argv) {
 #ifdef DEBUG
     std::cout << "!! This is DEBUG build !!\n";
 #endif
-#ifdef USE_CUDA_MEMALLOC
+#ifdef USE_DEFAULT_MEMALLOC
     std::cout << "!! Using CUDA memory allocator !!\n";
 #endif
 #ifndef COL_T_8B
