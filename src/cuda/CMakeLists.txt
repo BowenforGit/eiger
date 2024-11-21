@@ -48,6 +48,7 @@ if(USE_CUDA)
         operators/join/materialize.cu
         operators/join/sort_merge_join.cu
         operators/join/join.cu
+        expr/expression.cu
     )
 endif()
 

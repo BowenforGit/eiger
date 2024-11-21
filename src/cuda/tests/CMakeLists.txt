@@ -23,6 +23,7 @@ if(USE_CUDA)
         groupby/groupby_partition_test.cu
         compress/dictionary_encode_test.cu
         join/ieq_join_test.cu
+        expr/expr_test.cu
     )
 endif()
 
