@@ -37,7 +37,8 @@ namespace gamax::datagen::device {
         const gamax::data_type type,
         const gamax::size_type card,
         const gamax::size_type ncols,
-        const int seed);
+        const int seed,
+        const uint64_t start = 0);
 
     /**
      * Generate a table with sparsely distributed primary keys.
@@ -91,7 +92,8 @@ namespace gamax::datagen::device {
         const gamax::size_type card,
         const gamax::size_type ncols,
         const double match_ratio,
-        const int seed);
+        const int seed,
+        const uint64_t start = 0);
     
     /**
      * Generate a table with foreign keys following a Zipfian distribution from a sequence.
@@ -129,5 +131,6 @@ namespace gamax::datagen::device {
         const gamax::size_type card,
         const gamax::size_type ncols,
         const double zipf_factor,
-        const int seed);
+        const int seed,
+        const uint64_t start = 0);
 }

@@ -20,6 +20,24 @@
 
 namespace gamax::datagen::device {
 namespace {
+    struct check_valid_start_helper {
+        template<typename T>
+        void operator()(
+            const uint64_t start)
+        {
+            if(start > std::numeric_limits<T>::max()) {
+                throw std::runtime_error("Start value exceeds the maximum value of the data type");
+            }
+        }
+    };
+
+    void check_valid_start(
+        const gamax::data_type type,
+        const uint64_t start)
+    {
+        type_dispatcher(type, check_valid_start_helper{}, start);
+    }
+
     std::unique_ptr<gamax::column> generate_from_values(
     gamax::column_view values, // set of values to sample from
     const gamax::size_type n,
@@ -87,9 +105,10 @@ namespace {
         std::unique_ptr<gamax::table> operator()(
             const gamax::size_type card,
             const gamax::size_type ncols,
-            const int seed) const
+            const int seed,
+            const uint64_t start) const
         {
-            auto src = gamax::make_sequence<T>(card, 0);
+            auto src = gamax::make_sequence<T>(card, static_cast<T>(start));
             return generate_table(src->view(), card, ncols, seed);
         }
     };
@@ -133,9 +152,10 @@ namespace {
             const gamax::size_type card,
             const gamax::size_type ncols,
             const double match_ratio,
-            const int seed) const
+            const int seed,
+            const uint64_t start) const
         {
-            auto src = gamax::make_sequence<T>(n_unique_keys, 0);
+            auto src = gamax::make_sequence<T>(n_unique_keys, static_cast<T>(start));
             return fk_uniform(src->view(), card, ncols, match_ratio, seed);
         }
     };
@@ -147,9 +167,10 @@ namespace {
             const gamax::size_type card,
             const gamax::size_type ncols,
             const double zipf_factor,
-            const int seed) const
+            const int seed,
+            const uint64_t start) const
         {
-            auto seq = gamax::make_sequence<T>(n_unique_keys, 0);
+            auto seq = gamax::make_sequence<T>(n_unique_keys, static_cast<T>(start));
             return fk_zipf(seq->view(), card, ncols, zipf_factor, seed);
         }
     };
@@ -178,9 +199,11 @@ namespace {
         const gamax::data_type type,
         const gamax::size_type card,
         const gamax::size_type ncols,
-        const int seed)
+        const int seed,
+        const uint64_t start)
     {
-        return type_dispatcher(type, pk_uniform_id_impl{}, card, ncols, seed);
+        check_valid_start(type, start);
+        return type_dispatcher(type, pk_uniform_id_impl{}, card, ncols, seed, start);
     }
 
     // std::unique_ptr<gamax::table>
@@ -200,9 +223,11 @@ namespace {
         const gamax::size_type card,
         const gamax::size_type ncols,
         const double match_ratio,
-        const int seed)
+        const int seed,
+        const uint64_t start)
     {
-        return type_dispatcher(type, fk_uniform_id_impl{}, n_unique_keys, card, ncols, match_ratio, seed);
+        check_valid_start(type, start);
+        return type_dispatcher(type, fk_uniform_id_impl{}, n_unique_keys, card, ncols, match_ratio, seed, start);
     }
 
     std::unique_ptr<gamax::table>
@@ -212,9 +237,11 @@ namespace {
         const gamax::size_type card,
         const gamax::size_type ncols,
         const double zipf_factor,
-        const int seed)
+        const int seed,
+        const uint64_t start)
     {
-        return type_dispatcher(type, fk_zipf_id_impl{}, n_unique_keys, card, ncols, zipf_factor, seed);
+        check_valid_start(type, start);
+        return type_dispatcher(type, fk_zipf_id_impl{}, n_unique_keys, card, ncols, zipf_factor, seed, start);
     }
 
     std::unique_ptr<gamax::table>
