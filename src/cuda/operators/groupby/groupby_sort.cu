@@ -27,17 +27,18 @@ struct reduce_by_key_aggregator_helper {
         gamax::mutable_column_view result_key,
         gamax::mutable_column_view result_val,
         gamax::size_type* d_num_groups,
-        gamax::size_type* permutation_idx = nullptr) {
-
+        gamax::size_type* permutation_idx,
+        cudaStream_t stream) 
+    {
         using AggT = typename F::OutputType;
         
         auto num_items = key.size();
         
         if(permutation_idx != nullptr) {
             auto val_itr = thrust::make_permutation_iterator(val.data<ValT>(), permutation_idx);
-            CALL_CUB_FUNC(cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key.data<KeyT>(), val_itr, result_val.data<AggT>(), d_num_groups, F{}, num_items)
+            CALL_CUB_FUNC(cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key.data<KeyT>(), val_itr, result_val.data<AggT>(), d_num_groups, F{}, num_items, stream)
         } else {
-            CALL_CUB_FUNC(cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key.data<KeyT>(), val.data<ValT>(), result_val.data<AggT>(), d_num_groups, F{}, num_items)
+            CALL_CUB_FUNC(cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key.data<KeyT>(), val.data<ValT>(), result_val.data<AggT>(), d_num_groups, F{}, num_items, stream)
         }
     }
 
@@ -47,8 +48,9 @@ struct reduce_by_key_aggregator_helper {
         gamax::column_view val, 
         const gamax::size_type num_groups,
         gamax::mutable_column_view result_val,
-        gamax::size_type* permutation_idx = nullptr) {
-
+        gamax::size_type* permutation_idx,
+        cudaStream_t stream) 
+    {
         using AggT = typename F::OutputType;
         
         auto num_items = key.size();
@@ -57,9 +59,9 @@ struct reduce_by_key_aggregator_helper {
 
         if(permutation_idx != nullptr) {
             auto val_itr = thrust::make_permutation_iterator(val.data<ValT>(), permutation_idx);
-            CALL_CUB_FUNC(cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key_ptr->data<KeyT>(), val_itr, result_val.data<AggT>(), d_num_groups->data<gamax::size_type>(), F{}, num_items)
+            CALL_CUB_FUNC(cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key_ptr->data<KeyT>(), val_itr, result_val.data<AggT>(), d_num_groups->data<gamax::size_type>(), F{}, num_items, stream)
         } else {
-            CALL_CUB_FUNC(cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key_ptr->data<KeyT>(), val.data<ValT>(), result_val.data<AggT>(), d_num_groups->data<gamax::size_type>(), F{}, num_items)
+            CALL_CUB_FUNC(cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key_ptr->data<KeyT>(), val.data<ValT>(), result_val.data<AggT>(), d_num_groups->data<gamax::size_type>(), F{}, num_items, stream)
         }
     }
 };
@@ -73,8 +75,9 @@ struct dispatch_key_type_helper {
         gamax::mutable_column_view result_key,
         gamax::mutable_column_view result_val,
         gamax::size_type* d_num_groups,
-        gamax::size_type* permutation_idx = nullptr) {
-
+        gamax::size_type* permutation_idx,
+        cudaStream_t stream) 
+    {
         using F = typename gamax::groupby::agg_fn_mapper<agg_kind, ValT>::F;
         
         gamax::type_dispatcher(
@@ -85,7 +88,8 @@ struct dispatch_key_type_helper {
             result_key, 
             result_val, 
             d_num_groups,
-            permutation_idx
+            permutation_idx,
+            stream
         );
     }
 
@@ -95,8 +99,9 @@ struct dispatch_key_type_helper {
         gamax::column_view val, 
         const gamax::size_type num_groups,
         gamax::mutable_column_view result_val,
-        gamax::size_type* permutation_idx = nullptr) {
-
+        gamax::size_type* permutation_idx,
+        cudaStream_t stream) 
+    {
         using F = typename agg_fn_mapper<agg_kind, ValT>::F;
 
         gamax::type_dispatcher(
@@ -106,7 +111,8 @@ struct dispatch_key_type_helper {
             val, 
             num_groups,
             result_val,
-            permutation_idx
+            permutation_idx,
+            stream
         );
     }
 };
@@ -119,8 +125,10 @@ struct dispatch_val_type_helper {
         gamax::mutable_column_view result_key,
         gamax::mutable_column_view result_val,
         gamax::size_type* d_num_groups,
-        gamax::size_type* permutation_idx = nullptr) {
-        
+        gamax::size_type* permutation_idx,
+        cudaStream_t stream) 
+    {
+    
         gamax::type_dispatcher(
             val.type(), 
             dispatch_key_type_helper<agg_kind>{}, 
@@ -129,7 +137,8 @@ struct dispatch_val_type_helper {
             result_key, 
             result_val, 
             d_num_groups,
-            permutation_idx
+            permutation_idx,
+            stream
         );
     }
 
@@ -138,8 +147,9 @@ struct dispatch_val_type_helper {
         gamax::column_view val, 
         const gamax::size_type num_groups,
         gamax::mutable_column_view result_val,
-        gamax::size_type* permutation_idx = nullptr) {
-
+        gamax::size_type* permutation_idx,
+        cudaStream_t stream) 
+    {
         gamax::type_dispatcher(
             val.type(), 
             dispatch_key_type_helper<agg_kind>{}, 
@@ -147,7 +157,8 @@ struct dispatch_val_type_helper {
             val, 
             num_groups,
             result_val,
-            permutation_idx
+            permutation_idx,
+            stream
         );
     }
 };
@@ -161,11 +172,13 @@ void aggregate(
     gamax::mutable_column_view result_key,
     gamax::mutable_column_view result_val,
     gamax::size_type& num_groups,
-    gamax::size_type* permutation_idx = nullptr) {
-
+    gamax::size_type* permutation_idx = nullptr,
+    cudaStream_t stream = cudaStreamDefault) 
+{
     auto d_num_groups = gamax::make_column(gamax::data_type{size_type_id}, 1);
-    dispatch_aggregate(agg_kind, key, val, result_key, result_val, d_num_groups->data<gamax::size_type>(), permutation_idx);
-    cudaMemcpy(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost);
+    dispatch_aggregate(agg_kind, key, val, result_key, result_val, d_num_groups->data<gamax::size_type>(), permutation_idx, stream);
+    cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
 }
 
 void aggregate(
@@ -174,9 +187,11 @@ void aggregate(
     gamax::column_view val, 
     const gamax::size_type num_groups,
     gamax::mutable_column_view result_val,
-    gamax::size_type* permutation_idx = nullptr) {
-
-    dispatch_aggregate(agg_kind, key, val, num_groups, result_val, permutation_idx);
+    gamax::size_type* permutation_idx = nullptr,
+    cudaStream_t stream = cudaStreamDefault) 
+{
+    dispatch_aggregate(agg_kind, key, val, num_groups, result_val, permutation_idx, stream);
+    cudaStreamSynchronize(stream);
 }
 
 void check_solvable(gamax::table_view const& key, gamax::table_view const& val, std::vector<gamax::groupby::aggregation_request>& agg_requests) {
@@ -237,7 +252,7 @@ std::unique_ptr<gamax::table> groupby(
     extract_groupby_hint(hint, input_num_rows, key_type, estimated_num_groups, begin_bit, end_bit);
 
     auto first_val_col_id = agg_requests[0].column_index;
-    auto [sorted_key, sorted_val_0] = gamax::sort::sort_column_pair(key.get_column(0), val.get_column(first_val_col_id), begin_bit, end_bit);
+    auto [sorted_key, sorted_val_0] = gamax::sort::sort_column_pair(key.get_column(0), val.get_column(first_val_col_id), begin_bit, end_bit, gamax::sort_order::ASCENDING, nullptr, 0, stream);
     
     gamax::size_type num_groups = 0;
     std::vector<std::unique_ptr<gamax::column>> final_columns;
@@ -256,7 +271,7 @@ std::unique_ptr<gamax::table> groupby(
             auto unique_keys = gamax::make_column(key_type, estimated_num_groups);
             auto agg_val = gamax::make_column(val_type, estimated_num_groups);
             
-            aggregate(agg_kind, sorted_key->view(), sorted_val->view(), unique_keys->mutable_view(), agg_val->mutable_view(), num_groups);
+            aggregate(agg_kind, sorted_key->view(), sorted_val->view(), unique_keys->mutable_view(), agg_val->mutable_view(), num_groups, nullptr, stream);
 
             unique_keys->set_size(num_groups);
             agg_val->set_size(num_groups);
@@ -286,13 +301,13 @@ std::unique_ptr<gamax::table> groupby(
                     v++;
                     return 8 * gamax::size_of(encoded_key->type()) - __builtin_clz(v);
                 } (num_groups);
-                std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(encoded_key->view(), val.get_column(i), 0, end_bit);
+                std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(encoded_key->view(), val.get_column(i), 0, end_bit, gamax::sort_order::ASCENDING, nullptr, 0, stream);
             } else {
-                std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(key.get_column(0), val.get_column(i), begin_bit, end_bit);
+                std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(key.get_column(0), val.get_column(i), begin_bit, end_bit, gamax::sort_order::ASCENDING, nullptr, 0, stream);
             }
 
             auto agg_val = gamax::make_column(val_type, num_groups);
-            aggregate(agg_kind, sorted_key->view(), sorted_val->view(), num_groups, agg_val->mutable_view());
+            aggregate(agg_kind, sorted_key->view(), sorted_val->view(), num_groups, agg_val->mutable_view(), nullptr, stream);
             final_columns.push_back(std::move(agg_val));
         }
     }
@@ -319,7 +334,7 @@ std::unique_ptr<gamax::table> groupby_gfur(
     int begin_bit, end_bit;
     extract_groupby_hint(hint, input_num_rows, key_type, estimated_num_groups, begin_bit, end_bit);
 
-    auto [sorted_key, idx_col] = gamax::sort::argsort(key.get_column(0), begin_bit, end_bit);
+    auto [sorted_key, idx_col] = gamax::sort::argsort(key.get_column(0), begin_bit, end_bit, gamax::sort_order::ASCENDING, nullptr, 0, stream);
     
     gamax::size_type num_groups = 0;
     std::vector<std::unique_ptr<gamax::column>> final_columns;
@@ -334,7 +349,7 @@ std::unique_ptr<gamax::table> groupby_gfur(
         if(!grouped) {
             auto agg_val = gamax::make_column(val_type, estimated_num_groups);
             auto unique_keys = gamax::make_column(key_type, estimated_num_groups);
-            aggregate(agg_kind, sorted_key->view(), val.get_column(i), unique_keys->mutable_view(), agg_val->mutable_view(), num_groups, idx_col->data<gamax::size_type>());
+            aggregate(agg_kind, sorted_key->view(), val.get_column(i), unique_keys->mutable_view(), agg_val->mutable_view(), num_groups, idx_col->data<gamax::size_type>(), stream);
             unique_keys->set_size(num_groups);
             agg_val->set_size(num_groups);
             final_columns.push_back(std::move(unique_keys));
@@ -343,12 +358,12 @@ std::unique_ptr<gamax::table> groupby_gfur(
             grouped = true;
         } else {
             auto agg_val = gamax::make_column(val_type, num_groups);
-            aggregate(agg_kind, sorted_key->view(), val.get_column(i), num_groups, agg_val->mutable_view(), idx_col->data<gamax::size_type>());
+            aggregate(agg_kind, sorted_key->view(), val.get_column(i), num_groups, agg_val->mutable_view(), idx_col->data<gamax::size_type>(), stream);
             final_columns.push_back(std::move(agg_val));
         }
     }
 
-    cudaStreamSynchronize(0);
+    cudaStreamSynchronize(stream);
 
     return std::make_unique<gamax::table>(std::move(final_columns));
 }
