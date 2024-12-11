@@ -38,6 +38,25 @@ namespace {
         type_dispatcher(type, check_valid_start_helper{}, start);
     }
 
+    struct circular_fill_impl {
+        template<typename T>
+        void operator()(
+            gamax::column_view src,
+            gamax::mutable_column_view res,
+            const gamax::size_type n,
+            cudaStream_t stream)
+        {
+            const auto num_values = src.size();
+            thrust::for_each_n(
+                thrust::cuda::par(*get_thrust_allocator()).on(stream), 
+                thrust::counting_iterator<gamax::size_type>(0),
+                n, 
+                [src, res, num_values] __device__ (gamax::size_type i) {
+                    res.data<T>()[i] = src.data<T>()[i % num_values];
+            });
+        }
+    };
+
     std::unique_ptr<gamax::column> generate_from_values(
     gamax::column_view values, // set of values to sample from
     const gamax::size_type n,
@@ -46,17 +65,9 @@ namespace {
     cudaStream_t stream = cudaStreamDefault) 
     {
         const auto num_values = values.size();
-        const auto type_bytes = gamax::size_of(values.type());
 
         auto ret = std::make_unique<gamax::column>(values.type(), n);
-        
-        gamax::size_type offset = 0;
-        while(offset < n) {
-            auto n_copy = std::min(n - offset, num_values);
-            ret->mutable_view(offset).copy_from(values, n_copy, stream);
-            offset += n_copy;
-        }
-
+        type_dispatcher(values.type(), circular_fill_impl{}, values, ret->mutable_view(), n, stream);
         cudaStreamSynchronize(stream);
 
         if(shuffle) {
