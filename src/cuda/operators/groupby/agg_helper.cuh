@@ -69,7 +69,7 @@ struct dispatch_val_type_helper {
         output_t tl_agg = F::identity;
         #pragma unroll
         // for(int i = threadIdx.x; i < src_end - src_start; i += blockDim.x) {
-        for(int i = group.thread_rank(); i < src_end - src_start; i += group.size()) {
+        for(gamax::size_type i = group.thread_rank(); i < src_end - src_start; i += group.size()) {
             tl_agg = f.thread_local_update(tl_agg, src.data<T>()[src_idx[i]]);
         }
         f.atomic_update(&agg_val, tl_agg);

@@ -81,7 +81,7 @@ namespace {
         auto num_items = val.num_rows();
 
         #pragma unroll
-        for(int t = get_cuda_tid(); t < num_items; t += nthreads()) {
+        for(gamax::size_type t = get_cuda_tid(); t < num_items; t += nthreads()) {
             const auto loc = group_ids_loc[t];
             const auto gid = sparse_group_ids[loc];
             #pragma unroll
@@ -127,7 +127,7 @@ namespace {
 
         // aggregate into the shared memory buffer
         #pragma unroll
-        for(int t = get_cuda_tid(); t < num_items; t += nthreads()) {
+        for(gamax::size_type t = get_cuda_tid(); t < num_items; t += nthreads()) {
             const auto loc = group_ids_loc[t];
             const auto gid = sparse_group_ids[loc];
 
@@ -154,7 +154,7 @@ namespace {
             const gamax::size_type j = t % num_groups; // which group
             
             #pragma unroll
-            for(int k = last_i; k < i; k++) {
+            for(gamax::size_type k = last_i; k < i; k++) {
                 cur_agg_buffer = cur_agg_buffer + (num_groups)*gamax::size_of(res.get_column(k+1).type());
             }
             last_i = i;
@@ -280,7 +280,7 @@ namespace {
             initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *res_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
             
             std::size_t agg_bytes = 0;
-            for(int i = 1; i < res->num_columns(); i++) {
+            for(gamax::size_type i = 1; i < res->num_columns(); i++) {
                 agg_bytes += gamax::size_of(res->get_column(i).type());
             }
             

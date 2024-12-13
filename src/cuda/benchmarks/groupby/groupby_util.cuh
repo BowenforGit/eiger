@@ -39,13 +39,13 @@ enum val_option {
 };
 
 struct groupby_params {
-    int num_items {4096};
-    int num_groups {1024};
+    gamax::size_type num_items {4096};
+    gamax::size_type num_groups {1024};
     double zipf_factor {0.0};
     enum groupby_algo algo {GROUPBY_SORT};
     enum val_option val_opt {SEQ};
-    int actual_num_groups {-1};
-    int num_aggs {1};
+    gamax::size_type actual_num_groups {0};
+    gamax::size_type num_aggs {1};
 
     template<typename Stream>
     void print(Stream& out) const {
@@ -61,7 +61,7 @@ template <typename KeyT, typename ValueT>
 void generate_groupby_data(KeyT* h_keys, ValueT* h_vals, const groupby_params& params) {
     if(params.zipf_factor == 0.0) {
         #pragma omp parallel for
-        for (int i = 0; i < params.num_items; i++) {
+        for (gamax::size_type i = 0; i < params.num_items; i++) {
             h_keys[i] = i % params.num_groups;
             h_vals[i] = 1;
         }
@@ -76,7 +76,7 @@ void generate_groupby_data(KeyT* h_keys, ValueT* h_vals, const groupby_params& p
             std::default_random_engine e(42+tid);
             
             #pragma omp for
-            for(size_t i = 0; i < params.num_items; i++) {
+            for(gamax::size_type i = 0; i < params.num_items; i++) {
                 h_keys[i] = dist(e);
                 h_vals[i] = 1;
             }
@@ -95,7 +95,7 @@ void generate_zipf_keys_host(KeyT* h_keys, const groupby_params& params) {
         std::default_random_engine e(42+tid);
         
         #pragma omp for
-        for(size_t i = 0; i < params.num_items; i++) {
+        for(gamax::size_type i = 0; i < params.num_items; i++) {
             h_keys[i] = dist(e);
         }
     }
@@ -127,7 +127,7 @@ void generate_groupby_keys(gamax::table& key_table, const groupby_params& params
 template<typename Value>
 void generate_groupby_vals_seq(gamax::table& val_table, const groupby_params& params) {
     std::vector<std::unique_ptr<gamax::column>> vals_vec;
-    for(int i = 0; i < params.num_aggs; i++) {
+    for(gamax::size_type i = 0; i < params.num_aggs; i++) {
         auto vals = gamax::make_sequence<Value>(params.num_items, 0, 1);
         vals_vec.push_back(std::move(vals));
     }
@@ -140,7 +140,7 @@ void generate_groupby_vals_seq(gamax::table& val_table, const groupby_params& pa
 template<typename Value>
 void generate_groupby_vals_all_ones(gamax::table& val_table, const groupby_params& params) {
     std::vector<std::unique_ptr<gamax::column>> vals_vec;
-    for(int i = 0; i < params.num_aggs; i++) {
+    for(gamax::size_type i = 0; i < params.num_aggs; i++) {
         auto vals = gamax::make_column<Value>(params.num_items);
         thrust::fill_n(thrust::device, reinterpret_cast<Value*>(vals->data()), params.num_items, static_cast<Value>(1));
         vals_vec.push_back(std::move(vals));
@@ -154,7 +154,7 @@ void generate_groupby_vals_all_ones(gamax::table& val_table, const groupby_param
 template<typename Key, typename Value, std::enable_if_t<std::is_same_v<Key, Value>, void>* = nullptr>
 void generate_groupby_vals_from_keys(gamax::column& key, gamax::table& val_table, const groupby_params& params) {
     std::vector<std::unique_ptr<gamax::column>> vals_vec;
-    for(int i = 0; i < params.num_aggs; i++) {
+    for(gamax::size_type i = 0; i < params.num_aggs; i++) {
         auto vals = key.deep_copy();
         vals_vec.push_back(std::move(vals));
     }

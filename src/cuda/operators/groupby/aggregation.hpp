@@ -14,10 +14,10 @@ enum class aggregation_id {
 };
 
 struct aggregation_request {
-    int column_index;
+    gamax::size_type column_index;
     aggregation_id agg_kind;
 
-    aggregation_request(int column_index, aggregation_id agg_kind)
+    aggregation_request(gamax::size_type column_index, aggregation_id agg_kind)
         : column_index(column_index), agg_kind(agg_kind) {}
 };
 

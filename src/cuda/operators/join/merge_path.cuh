@@ -30,11 +30,11 @@ struct merge_range {
     , b_begin(y)
     , b_end(z) {}
 
-    __device__ merge_range(const int cta, const int spacing, const cnt_t a_count, const cnt_t b_count, const idx_t* partitions) {
+    __device__ merge_range(const int cta, const cnt_t spacing, const cnt_t a_count, const cnt_t b_count, const idx_t* partitions) {
         a_begin = partitions[cta];
         a_end   = partitions[cta+1];
-        int diag0 = cta*spacing;
-        int diag1 = min(a_count+b_count, diag0+spacing);
+        auto diag0 = cta*spacing;
+        auto diag1 = min(a_count+b_count, diag0+spacing);
         b_begin = diag0-a_begin;
         b_end   = diag1-a_end;
     }
@@ -51,7 +51,7 @@ struct merge_range {
         return merge_range(0, a_count(), a_count(), total());
     }
 
-    __device__ __forceinline__ merge_range partition(int mp0, int diag0, int mp1, int diag1) {
+    __device__ __forceinline__ merge_range partition(cnt_t mp0, cnt_t diag0, cnt_t mp1, cnt_t diag1) {
         return merge_range(a_begin + mp0, 
                            a_begin + mp1, 
                            b_begin + diag0 - mp0, 
@@ -60,12 +60,12 @@ struct merge_range {
 };
 
 template<typename key_t>
-__device__ __forceinline__ int merge_path(key_t* a_keys, int a_count, key_t* b_keys, int b_count, int diag) {
-    int begin = max(0, diag - b_count);
-    int end = min(diag, a_count);
+__device__ __forceinline__ gamax::size_type merge_path(key_t* a_keys, gamax::size_type a_count, key_t* b_keys, gamax::size_type b_count, gamax::size_type diag) {
+    gamax::size_type begin = max(0, diag - b_count);
+    gamax::size_type end = min(diag, a_count);
 
     while(begin < end) {
-        int mid = (begin + end) / 2;
+        gamax::size_type mid = begin + (end-begin) / 2;
         key_t a_key = a_keys[mid];
         key_t b_key = b_keys[diag - 1 - mid];
         bool pred = (a_key <= b_key);
@@ -77,11 +77,11 @@ __device__ __forceinline__ int merge_path(key_t* a_keys, int a_count, key_t* b_k
 }
 
 template<typename key_t>
-__global__ void merge_path_partition(key_t* a, const int a_count, 
-                                     key_t* b, const int b_count,
-                                     int spacing, 
-                                     int* partition, const int n) {
-    int p = get_cuda_tid();
+__global__ void merge_path_partition(key_t* a, const gamax::size_type a_count, 
+                                     key_t* b, const gamax::size_type b_count,
+                                     gamax::size_type spacing, 
+                                     gamax::size_type* partition, const gamax::size_type n) {
+    gamax::size_type p = get_cuda_tid();
     if(p >= n) return;
     partition[p] = merge_path(a, a_count, b, b_count, min(spacing*p, a_count+b_count));
 }
@@ -95,12 +95,12 @@ template<int NT = 512,
          typename SOutIt>
 __global__ void merge_keys_mp_improv(key_t* l_sorted_keys, key_t* r_sorted_keys, 
                               RValIt  l_sorted_vals, SValIt r_sorted_vals,
-                              const int nl, const int nr, const int* partitions,
+                              const gamax::size_type nl, const gamax::size_type nr, const gamax::size_type* partitions,
                               key_t* keys_out, ROutIt l_out, SOutIt r_out, 
-                              int* g_counter, int circular_buffer_size, bool agg_only = false) {
+                              gamax::size_type* g_counter, gamax::size_type circular_buffer_size, bool agg_only = false) {
     auto cta = blockIdx.x;
     constexpr int NV = NT*VT;
-    const int tile_size = min(NV, (nl+nr)-cta*NV);
+    const int tile_size = min(NV, (nl+nr)-(gamax::size_type)cta*NV);
 
     // obtain the merge partition belonging to this thread block
     merge_range mr_global(cta, NV, nr, nl, partitions);
@@ -120,16 +120,16 @@ __global__ void merge_keys_mp_improv(key_t* l_sorted_keys, key_t* r_sorted_keys,
 
     // partition the workloads within the thread block
     auto mr_cta = mr_global.align_to_zero();
-    int diag0 = min(mr_cta.total(), VT*threadIdx.x);
-    int diag1 = min(mr_cta.total(), diag0+VT);
-    int mp0[1];
-    int mp1[1];
+    gamax::size_type diag0 = min(mr_cta.total(), VT*threadIdx.x);
+    gamax::size_type diag1 = min(mr_cta.total(), diag0+VT);
+    gamax::size_type mp0[1];
+    gamax::size_type mp1[1];
     __pipeline_wait_prior(0);
     __syncthreads();
     mp0[0] = merge_path(keys, mr_cta.a_count(), keys+mr_cta.b_begin, mr_cta.b_count(), diag0);
     mp1[0] = mr_cta.a_count();
     
-    cub::BlockShuffle<int, NT>().Down(mp0, mp1);
+    cub::BlockShuffle<gamax::size_type, NT>().Down(mp0, mp1);
     
     // Find the lower bound for each "needle"
     // if there is a match, the lower bound should be the first match
@@ -137,8 +137,8 @@ __global__ void merge_keys_mp_improv(key_t* l_sorted_keys, key_t* r_sorted_keys,
     // greater than the "needle".
     auto mr_thread = mr_cta.partition(mp0[0], diag0, mp1[0], diag1);
 
-    __shared__ int match[VT][NT];
-    __shared__ int cnt[VT][NT];
+    __shared__ gamax::size_type match[VT][NT];
+    __shared__ gamax::size_type cnt[VT][NT];
     
     #pragma unroll
     for(int i = 0; i < VT; i++) {
@@ -165,8 +165,8 @@ __global__ void merge_keys_mp_improv(key_t* l_sorted_keys, key_t* r_sorted_keys,
     // materialize the result
     if(mp0[0] < mr_global.a_count()) {
         #pragma unroll
-        for(int a_index = a_first; a_index < mr_thread.a_end; a_index++) {
-            int b_index = match[a_index-a_first][threadIdx.x] - mr_cta.a_count();
+        for(gamax::size_type a_index = a_first; a_index < mr_thread.a_end; a_index++) {
+            gamax::size_type b_index = match[a_index-a_first][threadIdx.x] - mr_cta.a_count();
             while(b_index + mr_global.b_begin < nl) {
                 auto b_index_cta = b_index + mr_cta.a_count();
                 key_t bk = (b_index_cta < mr_cta.total()) ? keys[b_index_cta] : b[b_index];
@@ -211,8 +211,8 @@ __global__ void merge_keys_mp_improv(key_t* l_sorted_keys, key_t* r_sorted_keys,
         // the buffer will be full if the current batch is written
         while (shuffle_ptr >= SHUFFLE_SIZE) {
             if (wr_intention && (wr_offset < SHUFFLE_SIZE)) {
-                int a_index = a_first + i + mr_global.a_begin;
-                int b_index = match[i][threadIdx.x] - mr_cta.a_count() + mr_global.b_begin + j;
+                gamax::size_type a_index = a_first + i + mr_global.a_begin;
+                gamax::size_type b_index = match[i][threadIdx.x] - mr_cta.a_count() + mr_global.b_begin + j;
                 keys_shfl[wid][wr_offset] = keys[a_first+i];
                 r_shfl[wid][wr_offset] = r_sorted_vals[a_index];
                 l_shfl[wid][wr_offset] = l_sorted_vals[b_index];
@@ -236,8 +236,8 @@ __global__ void merge_keys_mp_improv(key_t* l_sorted_keys, key_t* r_sorted_keys,
         }
 
         if(wr_intention && (wr_offset >= 0)) {
-            int a_index = a_first + i + mr_global.a_begin;
-            int b_index = match[i][threadIdx.x] - mr_cta.a_count() + mr_global.b_begin + j;
+            gamax::size_type a_index = a_first + i + mr_global.a_begin;
+            gamax::size_type b_index = match[i][threadIdx.x] - mr_cta.a_count() + mr_global.b_begin + j;
             keys_shfl[wid][wr_offset] = keys[a_first+i];
             r_shfl[wid][wr_offset] = r_sorted_vals[a_index];
             l_shfl[wid][wr_offset] = l_sorted_vals[b_index];
@@ -270,12 +270,12 @@ template<typename KeyIt,
          int VT = 4>
 void merge_path(KeyIt r_sorted_keys, KeyIt s_sorted_keys, 
                 RValIt r_sorted_vals, SValIt s_sorted_vals, 
-                const int nr, const int ns, 
+                const gamax::size_type nr, const gamax::size_type ns, 
                 KeyIt keys_out, ROutIt r_out, SOutIt s_out, 
-                int& n_matches, int circular_buffer_size) {
-    int n = (nr + ns + NT*VT-1)/(NT*VT) + 1;
-    int* partitions, *g_counter;
-    allocate_mem(&partitions, false, sizeof(int)*n);
+                gamax::size_type& n_matches, gamax::size_type circular_buffer_size) {
+    gamax::size_type n = (nr + ns + NT*VT-1)/(NT*VT) + 1;
+    gamax::size_type* partitions, *g_counter;
+    allocate_mem(&partitions, false, sizeof(gamax::size_type)*n);
     allocate_mem(&g_counter, true);
 
     merge_path_partition<<<num_tb(n, 128), 128>>>(s_sorted_keys, ns,
@@ -290,8 +290,8 @@ void merge_path(KeyIt r_sorted_keys, KeyIt s_sorted_keys,
                                                             r_out, s_out, 
                                                             g_counter, circular_buffer_size);
 
-    int temp;
-    cudaMemcpy(&temp, g_counter, sizeof(int), cudaMemcpyDefault);
+    gamax::size_type temp;
+    cudaMemcpy(&temp, g_counter, sizeof(gamax::size_type), cudaMemcpyDefault);
     n_matches = temp;
 
     release_mem(partitions);

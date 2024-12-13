@@ -66,7 +66,7 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
 
     auto const block = cooperative_groups::this_thread_block();
     
-    for(int i = blockIdx.x; i < num_units; i += gridDim.x) {
+    for(gamax::size_type i = blockIdx.x; i < num_units; i += gridDim.x) {
         if(block.thread_rank() == 0) u->num_groups_local = 0;
         const auto ustart = units_start[i];
         const auto uend = units_end[i];
@@ -83,7 +83,7 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
         auto insert_and_find_ref = std::move(raw_ref).with(cuco::op::insert_and_find);
 
         #pragma unroll
-        for(int t = block.thread_rank(); t < uend - ustart; t += block.size()) {
+        for(gamax::size_type t = block.thread_rank(); t < uend - ustart; t += block.size()) {
             auto idx = t+ustart;
             auto [slot, is_new_key] = insert_and_find_ref.insert_and_find(cuco::pair{key_arr[idx], idx});
             if(is_new_key) {
@@ -137,7 +137,7 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
             block.sync();
             
             #pragma unroll
-            for(int t = block.thread_rank(); t < uend - ustart; t += block.size()) {
+            for(gamax::size_type t = block.thread_rank(); t < uend - ustart; t += block.size()) {
                 const auto idx = t+ustart;
 
                 gamax::size_type l_group_id {-1}; // block-local group id
@@ -171,7 +171,7 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
                 num_groups_local,
                 num_aggs);
         } else {
-            for(int t = block.thread_rank(); t < uend - ustart; t += block.size()) {
+            for(gamax::size_type t = block.thread_rank(); t < uend - ustart; t += block.size()) {
                 auto idx = t+ustart;
 
                 gamax::size_type g_group_id {-1}; // global group id
@@ -207,16 +207,16 @@ std::unique_ptr<gamax::table> compute_aggregate(
     cudaStream_t stream)
 {
     auto input_num_rows = partitioned_key.size();
-    const auto num_partitions = (1 << log_num_partitions);
+    const gamax::size_type num_partitions = (1 << log_num_partitions);
 
     constexpr gamax::size_type threshold = std::numeric_limits<gamax::size_type>::max() / 2; // TODO: be careful of overflow
-    int max_work_units = num_partitions + (input_num_rows+threshold-1)/threshold;
+    auto max_work_units = num_partitions + (input_num_rows+threshold-1)/threshold;
 
     auto units_start_ptr = gamax::make_idx_column(max_work_units);
     auto units_end_ptr = gamax::make_idx_column(max_work_units);
     auto units_group_ptr = gamax::make_idx_column(max_work_units);
 
-    int num_units = 0;
+    gamax::size_type num_units = 0;
     auto partition_ps = gamax::partition::compute_partition_offsets(partitioned_key, 0, log_num_partitions);
     gamax::groupby::generate_workunits(
         partition_ps->data<gamax::size_type>(), 
@@ -254,7 +254,7 @@ std::unique_ptr<gamax::table> compute_aggregate(
     std::size_t sm_bytes = numWindows * sizeof(cuco::window<cuco::pair<Key, gamax::size_type>, window_size>) + sizeof(gamax::size_type)*2;
     if(estimated_num_groups / num_partitions <= 256) {
         std::size_t agg_bytes = 0;
-        for(int i = 1; i < res->num_columns(); i++) {
+        for(gamax::size_type i = 1; i < res->num_columns(); i++) {
             agg_bytes += gamax::size_of(res->get_column(i).type());
         }
         sm_bytes = std::max(agg_bytes * 256, sm_bytes);
@@ -322,7 +322,7 @@ struct partition_groupby_impl {
         
             std::vector<std::unique_ptr<gamax::column>> partitioned_val_cols;
             std::unique_ptr<gamax::column> pval_temp {nullptr};
-            for(int i = 0; i < val.num_columns(); i++) {
+            for(gamax::size_type i = 0; i < val.num_columns(); i++) {
                 std::tie(partitioned_key, pval_temp) = gamax::partition::partition_column_pair(key.get_column(0), val.get_column(i), 0, log_num_partitions, stream);
                 partitioned_val_cols.push_back(std::move(pval_temp));
             }

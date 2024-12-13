@@ -23,11 +23,11 @@ namespace gamax::groupby {
 template <typename KeyT, typename ValueT, typename AggT>
 void invoke_groupby_sort(KeyT* h_keys, 
                          ValueT* h_vals, 
-                         const int num_items,
+                         const gamax::size_type num_items,
                          gamax::groupby::groupby_algo algo,
                          KeyT*& h_out_keys,
                          typename AggT::OutputType*& h_out_vals,
-                         int& num_groups,
+                         gamax::size_type& num_groups,
                          gamax::groupby::groupby_hint& hint,
                          cudaStream_t stream) {
     auto d_keys = gamax::make_column_from_host(h_keys, num_items);
@@ -75,22 +75,22 @@ void invoke_groupby_sort(KeyT* h_keys,
 }
 
 template <typename KeyT>
-void check_groupby_result(KeyT* h_keys, KeyT* ret_keys, int* ret_vals, int num_groups, const groupby_params& params) {
+void check_groupby_result(KeyT* h_keys, KeyT* ret_keys, int* ret_vals, gamax::size_type num_groups, const groupby_params& params) {
     ASSERT_EQ(num_groups, params.actual_num_groups);
     unsigned long long sum = 0;
 
     if(params.zipf_factor == 0.0) {
-        for(int i = 0; i < num_groups; i++) {
+        for(gamax::size_type i = 0; i < num_groups; i++) {
             sum += ret_keys[i];
             ASSERT_EQ(ret_vals[i], params.num_items / params.num_groups);
         }
         EXPECT_EQ(sum, ((unsigned long long)params.num_groups - 1) * (unsigned long long)params.num_groups / 2);
     } else {
-        std::vector<int> group_sizes(params.num_groups, 0);
-        for(int i = 0; i < params.num_items; i++) {
+        std::vector<gamax::size_type> group_sizes(params.num_groups, 0);
+        for(gamax::size_type i = 0; i < params.num_items; i++) {
             group_sizes[h_keys[i]]++;
         }
-        for(int i = 0; i < num_groups; i++) {
+        for(gamax::size_type i = 0; i < num_groups; i++) {
             ASSERT_EQ(ret_vals[i], group_sizes[ret_keys[i]]);
         }
     }
@@ -105,13 +105,13 @@ void test_groupby_sort(groupby_params& params, cudaStream_t stream = cudaStreamD
 
     // check the actual number of groups generated if zipf factor is not zero
     if(params.zipf_factor > 0.0) {
-        std::vector<int> group_sizes(params.num_groups, 0);
-        for(int i = 0; i < params.num_items; i++) {
+        std::vector<gamax::size_type> group_sizes(params.num_groups, 0);
+        for(gamax::size_type i = 0; i < params.num_items; i++) {
             group_sizes[h_keys[i]]++;
         }
         
-        int num_groups_generated = 0;
-        for(int i = 0; i < params.num_groups; i++) {
+        gamax::size_type num_groups_generated = 0;
+        for(gamax::size_type i = 0; i < params.num_groups; i++) {
             if(group_sizes[i] > 0) {
                 num_groups_generated++;
             }
@@ -133,7 +133,7 @@ void test_groupby_sort(groupby_params& params, cudaStream_t stream = cudaStreamD
 
     KeyT* h_out_keys = nullptr;
     typename AggT::OutputType* h_out_vals = nullptr;
-    int num_groups = 0;
+    gamax::size_type num_groups = 0;
     
     invoke_groupby_sort<KeyT, int, AggT>(h_keys, h_vals, params.num_items, params.algo, h_out_keys, h_out_vals, num_groups, hint, stream);
     check_groupby_result(h_keys, h_out_keys, h_out_vals, num_groups, params);

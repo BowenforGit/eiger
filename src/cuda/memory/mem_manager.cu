@@ -104,7 +104,7 @@ UserSpaceMM::block_type UserSpaceMM::find_block(const size_t sz) {
         }
     }
 
-    int i = 0;
+    size_t i = 0;
     for(auto b = free_list.begin(); b != free_list.end(); b++, i++) {
         std::cout << "Block " << i << ": " << b->sz << " bytes\n";
     }

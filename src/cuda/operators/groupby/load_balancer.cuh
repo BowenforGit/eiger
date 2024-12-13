@@ -18,15 +18,15 @@ __global__ void generate_workunits_kernel(const IdxT* membership_ps,
                         IdxT* units_start, 
                         IdxT* units_end, 
                         IdxT* units_group) {
-    for(int i = get_cuda_tid(); i < num_groups; i += nthreads()) {
+    for(gamax::size_type i = get_cuda_tid(); i < num_groups; i += nthreads()) {
         IdxT start = (i == 0) ? 0 : membership_ps[i-1];
         IdxT end = membership_ps[i];
         IdxT num_items = end - start;
         IdxT num_work_units = (num_items+threshold-1)/threshold;
-        for(int j = 0; j < num_work_units; j++) {
+        for(gamax::size_type j = 0; j < num_work_units; j++) {
             IdxT unit_start = j*threshold;
             IdxT unit_end = min((j+1)*threshold, num_items);
-            int idx = atomicAdd(num_units, 1);
+            gamax::size_type idx = atomicAdd(num_units, 1);
             units_start[idx] = start+unit_start;
             units_end[idx] = start+unit_end;
             units_group[idx] = i;

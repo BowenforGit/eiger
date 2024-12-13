@@ -20,6 +20,7 @@ All credit to the original author: Cagri Balkesen <cagri.balkesen@inf.ethz.ch>
 #include <thrust/execution_policy.h>
 #include <thrust/iterator/counting_iterator.h>
 
+#include "types/data_type.hpp"
 #include "memory/column.hpp"
 #include "utils/transform.hpp"
 #include "memory/mem_manager.hpp"
@@ -30,10 +31,10 @@ template<typename T> using zipf_distribution_t = std::discrete_distribution<T>;
 #define LOCK(L) while ((L).test_and_set()) {}
 
 template<typename T>
-void knuth_shuffle(T * keys, const size_t num_tuples, const int user_seed=42)
+void knuth_shuffle(T * keys, const gamax::size_type num_tuples, const int user_seed=42)
 {
     auto locks = new std::atomic_flag[num_tuples];
-    for(size_t i = 0; i < num_tuples; i++) {
+    for(gamax::size_type i = 0; i < num_tuples; i++) {
         locks[i].clear();
     }
 
@@ -47,7 +48,7 @@ void knuth_shuffle(T * keys, const size_t num_tuples, const int user_seed=42)
         seed.state[2] = 0;
         
         #pragma omp for
-        for (int i = num_tuples - 1; i > 0; i--) {
+        for (gamax::size_type i = num_tuples - 1; i > 0; i--) {
             int64_t j = RAND_RANGE48(i, seed.state);
             LOCK(locks[i]);
             LOCK(locks[j]);
@@ -59,7 +60,7 @@ void knuth_shuffle(T * keys, const size_t num_tuples, const int user_seed=42)
 }
 
 template<typename T, typename DistT>
-void create_integral_relation_nonunique(T** relation, const size_t num_tuples,
+void create_integral_relation_nonunique(T** relation, const gamax::size_type num_tuples,
                                    bool pinned,
                                    const T vmin = std::numeric_limits<T>::min(), 
                                    const T vmax = std::numeric_limits<T>::max(),
@@ -84,14 +85,14 @@ void create_integral_relation_nonunique(T** relation, const size_t num_tuples,
         DistT dist(vmin, vmax);
         
         #pragma omp for
-        for(size_t i = 0; i < num_tuples; i++) {
+        for(gamax::size_type i = 0; i < num_tuples; i++) {
             (*relation)[i] = dist(e);
         }
     }
 }
 
 template<typename T>
-void create_integral_relation_unique(T** relation, const size_t num_tuples,
+void create_integral_relation_unique(T** relation, const gamax::size_type num_tuples,
                                    bool pinned,
                                    const T start = 0,
                                    const bool shuffle = true,
@@ -119,14 +120,14 @@ void create_integral_relation_unique(T** relation, const size_t num_tuples,
             std::default_random_engine e(seed+tid);
             
             #pragma omp for
-            for(size_t i = 0; i < num_tuples; i++) {
+            for(gamax::size_type i = 0; i < num_tuples; i++) {
                 ptr[i] = dist(e);
             }
         }
     } 
     else {
         #pragma omp parallel for
-        for(size_t i = 0; i < num_tuples; i++) {
+        for(gamax::size_type i = 0; i < num_tuples; i++) {
             ptr[i] = i+start;
         }
         if(shuffle) {
@@ -142,7 +143,7 @@ void create_integral_relation_unique(T** relation, const size_t num_tuples,
  *
  * (This is derived from code originally written by Rene Mueller.)
  */
-inline std::vector<double> gen_zipf_lut(double zipf_factor, unsigned int alphabet_size) {
+inline std::vector<double> gen_zipf_lut(double zipf_factor, gamax::size_type alphabet_size) {
     std::vector<double> lut;
 
 	/*
@@ -152,13 +153,13 @@ inline std::vector<double> gen_zipf_lut(double zipf_factor, unsigned int alphabe
 	 *
 	 */
 	// scaling_factor = 0.0;
-	// for (unsigned int i = 1; i <= alphabet_size; i++)
+	// for (gamax::size_type i = 1; i <= alphabet_size; i++)
 	// 	scaling_factor += 1.0 / pow(i, zipf_factor);
 
 	/*
 	 * Generate the lookup table
 	 */
-	for (unsigned int i = 1; i <= alphabet_size; i++) {
+	for (gamax::size_type i = 1; i <= alphabet_size; i++) {
 		// sum += 1.0 / pow(i, zipf_factor);
         // lut.push_back(sum / scaling_factor);
         lut.push_back(1.0 / pow(i, zipf_factor));
@@ -171,10 +172,10 @@ inline std::vector<double> gen_zipf_lut(double zipf_factor, unsigned int alphabe
 
 // overload to generate zipf distribution
 template<typename T>
-void create_integral_relation_nonunique(T** relation, const size_t num_tuples,
+void create_integral_relation_nonunique(T** relation, const gamax::size_type num_tuples,
                                         bool pinned,
                                         double zipf_factor, 
-                                        unsigned int alphabet_size,
+                                        gamax::size_type alphabet_size,
                                         int seed = 42) {
     static_assert(std::is_integral<T>::value);
     
@@ -197,14 +198,14 @@ void create_integral_relation_nonunique(T** relation, const size_t num_tuples,
         zipf_distribution_t<T> dist(lut.begin(), lut.end());
         
         #pragma omp for
-        for(size_t i = 0; i < num_tuples; i++) {
+        for(gamax::size_type i = 0; i < num_tuples; i++) {
             (*relation)[i] = dist(e);
         }
     }
 }
 
 template<typename T>
-void create_fk_from_pk_uniform(T** fk, const size_t n_fk, const T* pk, const size_t n_pk, const int seed = 42, const bool pinned = false) {
+void create_fk_from_pk_uniform(T** fk, const gamax::size_type n_fk, const T* pk, const gamax::size_type n_pk, const int seed = 42, const bool pinned = false) {
     if(pinned) {
         cudaMallocHost((void**)fk, sizeof(T)*n_fk);
     }
@@ -216,7 +217,7 @@ void create_fk_from_pk_uniform(T** fk, const size_t n_fk, const T* pk, const siz
     auto remainder = n_fk % n_pk;
 
     #pragma omp parallel for
-    for(size_t i = 0; i < n_fold; i++) {
+    for(gamax::size_type i = 0; i < n_fold; i++) {
         memcpy((*fk) + i*n_pk, pk, sizeof(T)*n_pk);
     }
 
@@ -230,7 +231,7 @@ void create_fk_from_pk_uniform(T** fk, const size_t n_fk, const T* pk, const siz
 }
 
 template<typename T>
-void create_fk_from_pk_zipf(T** fk, const size_t n_fk, const T* pk, const size_t n_pk, const double zipf_factor, const int seed = 42, const bool pinned = false) {
+void create_fk_from_pk_zipf(T** fk, const gamax::size_type n_fk, const T* pk, const gamax::size_type n_pk, const double zipf_factor, const int seed = 42, const bool pinned = false) {
     auto lut = gen_zipf_lut(zipf_factor, n_pk);
 
     if(pinned) {
@@ -247,14 +248,14 @@ void create_fk_from_pk_zipf(T** fk, const size_t n_fk, const T* pk, const size_t
         std::default_random_engine e(seed+tid);
         
         #pragma omp for
-        for(size_t i = 0; i < n_fk; i++) {
+        for(gamax::size_type i = 0; i < n_fk; i++) {
             (*fk)[i] = pk[dist(e)];
         }
     }
 }
 
 template<typename T>
-void create_relation_with_identical_elem(T** relation, const size_t n, T elem, const bool pinned = false) {
+void create_relation_with_identical_elem(T** relation, const gamax::size_type n, T elem, const bool pinned = false) {
     if(pinned) {
         cudaMallocHost((void**)relation, sizeof(T)*n);
     }
@@ -263,18 +264,18 @@ void create_relation_with_identical_elem(T** relation, const size_t n, T elem, c
     }
 
     #pragma omp parallel for
-    for(size_t i = 0; i < n; i++) {
+    for(gamax::size_type i = 0; i < n; i++) {
         (*relation)[i] = elem;
     }
 }
 
 template<typename T>
-void adjust_selectivity(T* keys, const size_t n, const double selectivity, const T start, const int seed = 42) {
-    const size_t n_change = n * (1.0 - selectivity);
+void adjust_selectivity(T* keys, const gamax::size_type n, const double selectivity, const T start, const int seed = 42) {
+    const gamax::size_type n_change = n * (1.0 - selectivity);
     const T max = std::numeric_limits<T>::max();
 
     T k = start;
-    for(int i = 0; i < n_change; i++) {
+    for(gamax::size_type i = 0; i < n_change; i++) {
         keys[i] = start;
         k = (k < max) ? k+1 : start;
     }

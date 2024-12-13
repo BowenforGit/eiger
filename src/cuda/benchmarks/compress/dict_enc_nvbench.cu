@@ -24,7 +24,7 @@ __global__ void dict_ready_dict_enc_kernel(
 
     // load the dict into the shared memory
     #pragma unroll
-    for (size_t i = threadIdx.x; i < dict_size; i += blockDim.x)
+    for (gamax::size_type i = threadIdx.x; i < dict_size; i += blockDim.x)
     {
         dict_keys[i] = dict[i];
     }
@@ -32,13 +32,13 @@ __global__ void dict_ready_dict_enc_kernel(
 
     // use binary search to find the key in the dict
     #pragma unroll
-    for (size_t i = get_cuda_tid(); i < num_items; i += nthreads())
+    for (gamax::size_type i = get_cuda_tid(); i < num_items; i += nthreads())
     {
         Key key = keys[i];
         
-        int low = 0, high = dict_size - 1;
+        gamax::size_type low = 0, high = dict_size - 1;
         while(low <= high) {
-            int mid = (low + high) / 2;
+            auto mid = low + (high-low) / 2;
             if(dict_keys[mid] < key) {
                 low = mid + 1;
             } else if(dict_keys[mid] > key) {

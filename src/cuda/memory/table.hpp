@@ -75,7 +75,7 @@ public:
     ~table_view_base() = default;
 
     table_view_base(std::vector<std::unique_ptr<column>> const& cols) : _columns(cols.size()) {
-        for (int i = 0; i < cols.size(); ++i) {
+        for (gamax::size_type i = 0; i < cols.size(); ++i) {
             if constexpr (std::is_const_v<std::remove_pointer_t<decltype(std::declval<column_view_t>().data())>>) {
                 _columns[i] = cols[i]->view();
             } else {
@@ -86,7 +86,7 @@ public:
 
     table_view_base(std::vector<column_view_t> const& cols) : _columns(cols) {}
 
-    int num_columns() const noexcept {
+    gamax::size_type num_columns() const noexcept {
         return _columns.size();
     }
 
@@ -134,7 +134,7 @@ public:
 
     table(std::vector<std::unique_ptr<column>>&& columns);
 
-    int num_columns() const noexcept {
+    gamax::size_type num_columns() const noexcept {
         return _columns.size();
     }
 

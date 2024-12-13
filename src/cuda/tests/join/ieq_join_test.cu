@@ -39,7 +39,7 @@ namespace {
         ASSERT_EQ(res_view.num_columns(), rcols+scols-1);
         ASSERT_EQ(res_view.num_rows(), npk);
         ASSERT_TRUE(gamax::test::check_cols_eq_after_sort(res_view[0], r->view()[0]));
-        for(int i = 1; i < res_view.num_columns(); i++) {
+        for(gamax::size_type i = 1; i < res_view.num_columns(); i++) {
             ASSERT_TRUE(gamax::test::check_cols_eq(res_view[0], res_view[i]));
         }
     }
@@ -76,7 +76,7 @@ namespace {
         else {
             ASSERT_EQ(res_view.num_rows(), nfk / (static_cast<gamax::size_type>(1.0/match_ratio)));
         }
-        for(int i = 1; i < res_view.num_columns(); i++) {
+        for(gamax::size_type i = 1; i < res_view.num_columns(); i++) {
             ASSERT_TRUE(gamax::test::check_cols_eq(res_view[0], res_view[i]));
         }
     }
