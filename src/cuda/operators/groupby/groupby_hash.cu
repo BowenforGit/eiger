@@ -16,6 +16,7 @@
 #include "operators/groupby/aggregation.hpp"
 #include "operators/groupby/agg_func.cuh"
 #include "types/data_type.hpp"
+#include "types/sentinel.hpp"
 #include "agg_helper.cuh"
 #include <utils/device_info.hpp>
 
@@ -224,18 +225,8 @@ namespace {
             
             constexpr double load_factor = 0.25;
             std::size_t map_capacity = std::ceil(std::max(4096, estimated_num_groups) / load_factor);
-            gamax::size_type constexpr empty_key_sentinel     = -1; // FIXME: handle negative values and unsigned values correctly 
-            // gamax::size_type constexpr empty_value_sentinel = -1;      
+            gamax::size_type constexpr empty_key_sentinel     = gamax::sentinel<gamax::size_type>(); // FIXME: handle negative values and unsigned values correctly       
             auto cuco_allocator = *get_thrust_allocator<cuco::pair<Key, gamax::size_type>>(stream);   
-            // auto map = cuco::static_map{map_capacity,
-            //                         cuco::empty_key{empty_key_sentinel},
-            //                         cuco::empty_value{empty_value_sentinel},
-            //                         thrust::equal_to<Key>{},
-            //                         cuco::linear_probing<1, cuco::default_hash_function<Key>>{}
-            //                         , {}, {},
-            //                         cuco_allocator, stream
-            //                         };
-            // auto map_ref = map.ref(cuco::insert);
 
             auto key_ptr = key.get_column(0).data<Key>();
 

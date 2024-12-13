@@ -9,6 +9,8 @@
 #include <thrust/functional.h>
 #include <cuda/stream_ref>
 
+#include "types/sentinel.hpp"
+
 namespace gamax::compress {
 namespace {
     template<typename Encode>
@@ -22,8 +24,8 @@ namespace {
         {
             constexpr double load_factor = 0.3;
             gamax::size_type map_capacity = std::ceil(dict.size() / load_factor);
-            Key constexpr empty_key_sentinel     = -1; // FIXME: handle negative values and unsigned values correctly 
-            Encode constexpr empty_value_sentinel = -1;    
+            Key constexpr empty_key_sentinel     = gamax::sentinel<Key>(); // FIXME: handle negative values and unsigned values correctly 
+            Encode constexpr empty_value_sentinel = gamax::sentinel<Encode>();    
             auto cuco_allocator = *get_thrust_allocator<cuco::pair<Key, Encode>>(stream);   
             auto map = cuco::static_map{map_capacity,
                                         cuco::empty_key{empty_key_sentinel},

@@ -72,7 +72,7 @@ gamax::size_type get_join_output_alloc_size(
     gamax::table_view const& right,
     gamax::join::join_hint const& hint) {
 
-    if(hint.max_out != -1) return hint.max_out;
+    if(hint.max_out != 0) return hint.max_out;
     return std::min(
         hint.unique_left ? right.num_rows() : gamax::join::MAX_JOIN_OUTPUT_SIZE,
         hint.unique_right ? left.num_rows() : gamax::join::MAX_JOIN_OUTPUT_SIZE);

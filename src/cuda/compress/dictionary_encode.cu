@@ -10,6 +10,7 @@
 
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
+#include "types/sentinel.hpp"
 #include "memory/column.hpp"
 #include "memory/table.hpp"
 #include "utils/utils.cuh"
@@ -37,7 +38,7 @@ namespace {
         int64_t const loop_stride = gridDim.x * blockDim.x;
         int64_t idx               = blockDim.x * blockIdx.x + threadIdx.x;
 
-        EncodedT unintialized_flag = -2;
+        EncodedT unintialized_flag = gamax::sentinel<EncodedT>()-1; // TODO: not the best solution
         while (idx < num_items) {
             auto [slot, is_new_key] = map_ref.insert_and_find(cuco::pair{data[idx], unintialized_flag});
             auto ref = cuda::atomic_ref<EncodedT, cuda::thread_scope_device>{slot->second};
@@ -68,8 +69,8 @@ namespace {
             
             auto map_capacity = dictionary_size_hint == 0 ? column.size() : dictionary_size_hint;
             map_capacity = std::ceil(map_capacity / load_factor);
-            T constexpr empty_key_sentinel     = -1; // FIXME: handle negative values and unsigned values correctly 
-            encode_t constexpr empty_value_sentinel = -1;            
+            T constexpr empty_key_sentinel     = gamax::sentinel<T>(); // FIXME: handle negative values and unsigned values correctly 
+            encode_t constexpr empty_value_sentinel = gamax::sentinel<encode_t>();            
             auto map = cuco::static_map{map_capacity,
                                     cuco::empty_key{empty_key_sentinel},
                                     cuco::empty_value{empty_value_sentinel},

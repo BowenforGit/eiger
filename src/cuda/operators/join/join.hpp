@@ -32,7 +32,7 @@ namespace gamax {
             bool sorted_right {false};
             bool unique_left {false};
             bool unique_right {false};
-            gamax::size_type max_out {-1}; // upper bound on the output size (-1 means no limit)
+            gamax::size_type max_out {0}; // upper bound on the output size (0 means no limit)
             gamax::join::join_algo join_algo {gamax::join::AUTO_ALGO};
             gamax::join::materialization_algo mat_algo {gamax::join::AUTO_MAT};
         };

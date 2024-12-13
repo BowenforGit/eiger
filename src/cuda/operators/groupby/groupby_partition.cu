@@ -16,6 +16,7 @@
 #include "operators/groupby/load_balancer.cuh"
 #include "operators/groupby/agg_func.cuh"
 #include "types/data_type.hpp"
+#include "types/sentinel.hpp"
 #include "agg_helper.cuh"
 
 namespace gamax::groupby::partition {
@@ -72,8 +73,8 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
         const auto uend = units_end[i];
 
         auto raw_ref =
-            cuco::static_map_ref{cuco::empty_key<Key>{-1}, // TODO: reconsider the sentinel value
-                                cuco::empty_value<Value>{-1},
+            cuco::static_map_ref{cuco::empty_key<Key>{gamax::sentinel<Key>()}, // TODO: reconsider the sentinel value
+                                cuco::empty_value<Value>{gamax::sentinel<Value>()},
                                 thrust::equal_to<Key>{},
                                 cuco::linear_probing<cg_size, cuco::default_hash_function<Key>>{}, // the hash computation is actually not a bottleneck here
                                 cuco::thread_scope_block,
