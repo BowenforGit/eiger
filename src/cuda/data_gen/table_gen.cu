@@ -92,9 +92,9 @@ namespace {
                     thrust::cuda::par(*get_thrust_allocator()), 
                     thrust::counting_iterator<gamax::size_type>(0),
                     nkeys, 
-                    [src, inv_ratio] __device__ (gamax::size_type i) {
+                    [src, inv_ratio, match_ratio] __device__ (gamax::size_type i) {
                         constexpr T leftmost_one = static_cast<T>(1) << (sizeof(T) * 8 - 1);
-                        if(i % inv_ratio != 0) {
+                        if(i % inv_ratio != 0 || match_ratio == 0.0) {
                             src.data<T>()[i] += leftmost_one;
                         }
                     });
