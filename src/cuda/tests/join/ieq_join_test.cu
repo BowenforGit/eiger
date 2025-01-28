@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "operators/join/join.hpp"
+#include "operators/join/inner_join.hpp"
 #include "memory/column.hpp"
 #include "memory/table.hpp"
 #include "memory/mem_manager.hpp"

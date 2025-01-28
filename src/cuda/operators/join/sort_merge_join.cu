@@ -1,10 +1,11 @@
-#include "join.hpp"
+#include "inner_join.hpp"
 
 #include <memory>
 #include <vector>
 #include <cuda.h>
 #include <type_traits>
 
+#include "join.hpp"
 #include "materialize.hpp"
 #include "merge_path.cuh"
 #include "memory/column.hpp"
@@ -183,7 +184,7 @@ namespace {
         auto [sorted_right_key, sorted_right_val] = sort_transform(right[0], right[1], stream);
 
         // join
-        const auto alloc_out_size = get_join_output_alloc_size(left, right, hint); // number of rows in the output table to be allocated
+        const auto alloc_out_size = get_ieq_join_output_alloc_size(left, right, hint); // number of rows in the output table to be allocated
         auto [res_key, res_left, res_right] = merge_join(
             sorted_left_key->view(), sorted_right_key->view(), 
             sorted_left_val->view(), sorted_right_val->view(),
@@ -213,7 +214,7 @@ namespace {
         auto [sorted_right_key, sorted_right_val] = sort_transform(right[0], right[1], stream);
 
         // join
-        const auto alloc_out_size = get_join_output_alloc_size(left, right, hint); // number of rows in the output table to be allocated
+        const auto alloc_out_size = get_ieq_join_output_alloc_size(left, right, hint); // number of rows in the output table to be allocated
         auto [res_key, left_tid, right_tid] = merge_join(sorted_left_key->view(), sorted_right_key->view(), alloc_out_size, stream);
         sorted_left_key.reset(nullptr);
         sorted_right_key.reset(nullptr);
@@ -258,7 +259,7 @@ namespace {
         right_idx_seq.reset(nullptr);
 
         // join
-        const auto alloc_out_size = get_join_output_alloc_size(left, right, hint); // number of rows in the output table to be allocated
+        const auto alloc_out_size = get_ieq_join_output_alloc_size(left, right, hint); // number of rows in the output table to be allocated
         auto [res_key, left_tid, right_tid] = merge_join(
             sorted_left_key->view(), sorted_right_key->view(), 
             sorted_left_idx_seq->view(), sorted_right_idx_seq->view(), 
