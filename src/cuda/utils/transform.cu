@@ -4,12 +4,15 @@
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/shuffle.h>
+#include <cub/device/device_select.cuh>
 #include <memory>
+#include <stdexcept>
 
 #include "memory/column.hpp"
 #include "memory/mem_manager.hpp"
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
+#include "cub_wrapper.cuh"
 
 namespace gamax {
 namespace util {
@@ -48,6 +51,29 @@ namespace {
                 output.data<T>(), g);
         }
     };
+
+    struct compact_impl {
+        template <typename T>
+        auto operator()(
+            gamax::column_view const& input, 
+            gamax::column_view const& mask, 
+            gamax::size_type output_size,
+            cudaStream_t stream)
+        {
+            auto output = gamax::make_column<T>(output_size);
+            auto d_output_size = gamax::make_column<gamax::size_type>(1);
+
+            CALL_CUB_FUNC(cub::DeviceSelect::Flagged, 
+                input.template data<T>(),
+                mask.template data<bool>(),
+                output->template data<T>(),
+                d_output_size->template data<gamax::size_type>(),
+                input.size(),
+                stream);
+
+            return output;
+        }
+    };
 }
 
     std::unique_ptr<gamax::column> gather(
@@ -68,6 +94,51 @@ namespace {
         auto output = std::make_unique<gamax::column>(input.type(), input.size());
         type_dispatcher(input.type(), shuffle_impl{}, input, output->mutable_view(), seed, stream);
         return output;
+    }
+
+    std::unique_ptr<gamax::column> compact( 
+        gamax::column_view input, 
+        gamax::column_view mask, 
+        cudaStream_t stream)
+    {
+        auto output_size = thrust::reduce(
+            thrust::cuda::par(*get_thrust_allocator()).on(stream), 
+            mask.data<bool>(), 
+            mask.data<bool>() + mask.size(), 
+            0);
+        
+        return compact(input, mask, output_size, stream);
+    }
+
+    std::unique_ptr<gamax::column> compact( 
+        gamax::column_view input, 
+        gamax::column_view mask,
+        gamax::size_type output_size,
+        cudaStream_t stream)
+    {
+        return type_dispatcher(input.type(), compact_impl{}, input, mask, output_size, stream);
+    }
+
+    std::unique_ptr<gamax::table> compact(
+        gamax::table_view input, 
+        gamax::column_view mask, 
+        cudaStream_t stream) 
+    {
+        if(input.num_columns() == 0) {
+            throw std::runtime_error("compact: input table must have at least one column");
+        }
+
+        auto res = std::make_unique<gamax::table>();
+
+        for(gamax::size_type i = 0; i < input.num_columns(); i++) {
+            if(i == 0) {
+                res->add_column(compact(input[i], mask, stream));
+            } else {
+                res->add_column(compact(input[i], mask, res->num_rows(), stream));
+            }
+        }
+        
+        return res;
     }
 
 } // namespace device
