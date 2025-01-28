@@ -45,6 +45,7 @@ struct id_to_type_impl {
 GAMAX_TYPE_MAPPING(int16_t, type_id::INT16)
 GAMAX_TYPE_MAPPING(int32_t, type_id::INT32)
 GAMAX_TYPE_MAPPING(int64_t, type_id::INT64)
+GAMAX_TYPE_MAPPING(bool, type_id::BOOL8)
 // GAMAX_TYPE_MAPPING(uint8_t, type_id::UINT8)
 // GAMAX_TYPE_MAPPING(uint16_t, type_id::UINT16)
 // GAMAX_TYPE_MAPPING(uint32_t, type_id::UINT32)
@@ -78,27 +79,7 @@ __host__ __device__ __forceinline__ constexpr decltype(auto) type_dispatcher(gam
     case type_id::INT64:
       return f.template operator()<typename IdTypeMap<type_id::INT64>::type>(
         std::forward<Ts>(args)...);
-    // case type_id::UINT8:
-    //   return f.template operator()<typename IdTypeMap<type_id::UINT8>::type>(
-    //     std::forward<Ts>(args)...);
-    // case type_id::UINT16:
-    //   return f.template operator()<typename IdTypeMap<type_id::UINT16>::type>(
-    //     std::forward<Ts>(args)...);
-    // case type_id::UINT32:
-    //   return f.template operator()<typename IdTypeMap<type_id::UINT32>::type>(
-    //     std::forward<Ts>(args)...);
-    // case type_id::UINT64:
-    //   return f.template operator()<typename IdTypeMap<type_id::UINT64>::type>(
-    //     std::forward<Ts>(args)...);
-    // case type_id::FLOAT32:
-    //   return f.template operator()<typename IdTypeMap<type_id::FLOAT32>::type>(
-    //     std::forward<Ts>(args)...);
-    // case type_id::FLOAT64:
-    //   return f.template operator()<typename IdTypeMap<type_id::FLOAT64>::type>(
-    //     std::forward<Ts>(args)...);
-    // case type_id::BOOL8:
-    //   return f.template operator()<typename IdTypeMap<type_id::BOOL8>::type>(
-    //     std::forward<Ts>(args)...);
+    case type_id::BOOL8: // so far we do not allow the boolean type to be dispatched
     default: {
 #if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
       throw std::runtime_error("Invalid type_id.");
@@ -172,6 +153,9 @@ struct to_string_helper {
 
 inline __host__ __device__ std::size_t size_of(data_type element_type)
 {
+  if(element_type.id() == type_id::BOOL8) {
+    return sizeof(bool);
+  } // FIXME: this is a temporary solution
   return type_dispatcher(element_type, size_of_helper{});
 }
 
