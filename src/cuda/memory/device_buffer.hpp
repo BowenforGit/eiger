@@ -2,7 +2,7 @@
 
 #include <iostream>
 #include <cuda.h>
-#include "utils/utils.cuh"
+#include "memory/mem_manager.hpp"
 
 namespace gamax {
 class device_buffer {

@@ -26,7 +26,7 @@ struct reduction_helper {
         cudaStream_t stream)
     {
         using F = typename gamax::groupby::agg_fn_mapper<agg_kind, T>::F;
-        auto res = thrust::reduce(thrust::cuda::par(*get_thrust_allocator()), val.data<T>(), val.data<T>() + val.size(), F::identity, F{});
+        auto res = thrust::reduce(thrust::cuda::par(*get_thrust_allocator()).on(stream), val.data<T>(), val.data<T>() + val.size(), F::identity, F{});
         cudaMemcpyAsync(result_val.data<typename F::OutputType>(), &res, sizeof(res), cudaMemcpyHostToDevice, stream);
     }
 };

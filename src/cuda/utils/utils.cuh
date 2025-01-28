@@ -4,6 +4,7 @@
 #include <cub/cub.cuh> 
 #include <iostream>
 
+#include "types/data_type.hpp"
 #include "memory/mem_manager.hpp"
 #include "utils/check_error.hpp"
 
@@ -50,21 +51,21 @@ void for_(F func)
 }
 
 __host__ __device__
-inline int num_tb(const int N, const int threads_per_block=1024, const int items_per_thread=1) {
+inline gamax::size_type num_tb(const gamax::size_type N, const gamax::size_type threads_per_block=1024, const gamax::size_type items_per_thread=1) {
     return (N + threads_per_block*items_per_thread - 1) / (threads_per_block*items_per_thread);
 }
 
 // The following two utility functions only work for 1D thread layout
-__device__ __forceinline__ int get_cuda_tid() {
-    return threadIdx.x + blockDim.x * blockIdx.x;
+__device__ __forceinline__ gamax::size_type get_cuda_tid() {
+    return (gamax::size_type) threadIdx.x + (gamax::size_type) blockDim.x * (gamax::size_type) blockIdx.x;
 }
 
-__device__ __forceinline__ int nthreads() {
-    return blockDim.x * gridDim.x;
+__device__ __forceinline__ gamax::size_type nthreads() {
+    return (gamax::size_type) blockDim.x * (gamax::size_type) gridDim.x;
 }
 
 template<typename T>
-void print_gpu_arr(const T* arr, size_t n, size_t offset=0) {
+void print_gpu_arr(const T* arr, gamax::size_type n, gamax::size_type offset=0) {
     T* temp = new T[n];
     cudaMemcpy(temp, arr+offset, sizeof(T)*n, cudaMemcpyDeviceToHost);
     printf("%p: ", arr);
@@ -77,7 +78,7 @@ void print_gpu_arr(const T* arr, size_t n, size_t offset=0) {
 
 template<typename T>
 __global__ void fill_sequence(T* arr, const T start, const size_t N, const T step = 1) {
-    for(int t = get_cuda_tid(); t < N; t += nthreads()) {
+    for(gamax::size_type t = get_cuda_tid(); t < N; t += nthreads()) {
         arr[t] = start+t*step;
     }
 }
