@@ -17,7 +17,7 @@ enum class type_id {
     // UINT8,                   ///< 1 byte unsigned integer
     // UINT16,                  ///< 2 byte unsigned integer
     // UINT32,                  ///< 4 byte unsigned integer
-    // UINT64,                  ///< 8 byte unsigned integer
+    UINT64,                  ///< 8 byte unsigned integer
     // FLOAT32,                 ///< 4 byte floating point
     // FLOAT64,                 ///< 8 byte floating point
     // BOOL8,                   ///< Boolean using one byte per value, 0 == false, else true
