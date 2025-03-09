@@ -69,7 +69,7 @@ std::unique_ptr<gamax::table> inner_eq_join(
                 detail::ieq_sort_merge_join_gfur(left, right, hint, stream) :
                 detail::ieq_sort_merge_join_gftr(left, right, hint, stream);
         case gamax::join::HASH:
-            // return detail::ieq_hash_join(left, right, hint, stream);
+            return detail::ieq_hash_join(left, right, hint, stream);
         case gamax::join::PARTITION:
             return hint.mat_algo == gamax::join::GFUR ?
                 detail::ieq_partition_hash_join_gfur(left, right, hint, stream) :
