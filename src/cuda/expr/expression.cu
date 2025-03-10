@@ -10,7 +10,7 @@
 #include "memory/mem_manager.hpp"
 #include "memory/device_buffer.hpp"
 #include "expr/expression.cuh"
-#include "expr/scalar.hpp"
+#include "memory/scalar.hpp"
 
 namespace gamax::expression {
 namespace {

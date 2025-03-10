@@ -5,7 +5,7 @@
 #include <variant>
 
 #include "memory/column.hpp"
-#include "expr/scalar.hpp"
+#include "memory/scalar.hpp"
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
 
