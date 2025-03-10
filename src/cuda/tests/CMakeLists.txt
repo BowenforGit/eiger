@@ -16,6 +16,7 @@ set(testSources
     aggregate/aggregate_test.cu
     sort/sort_partition_test.cu
     memory/table_test.cu
+    test_header.cpp
 )
 
 if(USE_CUDA)

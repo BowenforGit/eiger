@@ -14,7 +14,6 @@
 #include <cub/block/block_shuffle.cuh>
 #include <cuda_pipeline.h>
 
-#include "types/tuple.cuh"
 #include "utils/utils.cuh"
 
 template<typename idx_t, typename cnt_t>
