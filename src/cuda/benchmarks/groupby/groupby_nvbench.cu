@@ -14,9 +14,6 @@
 
 #include "operators/groupby/groupby.hpp"
 #include "operators/groupby/aggregation.hpp"
-#include "operators/groupby/groupby_sort.hpp"
-#include "operators/groupby/groupby_partition.hpp"
-#include "operators/groupby/groupby_hash.hpp"
 #include "utils/utils.cuh"
 #include "memory/column.hpp"
 #include "memory/table.hpp"
@@ -85,21 +82,23 @@ void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
     }
 
     auto algo = state.get_string("algo");
-    auto f = gamax::groupby::sort::groupby;
-    // auto f = [](gamax::table& key_table, gamax::table& val_table, std::vector<gamax::groupby::aggregation_request>& requests, gamax::groupby::groupby_hint& hint, cudaStream_t stream) {
-    //     return gamax::groupby::sort::groupby(key_table, val_table, requests, hint, stream);
-    // };
+    auto f = gamax::groupby::groupby;
+
     if(algo == "sort_gfur") {
-        f = gamax::groupby::sort::groupby_gfur;
-    // } else if(algo == "partition") {
-    //     f = gamax::groupby::partition::groupby;
-    // } else if(algo == "partition_gfur") {
-    //     f = gamax::groupby::partition::groupby_gfur;
+        hint.groupby_algo = gamax::groupby::groupby_algo::SORT_GFUR;
+    } else if(algo == "sort") {
+        hint.groupby_algo = gamax::groupby::groupby_algo::SORT;
     } else if(algo == "hash") {
-        f = gamax::groupby::hash::groupby;
+        hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
     } else if(algo == "sort_opt") {
+        hint.groupby_algo = gamax::groupby::groupby_algo::SORT;
         hint.optimize_sort = true;
     }
+    // else if(algo == "partition") {
+    //     hint.groupby_algo = gamax::groupby::groupby_algo::PARTITION;
+    // } else if(algo == "partition_gfur") {
+    //     hint.groupby_algo = gamax::groupby::groupby_algo::PARTITION_GFUR;
+    // }
 
     state.set_cuda_stream(nvbench::make_cuda_stream_view(0));
     state.add_element_count(params.num_items, "NumElements");

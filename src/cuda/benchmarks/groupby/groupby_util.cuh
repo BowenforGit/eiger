@@ -14,8 +14,6 @@
 #include "memory/table.hpp"
 #include "operators/groupby/aggregation.hpp"
 #include "operators/groupby/agg_func.cuh"
-#include "operators/groupby/groupby_sort.hpp"
-#include "operators/groupby/groupby_partition.hpp"
 #include "types/type_dispatcher.hpp"
 #include "memory/mem_manager.hpp"
 
@@ -23,15 +21,6 @@
 
 namespace gamax {
 namespace groupby {
-enum groupby_algo {
-    GROUPBY_PARTITION,
-    GROUPBY_SORT,
-    GROUPBY_PARTITION_GFUR,
-    GROUPBY_SORT_GFUR,
-    GROUPBY_HASH,
-    GROUPBY_NOT_SUPPORTED
-};
-
 enum val_option {
     SEQ,
     ALL_ONES,
@@ -42,7 +31,7 @@ struct groupby_params {
     gamax::size_type num_items {4096};
     gamax::size_type num_groups {1024};
     double zipf_factor {0.0};
-    enum groupby_algo algo {GROUPBY_SORT};
+    gamax::groupby::groupby_algo algo {gamax::groupby::AUTO_ALGO};
     enum val_option val_opt {SEQ};
     gamax::size_type actual_num_groups {0};
     gamax::size_type num_aggs {1};

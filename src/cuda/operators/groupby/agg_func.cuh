@@ -94,4 +94,18 @@ struct Max {
         this->global_update(dst_idx, dst.data<OutputType>(), src.data<ValT>()[src_idx]);
     }
 };
+
+template<gamax::groupby::aggregation_id agg_kind, typename ValT>
+struct agg_fn_mapper {
+    using F = void;
+};
+
+#define AGG_FN_MAPPER(agg_kind, agg_name) \
+    template<typename ValT> \
+    struct agg_fn_mapper<gamax::groupby::aggregation_id::agg_kind, ValT> { \
+        using F = gamax::groupby::agg_name<ValT>; \
+    };
+
+AGG_FN_MAPPER(SUM, Sum)
+AGG_FN_MAPPER(MAX, Max)
 } // namespace gamax::groupby

@@ -15,7 +15,32 @@
 #include "operators/groupby/agg_func.cuh"
 #include "types/data_type.hpp"
 
-namespace gamax::groupby::aggregate {
+namespace gamax::groupby {
+namespace {
+struct agg_output_data_type_helper {
+    template <typename T>
+    gamax::data_type operator()(aggregation_id const& agg_kind) const {
+        switch(agg_kind) {
+            case gamax::groupby::aggregation_id::SUM:
+                return gamax::data_type{gamax::type_to_id<typename gamax::groupby::Sum<T>::OutputType>()};
+            case gamax::groupby::aggregation_id::MAX:
+                return gamax::data_type{gamax::type_to_id<typename gamax::groupby::Sum<T>::OutputType>()};
+            default:
+                throw std::runtime_error("Unsupported aggregation function");
+        }
+    }
+};
+}
+
+gamax::data_type agg_output_data_type(aggregation_id const& agg_kind, gamax::data_type const& type) {
+    return type_dispatcher(
+        type,
+        agg_output_data_type_helper{},
+        agg_kind);
+}
+
+namespace aggregate {
+
 namespace {
 template<gamax::groupby::aggregation_id agg_kind>
 struct reduction_helper {
@@ -51,6 +76,8 @@ struct dispatch_val_type_helper {
 DISPATCH_AGGREGATE(dispatch_val_type_helper)
 }
 
+
+
 std::unique_ptr<gamax::table> aggregate(
     gamax::table_view input, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
@@ -70,4 +97,5 @@ std::unique_ptr<gamax::table> aggregate(
 
     return std::make_unique<gamax::table>(std::move(final_columns)); 
 }
-} // namespace gamax::operators::groupby
+} // namespace aggregate
+} // namespace gamax::groupby

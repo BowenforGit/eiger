@@ -12,9 +12,6 @@
 #include "memory/table.hpp"
 #include "operators/groupby/aggregation.hpp"
 #include "operators/groupby/agg_func.cuh"
-#include "operators/groupby/groupby_sort.hpp"
-// #include "operators/groupby/groupby_partition.hpp"
-#include "operators/groupby/groupby_hash.hpp"
 #include "types/type_dispatcher.hpp"
 
 using namespace gamax::groupby;
@@ -24,7 +21,6 @@ template <typename KeyT, typename ValueT, typename AggT>
 void invoke_groupby_sort(KeyT* h_keys, 
                          ValueT* h_vals, 
                          const gamax::size_type num_items,
-                         gamax::groupby::groupby_algo algo,
                          KeyT*& h_out_keys,
                          typename AggT::OutputType*& h_out_vals,
                          gamax::size_type& num_groups,
@@ -47,21 +43,7 @@ void invoke_groupby_sort(KeyT* h_keys,
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     requests.push_back({1, gamax::groupby::aggregation_id::SUM});
 
-    std::unique_ptr<gamax::table> out_table_ptr = nullptr;
-
-    if(algo == gamax::groupby::groupby_algo::GROUPBY_SORT) {
-        out_table_ptr = gamax::groupby::sort::groupby(key_table.view(), val_table.view(), requests, hint, stream);
-    // } else if(algo == gamax::groupby::groupby_algo::GROUPBY_PARTITION) {
-    //     out_table_ptr = gamax::groupby::partition::groupby(key_table.view(), val_table.view(), requests, hint, stream);
-    } else if(algo == gamax::groupby::groupby_algo::GROUPBY_SORT_GFUR) {
-        out_table_ptr = gamax::groupby::sort::groupby_gfur(key_table.view(), val_table.view(), requests, hint, stream);
-    // } else if(algo == gamax::groupby::groupby_algo::GROUPBY_PARTITION_GFUR) {
-    //     out_table_ptr = gamax::groupby::partition::groupby_gfur(key_table.view(), val_table.view(), requests, hint, stream);
-    } else if(algo == gamax::groupby::groupby_algo::GROUPBY_HASH) {
-        out_table_ptr = gamax::groupby::hash::groupby(key_table.view(), val_table.view(), requests, hint, stream);
-    } else {
-        throw std::runtime_error("Unsupported groupby algorithm");
-    }
+    auto out_table_ptr = gamax::groupby::groupby(key_table.view(), val_table.view(), requests, hint, stream);
 
     auto& d_out_keys = out_table_ptr->get_column(0);
     auto& d_out_vals = out_table_ptr->get_column(2);
@@ -130,12 +112,13 @@ void test_groupby_sort(groupby_params& params, cudaStream_t stream = cudaStreamD
 
     gamax::groupby::groupby_hint hint;
     hint.groups_upper_bound = params.num_groups;
+    hint.groupby_algo = params.algo;
 
     KeyT* h_out_keys = nullptr;
     typename AggT::OutputType* h_out_vals = nullptr;
     gamax::size_type num_groups = 0;
     
-    invoke_groupby_sort<KeyT, int, AggT>(h_keys, h_vals, params.num_items, params.algo, h_out_keys, h_out_vals, num_groups, hint, stream);
+    invoke_groupby_sort<KeyT, int, AggT>(h_keys, h_vals, params.num_items, h_out_keys, h_out_vals, num_groups, hint, stream);
     check_groupby_result(h_keys, h_out_keys, h_out_vals, num_groups, params);
     
     free(h_keys);

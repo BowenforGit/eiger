@@ -4,7 +4,7 @@
 
 #include <memory>
 #include <vector>
-#include <cuda.h>
+#include <cuda_runtime_api.h>
 
 #include "memory/column.hpp"
 #include "memory/table.hpp"

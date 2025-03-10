@@ -45,6 +45,7 @@ if(USE_CUDA)
     list(APPEND srcs
         compress/dictionary_encode.cu
         operators/groupby/groupby_partition.cu
+        operators/groupby/groupby.cu
         operators/join/materialize.cu
         operators/join/sort_merge_join.cu
         operators/join/inner_join.cu
