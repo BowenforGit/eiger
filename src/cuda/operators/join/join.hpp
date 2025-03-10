@@ -1,11 +1,6 @@
 #pragma once
 
 #include "types/data_type.hpp"
-#include <memory>
-#include <cuda.h>
-
-#include "memory/column.hpp"
-#include "memory/table.hpp"
 
 namespace gamax {
     namespace join {

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <vector>
+#include <cuda_runtime_api.h>
 
 #include "memory/device_buffer.hpp"
 #include "memory/column.hpp"

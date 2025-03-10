@@ -11,6 +11,7 @@
 #include "memory/table.hpp"
 #include "memory/mem_manager.hpp"
 #include "containers/multimap.cuh"
+#include "types/sentinel.hpp"
 
 namespace gamax::join {
 namespace detail {

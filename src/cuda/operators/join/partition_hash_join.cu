@@ -12,6 +12,7 @@
 #include "types/type_dispatcher.hpp"
 #include "operators/partition/partition.hpp"
 #include "thrust/iterator/counting_iterator.h"
+#include "utils/utils.cuh"
 
 namespace gamax::join{
 namespace detail {

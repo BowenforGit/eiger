@@ -2,7 +2,7 @@
 
 #define CUB_STDERR
 
-#include <cuda.h> // cudaStream_t
+#include <cuda_runtime_api.h> // cudaStream_t
 #include <memory> // std::unique_ptr
 
 #include "types/data_type.hpp" // sort_order

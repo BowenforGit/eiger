@@ -1,13 +1,13 @@
 #pragma once
 
 #include <memory>
-#include <cuda.h>
+#include <cuda_runtime_api.h>
+#include <type_traits>
 
 #include "memory/device_buffer.hpp"
+#include "memory/scalar.hpp"
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
-#include "utils/sequence.cuh"
-
 namespace gamax {
 
 class column_view_base {
@@ -204,15 +204,18 @@ std::unique_ptr<T[]> copy_column_to_host(column_view col) {
     return host_col;
 }
 
-template<typename T = gamax::size_type>
+std::unique_ptr<column> make_sequence(
+    size_type size, 
+    gamax::scalar start, 
+    gamax::scalar step);
+
+template<typename T = gamax::size_type, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
 std::unique_ptr<column> make_sequence(
     size_type size, 
     T start = 0, 
-    T step = 1) {
-    
-    auto col = make_column(data_type{type_to_id<T>()}, size);
-    gamax::utils::device::create_sequence(col->data<T>(), size, start, step);
-    return col;
+    T step = 1) 
+{
+    return make_sequence(size, gamax::scalar(start), gamax::scalar(step));
 }
 
 template<typename column_view_type>

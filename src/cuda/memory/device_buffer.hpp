@@ -1,7 +1,7 @@
 #pragma once
 
 #include <iostream>
-#include <cuda.h>
+#include <cuda_runtime_api.h>
 #include "memory/mem_manager.hpp"
 
 namespace gamax {

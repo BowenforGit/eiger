@@ -4,6 +4,7 @@
 #include <list>
 #include <memory>
 #include <cassert>
+#include <cuda_runtime_api.h>
 
 #include "utils/check_error.hpp"
 

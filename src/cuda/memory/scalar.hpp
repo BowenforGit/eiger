@@ -1,7 +1,7 @@
 #pragma once
 
 #include <memory>
-#include <cuda.h>
+#include <cuda_runtime_api.h>
 #include <variant>
 
 #include "types/data_type.hpp"

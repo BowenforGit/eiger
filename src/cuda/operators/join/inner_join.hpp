@@ -1,10 +1,8 @@
 #pragma once
 
-#include "types/data_type.hpp"
 #include <memory>
-#include <cuda.h>
+#include <cuda_runtime_api.h>
 
-#include "memory/column.hpp"
 #include "memory/table.hpp"
 #include "operators/join/join.hpp"
 
