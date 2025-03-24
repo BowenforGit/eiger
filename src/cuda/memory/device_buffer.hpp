@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <cuda_runtime_api.h>
+#include <utility>
 #include "memory/mem_manager.hpp"
 
 namespace gamax {

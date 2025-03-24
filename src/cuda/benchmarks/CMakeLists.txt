@@ -17,6 +17,7 @@ endif()
 set(benchmarkSources 
     groupby/groupby_nvbench.cu
     compress/dict_enc_nvbench.cu
+    join/ieq_join_nvbench.cu
 )
 
 foreach(source IN LISTS benchmarkSources)

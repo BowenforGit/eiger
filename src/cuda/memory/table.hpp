@@ -163,6 +163,18 @@ public:
         _columns.push_back(std::move(col));
     }
 
+    std::unique_ptr<column> remove_column(gamax::size_type column_index)
+    {
+        if (column_index < 0 || column_index >= _columns.size())
+        {
+            throw std::invalid_argument("column out of range");
+        }
+
+        std::unique_ptr<column> col = std::move(_columns[column_index]);
+        _columns.erase(_columns.begin() + column_index);
+        return col;
+    }
+
     table_view view() const {
         return table_view(_columns);
     }
