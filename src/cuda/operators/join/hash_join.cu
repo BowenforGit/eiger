@@ -31,6 +31,7 @@ namespace {
 
             auto map = gamax::containers::multimap<Key>(
                 left.num_rows(), 
+                0.5, // use a default load factor of 0.5
                 gamax::sentinel<Key>(),
                 gamax::sentinel<tid_type>(),
                 *get_thrust_allocator<char>(stream),

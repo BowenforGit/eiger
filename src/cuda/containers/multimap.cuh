@@ -2,6 +2,7 @@
 
 #include <cuda.h>
 #include <memory>
+#include <cmath>
 
 #include "memory/column.hpp"
 #include "memory/table.hpp"
@@ -14,31 +15,36 @@
 namespace gamax::containers {
     template <typename Key,
               typename Value = gamax::size_type,  
-              typename Allocator = ThrustAllocator<char>>
+              typename Allocator = ThrustAllocator<char>,
+              int CG_SIZE = 2>
     class multimap {
     public:
         multimap(
             gamax::size_type capacity,
-            // double load_factor,
+            double load_factor, // (0.0, 1.0]
             Key empty_key_sentinel,
             Value empty_value_sentinel,
             Allocator allocator,
             cudaStream_t stream = cudaStreamDefault)
         : _cuco_allocator(allocator)
+        , _load_factor(load_factor)
         , _multimap(
-            capacity, 
-            // load_factor, 
+            capacity * std::ceil(1 / load_factor),
             cuco::empty_key{empty_key_sentinel}, 
             cuco::empty_value{empty_value_sentinel},
             stream,
-            _cuco_allocator) {}
+            _cuco_allocator) {
+                if(load_factor <= 0.0 || load_factor > 1.0) {
+                    throw std::invalid_argument("Load factor must be in the range (0.0, 1.0].");
+                }
+            }
     
         void insert_with_tids(
             gamax::column_view const& keys, 
             cudaStream_t stream = cudaStreamDefault) 
         {
             auto keys_ptr = keys.data<Key>();
-            auto tids = thrust::make_counting_iterator(0);
+            auto tids = thrust::make_counting_iterator(static_cast<Value>(0));
             auto kv_pairs = thrust::make_zip_iterator(thrust::make_tuple(keys_ptr, tids));
             auto num_keys = keys.size();
             _multimap.insert(kv_pairs, kv_pairs+num_keys, stream);
@@ -54,7 +60,7 @@ namespace gamax::containers {
             gamax::size_type output_size,
             cudaStream_t stream = cudaStreamDefault) 
         {
-            auto probe_tids_in = thrust::make_counting_iterator(0);
+            auto probe_tids_in = thrust::make_counting_iterator(static_cast<Value>(0));
             auto probe_kv_pairs_in = thrust::make_zip_iterator(thrust::make_tuple(probe_keys.data<Key>(), probe_tids_in));
             
             auto probe_keys_out = gamax::make_column<Key>(output_size);
@@ -72,7 +78,7 @@ namespace gamax::containers {
             auto [probe_kv_pairs_out_end, build_kv_pairs_out_end] 
             =  _multimap.pair_retrieve(
                 probe_kv_pairs_in, 
-                probe_kv_pairs_in+output_size, 
+                probe_kv_pairs_in + probe_keys.size(), 
                 probe_kv_pairs_out,
                 build_kv_pairs_out,
                 pair_equal,
@@ -88,9 +94,38 @@ namespace gamax::containers {
 
             return std::make_tuple(std::move(probe_keys_out), std::move(build_tids_out), std::move(probe_tids_out));
         }
+
+        std::size_t count(
+            gamax::column_view const& probe_keys,
+            cudaStream_t stream = cudaStreamDefault) 
+        {
+            auto probe_tids_in = thrust::make_counting_iterator(static_cast<Value>(0));
+            auto probe_kv_pairs_in = thrust::make_zip_iterator(thrust::make_tuple(probe_keys.data<Key>(), probe_tids_in));
+
+            auto pair_equal = [] __device__ (auto const& a, auto const& b) {
+                return a.first == b.first;
+            };
+
+            auto n_matches = _multimap.pair_count(
+                probe_kv_pairs_in,
+                probe_kv_pairs_in + probe_keys.size(),
+                pair_equal,
+                stream);
+            
+            return n_matches;
+        }
+
+        constexpr static int cg_size() {
+            return CG_SIZE;
+        }
+
+        double load_factor() const {
+            return _load_factor;
+        }
     
     private:
         Allocator _cuco_allocator;
-        cuco::static_multimap<Key, Value, cuda::thread_scope_device, Allocator> _multimap;
+        cuco::static_multimap<Key, Value, cuda::thread_scope_device, Allocator, cuco::legacy::double_hashing<cg_size(), cuco::default_hash_function<Key>>> _multimap;
+        double _load_factor;
     };
     } // namespace gamax::containers
