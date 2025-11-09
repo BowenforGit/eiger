@@ -4,6 +4,7 @@
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/shuffle.h>
+#include <thrust/reduce.h>
 #include <cub/device/device_select.cuh>
 #include <memory>
 #include <stdexcept>

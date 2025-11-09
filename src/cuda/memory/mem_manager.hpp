@@ -5,6 +5,7 @@
 #include <memory>
 #include <cassert>
 #include <cuda_runtime_api.h>
+#include <cuda/stream_ref>
 
 #include "utils/check_error.hpp"
 
@@ -83,6 +84,17 @@ public:
     void deallocate(T* ptr, std::size_t) {
         mm_->release(ptr, stream_);
     }
+
+    T* allocate(std::size_t num_items, cuda::stream_ref stream) {
+        T* ptr;
+        mm_->allocate((void**)&ptr, false, num_items*sizeof(T), stream.get());
+        return ptr;
+    }
+
+    void deallocate(T* ptr, std::size_t, cuda::stream_ref stream) {
+        mm_->release(ptr, stream.get());
+    }
+
 
     template <class U>
     ThrustAllocator(ThrustAllocator<U> const& other) noexcept

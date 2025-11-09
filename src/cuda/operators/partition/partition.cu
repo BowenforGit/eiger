@@ -1,4 +1,4 @@
-#include <cub/cub.cuh>
+#include <thrust/iterator/transform_iterator.h>
 
 #include "operators/partition/partition.hpp"
 #include "operators/sort/sort.hpp"
@@ -126,7 +126,7 @@ struct compute_partition_offsets_impl {
         auto offsets = gamax::make_idx_column(n_partitions+1);
        
         RadixExtractor<T> conversion_op(begin_bit, end_bit);
-        cub::TransformInputIterator<T, RadixExtractor<T>, const T*> itr(partitioned_key_col.data<T>(), conversion_op);
+        auto itr = thrust::make_transform_iterator(partitioned_key_col.data<T>(), conversion_op);
         
         CALL_CUB_FUNC(cub::DeviceHistogram::HistogramEven, itr, d_counts_out_ptr->data<gamax::size_type>(), n_partitions+1, 0, n_partitions, num_items);
         CALL_CUB_FUNC(cub::DeviceScan::InclusiveSum, d_counts_out_ptr->data<gamax::size_type>(), offsets->data<gamax::size_type>(), n_partitions);

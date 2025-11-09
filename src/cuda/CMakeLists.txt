@@ -12,11 +12,17 @@ else(USE_CUDA)
     CPMAddPackage(
         NAME cuco
         GITHUB_REPOSITORY NVIDIA/cuCollections
-        GIT_TAG d92aefb3b64d45c945566d01b9dc500b197095eb
+        GIT_TAG dev
         OPTIONS
             "BUILD_TESTS OFF"
             "BUILD_BENCHMARKS OFF"
             "BUILD_EXAMPLES OFF"
+    )
+
+    CPMAddPackage(
+        NAME CCCL
+        GITHUB_REPOSITORY nvidia/cccl
+        GIT_TAG main # Fetches the latest commit on the main branch
     )
 
     CPMAddPackage(
@@ -44,7 +50,7 @@ set(srcs
 if(USE_CUDA)
     list(APPEND srcs
         compress/dictionary_encode.cu
-        operators/groupby/groupby_partition.cu
+        # operators/groupby/groupby_partition.cu
         operators/groupby/groupby.cu
         operators/join/materialize.cu
         operators/join/sort_merge_join.cu
@@ -65,6 +71,7 @@ if(USE_ROCM)
     target_link_libraries(gamax PUBLIC hipco)
 else(USE_CUDA)
     target_link_libraries(gamax PUBLIC cuco)
+    target_link_libraries(gamax PUBLIC CCCL::CCCL)
 endif()
     
 add_subdirectory(benchmarks)

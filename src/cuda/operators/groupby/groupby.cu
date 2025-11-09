@@ -27,10 +27,10 @@ namespace gamax::groupby {
                 return gamax::groupby::sort::groupby_gfur(key, val, agg_requests, hint, stream);
             case gamax::groupby::HASH:
                 return gamax::groupby::hash::groupby(key, val, agg_requests, hint, stream);
-            case gamax::groupby::PARTITION:
-                return gamax::groupby::partition::groupby(key, val, agg_requests, hint, stream);
-            case gamax::groupby::PARTITION_GFUR:
-                return gamax::groupby::partition::groupby_gfur(key, val, agg_requests, hint, stream);
+            // case gamax::groupby::PARTITION:
+            //     return gamax::groupby::partition::groupby(key, val, agg_requests, hint, stream);
+            // case gamax::groupby::PARTITION_GFUR:
+            //     return gamax::groupby::partition::groupby_gfur(key, val, agg_requests, hint, stream);
             default:
                 throw std::runtime_error("Unsupported groupby algorithm");
         }

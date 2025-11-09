@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.23.1 FATAL_ERROR)
 
 project(GPUOPS LANGUAGES CXX)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 option(USE_CUDA "Use CUDA. [Default=ON]" OFF)
 option(USE_ROCM "Use ROCm. [Default=OFF]" OFF)
 option(BUILD_TEST "Build tests. [Default=ON]" ON)
@@ -80,7 +82,7 @@ else(USE_CUDA)
     # no need to add -fopenmp because it is automatically added by cmake when linking to OpenMP::OpenMP_CXX
     set(NVCC_COMPILER_FLAGS "")
     list(APPEND NVCC_COMPILER_FLAGS --expt-relaxed-constexpr --expt-extended-lambda --extended-lambda)
-    list(APPEND NVCC_COMPILER_FLAGS -Xptxas="-v" -lineinfo)
+    list(APPEND NVCC_COMPILER_FLAGS -lineinfo)
     list(APPEND NVCC_COMPILER_FLAGS -Xcompiler -O3 --compile)
 
     target_compile_options(
