@@ -29,7 +29,7 @@ namespace {
         {
             auto max_output_size = get_ieq_join_output_alloc_size(left, right, hint);
 
-            auto map = gamax::containers::multimap<Key>(
+            auto map = gamax::containers::multimap(
                 left.num_rows(), 
                 0.5, // use a default load factor of 0.5
                 gamax::sentinel<Key>(),

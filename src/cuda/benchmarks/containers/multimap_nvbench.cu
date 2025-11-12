@@ -21,6 +21,8 @@
 #include "memory/table.hpp"
 #include "types/sentinel.hpp"
 
+constexpr int CG_SIZE = 2;
+
 struct multimap_params {
     int64_t unique_keys;
     int64_t build_num_keys;
@@ -75,7 +77,7 @@ void bench_multimap_count(nvbench::state& state, nvbench::type_list<KeyT>) {
 
     cudaStream_t stream = 0;
 
-    auto map = gamax::containers::multimap(
+    auto map = gamax::containers::multimap<KeyT, value_t, ThrustAllocator<char>, CG_SIZE>(
             build->num_rows(),
             params.load_factor,
             gamax::sentinel<KeyT>(),
