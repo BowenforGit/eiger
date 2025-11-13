@@ -14,7 +14,7 @@ void test_expr_eval_unary() {
     auto col = gamax::make_column_from_host(val, 4);
 
     gamax::expression::ExprTree et;
-    int id = et.add_node(gamax::expression::ColumnExpr(col->view()));
+    auto id = et.add_node(gamax::expression::ColumnExpr(col->view()));
     id = et.add_node(gamax::expression::LeftShiftExpr(col->type(), 2), id);
     et.add_node(gamax::expression::NegateExpr(col->type()), id, true);
 
@@ -50,10 +50,10 @@ void test_expr_eval_any() {
     auto col2 = gamax::make_column_from_host(val2, 4);
 
     gamax::expression::ExprTree et;
-    int id1 = et.add_node(gamax::expression::ColumnExpr(col1->view()));
-    int id2 = et.add_node(gamax::expression::ConstantExpr(gamax::scalar(1)));
-    int id3 = et.add_node(gamax::expression::SubstractExpr(col1->type()), id2, id1);
-    int id4 = et.add_node(gamax::expression::ColumnExpr(col2->view()));
+    auto id1 = et.add_node(gamax::expression::ColumnExpr(col1->view()));
+    auto id2 = et.add_node(gamax::expression::ConstantExpr(gamax::scalar(1)));
+    auto id3 = et.add_node(gamax::expression::SubstractExpr(col1->type()), id2, id1);
+    auto id4 = et.add_node(gamax::expression::ColumnExpr(col2->view()));
     et.add_node(gamax::expression::MultiplyExpr(col1->type()), id3, id4, true);
 
     auto res = gamax::expression::evaluate_expr(et);

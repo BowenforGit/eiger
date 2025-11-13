@@ -15,6 +15,7 @@
 #include <cuda_pipeline.h>
 
 #include "utils/utils.cuh"
+#include "atomics/atomics.cuh"
 
 template<typename idx_t, typename cnt_t>
 struct merge_range {
@@ -47,7 +48,7 @@ struct merge_range {
 
 
     __device__ __forceinline__ merge_range align_to_zero() { 
-        return merge_range(0, a_count(), a_count(), total());
+        return merge_range(static_cast<idx_t>(0), a_count(), a_count(), total());
     }
 
     __device__ __forceinline__ merge_range partition(cnt_t mp0, cnt_t diag0, cnt_t mp1, cnt_t diag1) {
@@ -60,7 +61,7 @@ struct merge_range {
 
 template<typename key_t>
 __device__ __forceinline__ gamax::size_type merge_path(key_t* a_keys, gamax::size_type a_count, key_t* b_keys, gamax::size_type b_count, gamax::size_type diag) {
-    gamax::size_type begin = max(0, diag - b_count);
+    gamax::size_type begin = max(static_cast<gamax::size_type>(0), diag - b_count);
     gamax::size_type end = min(diag, a_count);
 
     while(begin < end) {
@@ -99,15 +100,15 @@ __global__ void merge_keys_mp_improv(key_t* l_sorted_keys, key_t* r_sorted_keys,
                               gamax::size_type* g_counter, gamax::size_type circular_buffer_size, bool agg_only = false) {
     auto cta = blockIdx.x;
     constexpr int NV = NT*VT;
-    const int tile_size = min(NV, (nl+nr)-(gamax::size_type)cta*NV);
 
     // obtain the merge partition belonging to this thread block
-    merge_range mr_global(cta, NV, nr, nl, partitions);
+    merge_range mr_global(static_cast<gamax::size_type>(cta), static_cast<gamax::size_type>(NV), nr, nl, partitions);
 
     auto a = r_sorted_keys + mr_global.a_begin; // needles
     auto b = l_sorted_keys + mr_global.b_begin; // haystacks
 
-    __shared__ key_t keys[NV+1];
+    extern __shared__ char smem_buffer[]; 
+    key_t* keys = reinterpret_cast<key_t*>(smem_buffer); // #items = NV+1
 
     for(int i = 0; i < VT; i++) {
         auto index = i*NT+threadIdx.x;
@@ -119,7 +120,7 @@ __global__ void merge_keys_mp_improv(key_t* l_sorted_keys, key_t* r_sorted_keys,
 
     // partition the workloads within the thread block
     auto mr_cta = mr_global.align_to_zero();
-    gamax::size_type diag0 = min(mr_cta.total(), VT*threadIdx.x);
+    gamax::size_type diag0 = min(mr_cta.total(), static_cast<gamax::size_type>(VT*threadIdx.x));
     gamax::size_type diag1 = min(mr_cta.total(), diag0+VT);
     gamax::size_type mp0[1];
     gamax::size_type mp1[1];
@@ -219,7 +220,7 @@ __global__ void merge_keys_mp_improv(key_t* l_sorted_keys, key_t* r_sorted_keys,
             }
 
             if (lid == 0) {
-                ptr = atomicAdd(g_counter, SHUFFLE_SIZE);
+                ptr = gamax::atomic::atomic_add(g_counter, static_cast<gamax::size_type>(SHUFFLE_SIZE));
             }
 
             ptr = __shfl_sync(__activemask(), ptr, 0);
@@ -247,7 +248,7 @@ __global__ void merge_keys_mp_improv(key_t* l_sorted_keys, key_t* r_sorted_keys,
     }
 
     if (lid == 0) {
-        ptr = atomicAdd(g_counter, shuffle_ptr);
+        ptr = gamax::atomic::atomic_add(g_counter, static_cast<gamax::size_type>(shuffle_ptr));
     }
 
     ptr = __shfl_sync(__activemask(), ptr, 0);
@@ -281,13 +282,18 @@ void merge_path(KeyIt r_sorted_keys, KeyIt s_sorted_keys,
                                                     r_sorted_keys, nr,
                                                     NT*VT,
                                                     partitions, n);
-
-    merge_keys_mp_improv<NT, VT><<<num_tb(nr+ns, NT, VT), NT>>>(r_sorted_keys, s_sorted_keys, 
+    
+    CHECK_LAST_CUDA_ERROR();
+    std::size_t smem_bytes = sizeof(*r_sorted_keys) * (NT*VT+1); // keys array
+    auto fn = merge_keys_mp_improv<NT, VT, typename std::remove_pointer<KeyIt>::type, RValIt, SValIt, ROutIt, SOutIt>;
+    CHECK_CUDA_ERROR(cudaFuncSetAttribute(fn, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_bytes));
+    merge_keys_mp_improv<NT, VT><<<num_tb(nr+ns, NT, VT), NT, smem_bytes>>>(r_sorted_keys, s_sorted_keys, 
                                                             r_sorted_vals, s_sorted_vals,
                                                             nr, ns,
                                                             partitions, keys_out, 
                                                             r_out, s_out, 
                                                             g_counter, circular_buffer_size);
+    CHECK_LAST_CUDA_ERROR();
 
     gamax::size_type temp;
     cudaMemcpy(&temp, g_counter, sizeof(gamax::size_type), cudaMemcpyDefault);

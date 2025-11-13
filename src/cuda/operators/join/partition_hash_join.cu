@@ -13,6 +13,7 @@
 #include "operators/partition/partition.hpp"
 #include "thrust/iterator/counting_iterator.h"
 #include "utils/utils.cuh"
+#include "atomics/atomics.cuh"
 
 namespace gamax::join{
 namespace detail {
@@ -112,7 +113,7 @@ namespace {
             auto s_len = s_end - s_start;
 
             auto n_units = (s_len + threshold - 1)/threshold;
-            auto pos = atomicAdd(total_work, n_units);
+            auto pos = gamax::atomic::atomic_add(total_work, static_cast<gamax::size_type>(n_units));
 
             #pragma unroll
             for(int i = 0; i < n_units; i++, pos++, s_len -= threshold, s_start += threshold) {
@@ -157,9 +158,9 @@ namespace {
         ValIt Ps, 
         const uint64_t*  R_offsets, // offsets of partitions in R (inclusive prefix sum)
         const uint64_t*  S_offsets, // offsets of partitions in S (inclusive prefix sum)
-        const int*  n_work_units, // number of work units 
+        const gamax::size_type*  n_work_units, // number of work units 
         partition_hash_join_params params,
-        int*        results,
+        gamax::size_type*        results,
         KeyT*       keys_out, 
         ValT*       r_output, 
         ValT*       s_output, 
@@ -174,7 +175,7 @@ namespace {
         const int tid = threadIdx.x;
         const int block = blockIdx.x;
         const int pwidth = gridDim.x;
-        const int buckets_cnt = *n_work_units;
+        const auto buckets_cnt = *n_work_units;
         const int lid = tid % 32;
         const int wid = tid / 32;
         const int nwarps = blockDim.x/32;
@@ -292,7 +293,7 @@ namespace {
                             }
 
                             if (lid == 0) {
-                                ptr = atomicAdd(results, shuffle_space_size);
+                                ptr = gamax::atomic::atomic_add(results, static_cast<gamax::size_type>(shuffle_space_size));
                             }
 
                             ptr = __shfl_sync(__activemask(), ptr, 0);
@@ -325,7 +326,7 @@ namespace {
         }
 
         if (lid == 0) {
-            ptr = atomicAdd(results, shuffle_ptr);
+            ptr = gamax::atomic::atomic_add(results, static_cast<gamax::size_type>(shuffle_ptr));
         }
 
         ptr = __shfl_sync(__activemask(), ptr, 0);

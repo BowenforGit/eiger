@@ -128,7 +128,12 @@ struct compute_partition_offsets_impl {
         RadixExtractor<T> conversion_op(begin_bit, end_bit);
         auto itr = thrust::make_transform_iterator(partitioned_key_col.data<T>(), conversion_op);
         
-        CALL_CUB_FUNC(cub::DeviceHistogram::HistogramEven, itr, d_counts_out_ptr->data<gamax::size_type>(), n_partitions+1, 0, n_partitions, num_items);
+        // HistogramEven requires the counter variable must have a type supported by atomicAdd(_block)
+        if constexpr (gamax::use_64bit_size_type) {
+            CALL_CUB_FUNC(cub::DeviceHistogram::HistogramEven, itr, d_counts_out_ptr->data<unsigned long long>(), n_partitions+1, 0, n_partitions, num_items);
+        } else {
+            CALL_CUB_FUNC(cub::DeviceHistogram::HistogramEven, itr, d_counts_out_ptr->data<gamax::size_type>(), n_partitions+1, 0, n_partitions, num_items);
+        }
         CALL_CUB_FUNC(cub::DeviceScan::InclusiveSum, d_counts_out_ptr->data<gamax::size_type>(), offsets->data<gamax::size_type>(), n_partitions);
 
         return offsets;

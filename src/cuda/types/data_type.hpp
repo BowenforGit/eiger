@@ -2,9 +2,11 @@
 
 #include <limits>
 #include <cstdint>
+#include <type_traits>
 
 namespace gamax {
-using size_type = int32_t;
+using size_type = int64_t;
+constexpr bool use_64bit_size_type = std::is_same<size_type, int64_t>::value;
 constexpr size_type MAXIMUM_SIZE = std::numeric_limits<size_type>::max();
 
 enum class type_id {

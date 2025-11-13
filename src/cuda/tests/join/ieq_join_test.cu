@@ -115,9 +115,9 @@ namespace {
 
 IEQ_JOIN_TEST_CASE_SUITE(IEQ_PARTITION_HASH_JOIN_GFTR, gamax::join::join_algo::PARTITION, gamax::join::materialization_algo::GFTR)
 IEQ_JOIN_TEST_CASE_SUITE(IEQ_PARTITION_HASH_JOIN_GFUR, gamax::join::join_algo::PARTITION, gamax::join::materialization_algo::GFUR)
+IEQ_JOIN_TEST_CASE_SUITE(IEQ_HASH_JOIN, gamax::join::join_algo::HASH, gamax::join::materialization_algo::GFTR) // materialization does not matter 
 IEQ_JOIN_TEST_CASE_SUITE(IEQ_SORT_MERGE_JOIN_GFTR, gamax::join::join_algo::SORT, gamax::join::materialization_algo::GFTR)
 IEQ_JOIN_TEST_CASE_SUITE(IEQ_SORT_MERGE_JOIN_GFUR, gamax::join::join_algo::SORT, gamax::join::materialization_algo::GFUR)
-// IEQ_JOIN_TEST_CASE_SUITE(IEQ_HASH_JOIN, gamax::join::join_algo::HASH, gamax::join::materialization_algo::GFTR) // materialization does not matter 
 
 int main(int argc, char **argv) {
   testing::InitGoogleTest(&argc, argv);

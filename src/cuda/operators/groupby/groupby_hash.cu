@@ -18,6 +18,7 @@
 #include "types/data_type.hpp"
 #include "types/sentinel.hpp"
 #include "agg_helper.cuh"
+#include "atomics/atomics.cuh"
 #include <utils/device_info.hpp>
 
 
@@ -61,7 +62,7 @@ namespace {
             auto [iter, is_new_key] = set_ref.insert_and_find(idx);
             
             if (is_new_key) {
-                sparse_group_ids[idx] = atomicAdd(num_groups, 1);
+                sparse_group_ids[idx] = gamax::atomic::atomic_add(num_groups, static_cast<gamax::size_type>(1));
                 keys_out[sparse_group_ids[idx]] = keys[idx];
             } 
 
@@ -224,7 +225,7 @@ namespace {
             auto res = std::make_unique<gamax::table>(std::move(final_columns));
             
             constexpr double load_factor = 0.25;
-            std::size_t map_capacity = std::ceil(std::max(4096, estimated_num_groups) / load_factor);
+            std::size_t map_capacity = std::ceil(std::max(static_cast<gamax::size_type>(4096), estimated_num_groups) / load_factor);
             gamax::size_type constexpr empty_key_sentinel     = gamax::sentinel<gamax::size_type>(); // FIXME: handle negative values and unsigned values correctly       
             auto cuco_allocator = *get_thrust_allocator<cuco::pair<Key, gamax::size_type>>(stream);   
 

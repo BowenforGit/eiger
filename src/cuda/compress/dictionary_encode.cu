@@ -14,6 +14,7 @@
 #include "memory/column.hpp"
 #include "memory/table.hpp"
 #include "utils/utils.cuh"
+#include "atomics/atomics.cuh"
 
 namespace gamax::compress {
 namespace {
@@ -45,7 +46,7 @@ namespace {
             
             EncodedT encoded_value{0};
             if (is_new_key) {
-                encoded_value = atomicAdd(dict_size, 1);
+                encoded_value = gamax::atomic::atomic_add(dict_size, static_cast<gamax::size_type>(1));
                 ref.store(encoded_value, cuda::memory_order_release);
             } 
             else {
