@@ -83,7 +83,14 @@ else(USE_CUDA)
     set(NVCC_COMPILER_FLAGS "")
     list(APPEND NVCC_COMPILER_FLAGS --expt-relaxed-constexpr --expt-extended-lambda --extended-lambda)
     list(APPEND NVCC_COMPILER_FLAGS -lineinfo)
-    list(APPEND NVCC_COMPILER_FLAGS -Xcompiler -O3 --compile)
+    list(APPEND NVCC_COMPILER_FLAGS --compile)
+
+    # Add optimization flags based on build type
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        list(APPEND NVCC_COMPILER_FLAGS -Xcompiler -O3)
+    else()
+        list(APPEND NVCC_COMPILER_FLAGS -g -G)
+    endif()
 
     target_compile_options(
         common
