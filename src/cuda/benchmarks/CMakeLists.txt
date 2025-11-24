@@ -21,6 +21,8 @@ set(benchmarkSources
     containers/multimap_nvbench.cu
     containers/map_nvbench.cu
     sort/sort_nvbench.cu
+    select/select_fast_nvbench.cu
+    select/select_handwritten_nvbench.cu
 )
 
 foreach(source IN LISTS benchmarkSources)

@@ -59,7 +59,8 @@ if(USE_CUDA)
         operators/join/semi_hash_join.cu
         operators/join/partition_hash_join.cu
         operators/join/hash_join.cu
-        expr/expression.cu
+        operators/select/select.cu
+        expr/expr_fast.cu
     )
 endif()
 

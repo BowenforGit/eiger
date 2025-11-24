@@ -25,7 +25,8 @@ if(USE_CUDA)
         compress/dictionary_encode_test.cu
         join/ieq_join_test.cu
         join/semi_join_test.cu
-        expr/expr_test.cu
+        select/select_fast_test.cu
+        expr/expr_fast_test.cu
     )
 endif()
 
