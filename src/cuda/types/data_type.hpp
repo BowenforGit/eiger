@@ -11,7 +11,7 @@ constexpr size_type MAXIMUM_SIZE = std::numeric_limits<size_type>::max();
 
 enum class type_id {
     EMPTY,                   ///< Always null with no underlying data
-    // INT8,                    ///< 1 byte signed integer
+    INT8,                    ///< 1 byte signed integer
     INT16,                   ///< 2 byte signed integer
     INT32,                   ///< 4 byte signed integer
     INT64,                   ///< 8 byte signed integer
@@ -22,7 +22,6 @@ enum class type_id {
     UINT64,                  ///< 8 byte unsigned integer
     // FLOAT32,                 ///< 4 byte floating point
     // FLOAT64,                 ///< 8 byte floating point
-    // BOOL8,                   ///< Boolean using one byte per value, 0 == false, else true
     // `NUM_TYPE_IDS` must be last!
     NUM_TYPE_IDS  ///< Total number of type ids
 };

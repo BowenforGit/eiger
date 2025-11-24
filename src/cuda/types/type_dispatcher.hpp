@@ -41,7 +41,7 @@ struct id_to_type_impl {
   };
 #endif
 
-// GAMAX_TYPE_MAPPING(int8_t, type_id::INT8)
+GAMAX_TYPE_MAPPING(int8_t, type_id::INT8)
 GAMAX_TYPE_MAPPING(int16_t, type_id::INT16)
 GAMAX_TYPE_MAPPING(int32_t, type_id::INT32)
 GAMAX_TYPE_MAPPING(int64_t, type_id::INT64)
@@ -52,7 +52,6 @@ GAMAX_TYPE_MAPPING(bool, type_id::BOOL8)
 GAMAX_TYPE_MAPPING(uint64_t, type_id::UINT64)
 // GAMAX_TYPE_MAPPING(float, type_id::FLOAT32)
 // GAMAX_TYPE_MAPPING(double, type_id::FLOAT64)
-// GAMAX_TYPE_MAPPING(bool, type_id::BOOL8)
 
 #define size_type_id type_to_id<gamax::size_type>()
 
@@ -67,9 +66,9 @@ __host__ __device__ __forceinline__ constexpr decltype(auto) type_dispatcher(gam
                                                                           Ts&&... args)
 {
   switch (dtype.id()) {
-    // case type_id::INT8:
-    //   return f.template operator()<typename IdTypeMap<type_id::INT8>::type>(
-    //     std::forward<Ts>(args)...);
+    case type_id::INT8:
+      return f.template operator()<typename IdTypeMap<type_id::INT8>::type>(
+        std::forward<Ts>(args)...);
     case type_id::INT16:
       return f.template operator()<typename IdTypeMap<type_id::INT16>::type>(
         std::forward<Ts>(args)...);
@@ -79,11 +78,14 @@ __host__ __device__ __forceinline__ constexpr decltype(auto) type_dispatcher(gam
     case type_id::INT64:
       return f.template operator()<typename IdTypeMap<type_id::INT64>::type>(
         std::forward<Ts>(args)...);
-    case type_id::BOOL8: // so far we do not allow the boolean type to be dispatched
+    case type_id::BOOL8: 
+      return f.template operator()<typename IdTypeMap<type_id::BOOL8>::type>(
+        std::forward<Ts>(args)...);
     case type_id::UINT64: // so far we do not allow the uint64_t type to be dispatched
     default: {
 #if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
-      throw std::runtime_error("Invalid type_id.");
+      std::string type_id = std::to_string(static_cast<int>(dtype.id()));
+      throw std::runtime_error("Invalid type_id: " + type_id);
 #else
       GAMAX_UNREACHABLE("Invalid type_id.");
 #endif
@@ -153,11 +155,7 @@ struct to_string_helper {
 };
 
 inline __host__ __device__ std::size_t size_of(data_type element_type)
-{
-  if(element_type.id() == type_id::BOOL8) {
-    return sizeof(bool);
-  } // FIXME: this is a temporary solution
-  
+{ 
   if(element_type.id() == type_id::UINT64) {
     return sizeof(uint64_t);
   }

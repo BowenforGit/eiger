@@ -18,43 +18,37 @@ namespace atomic {
                          static_cast<U>(compare), 
                          static_cast<U>(val));
     }
+    
+    template<typename T, std::enable_if_t<sizeof(T) < 4, int> = 0>
+    __device__ __forceinline__ T atomic_add(T* address, T val) {
+        GAMAX_UNREACHABLE("[Eiger] atomicAdd does not support types smaller than 4 bytes");
+    }
 
-    template<typename T>
+    template<typename T, std::enable_if_t<sizeof(T) >= 4 && sizeof(T) < 8, int> = 0>
     __device__ __forceinline__ T atomic_add(T* address, T val) {
         return atomicAdd(address, val);
     }
 
-    template<>
-    __device__ __forceinline__ int64_t atomic_add<int64_t>(int64_t* address, int64_t val) {
+    template<typename T, std::enable_if_t<sizeof(T) == 8, int> = 0>
+    __device__ __forceinline__ T atomic_add(T* address, T val) {
         return atomicAdd(reinterpret_cast<unsigned long long*>(address), 
                          static_cast<unsigned long long>(val));
     }
 
-    template<>
-    __device__ __forceinline__ long long int atomic_add<long long int>(long long int* address, long long int val) {
-        return atomicAdd(reinterpret_cast<unsigned long long*>(address), 
-                         static_cast<unsigned long long>(val));
+    template<typename T, std::enable_if_t<sizeof(T) < 4, int> = 0>
+    __device__ __forceinline__ T atomic_max(T* address, T val) {
+        GAMAX_UNREACHABLE("atomicMax does not support types smaller than 4 bytes");
     }
 
-    template<>
-    __device__ __forceinline__ int16_t atomic_add<int16_t>(int16_t* address, int16_t val) {
-        GAMAX_UNREACHABLE("atomicAdd does not support 16-bit integers");
-    }
-
-    template<typename T>
+    template<typename T, std::enable_if_t<sizeof(T) >= 4 && sizeof(T) < 8, int> = 0>
     __device__ __forceinline__ T atomic_max(T* address, T val) {
         return atomicMax(address, val);
     }
 
-    template<>
-    __device__ __forceinline__ int64_t atomic_max<int64_t>(int64_t* address, int64_t val) {
+    template<typename T, std::enable_if_t<sizeof(T) == 8, int> = 0>
+    __device__ __forceinline__ T atomic_max(T* address, T val) {
         return atomicMax(reinterpret_cast<long long int*>(address), 
                          static_cast<long long int>(val));
     }
-
-    template<>
-    __device__ __forceinline__ int16_t atomic_max<int16_t>(int16_t* address, int16_t val) {
-        GAMAX_UNREACHABLE("atomicMax does not support 16-bit integers");
-    }
-}
-}
+} // namespace atomic
+} // namespace gamax

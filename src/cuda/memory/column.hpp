@@ -176,14 +176,14 @@ template <typename T>
 std::unique_ptr<column> make_column_from_host(T* host_data, size_type num_items) {
     gamax::device_buffer buffer(num_items * sizeof(T), false);
     cudaMemcpy(buffer.data(), host_data, num_items * sizeof(T), cudaMemcpyHostToDevice);
-    return std::make_unique<column>(gamax::data_type{gamax::type_to_id<T>()}, num_items, std::move(buffer));
+    return std::make_unique<column>(gamax::data_type{gamax::type_to_id<std::__remove_cvref_t<T>>()}, num_items, std::move(buffer));
 }
 
 template <typename T>
 std::unique_ptr<column> make_column_from_device(T* device_data, size_type num_items) {
     gamax::device_buffer buffer(num_items * sizeof(T), false);
     cudaMemcpy(buffer.data(), device_data, num_items * sizeof(T), cudaMemcpyDeviceToDevice);
-    return std::make_unique<column>(gamax::data_type{gamax::type_to_id<T>()}, num_items, std::move(buffer));
+    return std::make_unique<column>(gamax::data_type{gamax::type_to_id<std::__remove_cvref_t<T>>()}, num_items, std::move(buffer));
 }
 
 template <typename T>
