@@ -56,6 +56,134 @@ bool verify_table_result(
     return true;
 }
 
+// Test: Float data type with arithmetic predicate
+void test_select_float_arithmetic() {
+    std::vector<std::vector<float>> input_data = {
+        {1.5f, 2.5f, 3.5f, 4.5f, 5.5f},  // col1
+        {0.5f, 1.0f, 1.5f, 2.0f, 2.5f}   // col2
+    };
+    auto table = make_test_table(input_data);
+
+    // Build expression: col[0] * col[1] > 5.0
+    auto float_type = gamax::data_type(gamax::type_id::FLOAT32);
+    auto expr = ExprTree::greater_than(
+        ExprTree::multiply(
+            ExprTree::column(0, float_type),
+            ExprTree::column(1, float_type)
+        ),
+        ExprTree::constant(gamax::scalar(5.0f))
+    );
+
+    auto result = gamax::select::select(table->view(), expr);
+
+    // Expected: rows where col1 * col2 > 5.0
+    // Row 0: 1.5*0.5=0.75 (no), Row 1: 2.5*1.0=2.5 (no), Row 2: 3.5*1.5=5.25 (yes)
+    // Row 3: 4.5*2.0=9.0 (yes), Row 4: 5.5*2.5=13.75 (yes)
+    std::vector<std::vector<float>> expected_data = {
+        {3.5f, 4.5f, 5.5f},  // col1
+        {1.5f, 2.0f, 2.5f}   // col2
+    };
+
+    ASSERT_TRUE(verify_table_result(result->view(), expected_data));
+}
+
+// Test: Double data type with comparison predicate
+void test_select_double_comparison() {
+    std::vector<std::vector<double>> input_data = {
+        {1.5, 2.5, 3.5, 4.5, 5.5},  // col1
+        {2.0, 2.5, 3.0, 5.0, 4.0}   // col2
+    };
+    auto table = make_test_table(input_data);
+
+    // Build expression: col[0] >= col[1]
+    auto double_type = gamax::data_type(gamax::type_id::FLOAT64);
+    auto expr = ExprTree::greater_equal(
+        ExprTree::column(0, double_type),
+        ExprTree::column(1, double_type)
+    );
+
+    auto result = gamax::select::select(table->view(), expr);
+
+    // Expected: rows where col1 >= col2
+    // Row 0: 1.5>=2.0 (no), Row 1: 2.5>=2.5 (yes), Row 2: 3.5>=3.0 (yes)
+    // Row 3: 4.5>=5.0 (no), Row 4: 5.5>=4.0 (yes)
+    std::vector<std::vector<double>> expected_data = {
+        {2.5, 3.5, 5.5},  // col1
+        {2.5, 3.0, 4.0}   // col2
+    };
+
+    ASSERT_TRUE(verify_table_result(result->view(), expected_data));
+}
+
+// Test: Float with complex expression and logical operators
+void test_select_float_complex() {
+    std::vector<std::vector<float>> input_data = {
+        {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f},  // col1
+        {1.5f, 2.5f, 3.5f, 4.5f, 5.5f, 6.5f}   // col2
+    };
+    auto table = make_test_table(input_data);
+
+    // Build expression: (col[0] + col[1] > 6.0) && (col[0] < 5.0)
+    auto float_type = gamax::data_type(gamax::type_id::FLOAT32);
+    auto expr = ExprTree::logical_and(
+        ExprTree::greater_than(
+            ExprTree::add(
+                ExprTree::column(0, float_type),
+                ExprTree::column(1, float_type)
+            ),
+            ExprTree::constant(gamax::scalar(6.0f))
+        ),
+        ExprTree::less_than(
+            ExprTree::column(0, float_type),
+            ExprTree::constant(gamax::scalar(5.0f))
+        )
+    );
+
+    auto result = gamax::select::select(table->view(), expr);
+
+    // Expected: rows where (col1 + col2 > 6.0) AND (col1 < 5.0)
+    // Row 0: 1.0+1.5=2.5>6.0 (no), Row 1: 2.0+2.5=4.5>6.0 (no)
+    // Row 2: 3.0+3.5=6.5>6.0 && 3.0<5.0 (yes), Row 3: 4.0+4.5=8.5>6.0 && 4.0<5.0 (yes)
+    // Row 4: 5.0+5.5=10.5>6.0 && 5.0<5.0 (no), Row 5: 6.0+6.5=12.5>6.0 && 6.0<5.0 (no)
+    std::vector<std::vector<float>> expected_data = {
+        {3.0f, 4.0f},  // col1
+        {3.5f, 4.5f}   // col2
+    };
+
+    ASSERT_TRUE(verify_table_result(result->view(), expected_data));
+}
+
+// Test: Double with division and comparison
+void test_select_double_division() {
+    std::vector<std::vector<double>> input_data = {
+        {10.0, 20.0, 30.0, 40.0, 50.0},  // col1
+        {2.0, 4.0, 5.0, 8.0, 10.0}       // col2
+    };
+    auto table = make_test_table(input_data);
+
+    // Build expression: col[0] / col[1] >= 5.0
+    auto double_type = gamax::data_type(gamax::type_id::FLOAT64);
+    auto expr = ExprTree::greater_equal(
+        ExprTree::divide(
+            ExprTree::column(0, double_type),
+            ExprTree::column(1, double_type)
+        ),
+        ExprTree::constant(gamax::scalar(5.0))
+    );
+
+    auto result = gamax::select::select(table->view(), expr);
+
+    // Expected: rows where col1 / col2 >= 5.0
+    // Row 0: 10.0/2.0=5.0 (yes), Row 1: 20.0/4.0=5.0 (yes), Row 2: 30.0/5.0=6.0 (yes)
+    // Row 3: 40.0/8.0=5.0 (yes), Row 4: 50.0/10.0=5.0 (yes)
+    std::vector<std::vector<double>> expected_data = {
+        {10.0, 20.0, 30.0, 40.0, 50.0},  // col1
+        {2.0, 4.0, 5.0, 8.0, 10.0}       // col2
+    };
+
+    ASSERT_TRUE(verify_table_result(result->view(), expected_data));
+}
+
 // Test 1: Single column predicate with high selectivity (>80%)
 // Predicate: col1 > 1 (selects 8 out of 10 rows = 80%)
 void test_select_single_column_high_selectivity() {
@@ -655,6 +783,22 @@ void test_select_with_shift_operators() {
 } // anonymous namespace
 
 // Google Test cases
+TEST(SelectFastTest, FloatArithmetic) {
+    test_select_float_arithmetic();
+}
+
+TEST(SelectFastTest, DoubleComparison) {
+    test_select_double_comparison();
+}
+
+TEST(SelectFastTest, FloatComplex) {
+    test_select_float_complex();
+}
+
+TEST(SelectFastTest, DoubleDivision) {
+    test_select_double_division();
+}
+
 TEST(SelectFastTest, SingleColumnHighSelectivity) {
     test_select_single_column_high_selectivity();
 }

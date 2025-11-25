@@ -30,6 +30,116 @@ TEST(ExprFastTest, ConstantExpr) {
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
+// Test: Float data type arithmetic
+TEST(ExprFastTest, FloatArithmetic) {
+    float val1[] = {1.5f, 2.5f, 3.5f, 4.5f};
+    float val2[] = {0.5f, 1.0f, 1.5f, 2.0f};
+    auto col1 = gamax::make_column_from_host(val1, 4);
+    auto col2 = gamax::make_column_from_host(val2, 4);
+    
+    std::vector<std::unique_ptr<gamax::column>> columns;
+    columns.push_back(std::move(col1));
+    columns.push_back(std::move(col2));
+    auto table = gamax::make_table(std::move(columns));
+    
+    // Create expression tree: column[0] * column[1] + 1.0
+    auto float_type = gamax::data_type(gamax::type_id::FLOAT32);
+    auto expr = ExprTree::add(
+        ExprTree::multiply(
+            ExprTree::column(0, float_type),
+            ExprTree::column(1, float_type)
+        ),
+        ExprTree::constant(gamax::scalar(1.0f))
+    );
+    
+    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    
+    float expected[] = {1.5f * 0.5f + 1.0f, 2.5f * 1.0f + 1.0f, 3.5f * 1.5f + 1.0f, 4.5f * 2.0f + 1.0f};
+    auto expected_col = gamax::make_column_from_host(expected, 4);
+    ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
+}
+
+// Test: Double data type arithmetic
+TEST(ExprFastTest, DoubleArithmetic) {
+    double val1[] = {1.5, 2.5, 3.5, 4.5};
+    double val2[] = {0.5, 1.0, 1.5, 2.0};
+    auto col1 = gamax::make_column_from_host(val1, 4);
+    auto col2 = gamax::make_column_from_host(val2, 4);
+    
+    std::vector<std::unique_ptr<gamax::column>> columns;
+    columns.push_back(std::move(col1));
+    columns.push_back(std::move(col2));
+    auto table = gamax::make_table(std::move(columns));
+    
+    // Create expression tree: (column[0] - column[1]) / 2.0
+    auto double_type = gamax::data_type(gamax::type_id::FLOAT64);
+    auto expr = ExprTree::divide(
+        ExprTree::subtract(
+            ExprTree::column(0, double_type),
+            ExprTree::column(1, double_type)
+        ),
+        ExprTree::constant(gamax::scalar(2.0))
+    );
+    
+    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    
+    double expected[] = {(1.5 - 0.5) / 2.0, (2.5 - 1.0) / 2.0, (3.5 - 1.5) / 2.0, (4.5 - 2.0) / 2.0};
+    auto expected_col = gamax::make_column_from_host(expected, 4);
+    ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
+}
+
+// Test: Float comparison
+TEST(ExprFastTest, FloatComparison) {
+    float val1[] = {1.5f, 2.5f, 3.5f, 4.5f};
+    float val2[] = {2.0f, 2.5f, 3.0f, 5.0f};
+    auto col1 = gamax::make_column_from_host(val1, 4);
+    auto col2 = gamax::make_column_from_host(val2, 4);
+    
+    std::vector<std::unique_ptr<gamax::column>> columns;
+    columns.push_back(std::move(col1));
+    columns.push_back(std::move(col2));
+    auto table = gamax::make_table(std::move(columns));
+    
+    // Create expression tree: column[0] >= column[1]
+    auto float_type = gamax::data_type(gamax::type_id::FLOAT32);
+    auto expr = ExprTree::greater_equal(
+        ExprTree::column(0, float_type),
+        ExprTree::column(1, float_type)
+    );
+    
+    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    
+    bool expected[] = {false, true, true, false};
+    auto expected_col = gamax::make_column_from_host(expected, 4);
+    ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
+}
+
+// Test: Double comparison
+TEST(ExprFastTest, DoubleComparison) {
+    double val1[] = {1.5, 2.5, 3.5, 4.5};
+    double val2[] = {2.0, 2.5, 3.0, 5.0};
+    auto col1 = gamax::make_column_from_host(val1, 4);
+    auto col2 = gamax::make_column_from_host(val2, 4);
+    
+    std::vector<std::unique_ptr<gamax::column>> columns;
+    columns.push_back(std::move(col1));
+    columns.push_back(std::move(col2));
+    auto table = gamax::make_table(std::move(columns));
+    
+    // Create expression tree: column[0] < column[1]
+    auto double_type = gamax::data_type(gamax::type_id::FLOAT64);
+    auto expr = ExprTree::less_than(
+        ExprTree::column(0, double_type),
+        ExprTree::column(1, double_type)
+    );
+    
+    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    
+    bool expected[] = {true, false, false, true};
+    auto expected_col = gamax::make_column_from_host(expected, 4);
+    ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
+}
+
 // Test: Column access
 TEST(ExprFastTest, ColumnExpr) {
     int val[] = {1, 2, 3, 4};

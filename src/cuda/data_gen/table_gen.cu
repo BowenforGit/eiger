@@ -93,9 +93,16 @@ namespace {
                     thrust::counting_iterator<gamax::size_type>(0),
                     nkeys, 
                     [src, inv_ratio, match_ratio] __device__ (gamax::size_type i) {
-                        constexpr T leftmost_one = static_cast<T>(1) << (sizeof(T) * 8 - 1);
-                        if(i % inv_ratio != 0 || match_ratio == 0.0) {
-                            src.data<T>()[i] += leftmost_one;
+                        if constexpr (std::is_integral_v<T>) {
+                            constexpr T leftmost_one = static_cast<T>(1) << (sizeof(T) * 8 - 1);
+                            if(i % inv_ratio != 0 || match_ratio == 0.0) {
+                                src.data<T>()[i] += leftmost_one;
+                            }
+                        } else if constexpr (std::is_floating_point_v<T>) {
+                            // For floating point types, we just take the negative of the value
+                            if(i % inv_ratio != 0 || match_ratio == 0.0) {
+                                src.data<T>()[i] = -src.data<T>()[i];
+                            }
                         }
                     });
                 

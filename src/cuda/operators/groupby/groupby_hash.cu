@@ -196,7 +196,18 @@ namespace {
     };
 
     struct hash_groupby_fast_impl {
-        template<typename Key>
+        template<typename Key, typename std::enable_if_t<!cuco::is_bitwise_comparable_v<Key>, int> = 0>
+        std::unique_ptr<gamax::table> operator()(
+            gamax::table_view key,
+            gamax::table_view val,
+            std::vector<gamax::groupby::aggregation_request>& agg_requests,
+            gamax::groupby::groupby_hint& hint,
+            cudaStream_t stream = cudaStreamDefault) 
+        {
+            throw std::runtime_error("Hash-based groupby with non-bitwise-comparable keys is not supported yet");
+        }
+
+        template<typename Key, typename std::enable_if_t<cuco::is_bitwise_comparable_v<Key>, int> = 0>
         std::unique_ptr<gamax::table> operator()(
             gamax::table_view key,
             gamax::table_view val,

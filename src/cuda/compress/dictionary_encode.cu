@@ -59,7 +59,17 @@ namespace {
     }
 
     struct dictionary_encode_impl {
-        template<typename T>
+        template<typename T, std::enable_if_t<!cuco::is_bitwise_comparable_v<T>, int> = 0>
+        std::pair<std::unique_ptr<gamax::column>, gamax::size_type> operator()(
+            const gamax::column& column, 
+            const gamax::size_type dictionary_size_hint,
+            const double load_factor,
+            cudaStream_t stream) 
+        {
+            throw std::runtime_error("Dictionary encoding is not supported for non-integral types.");
+        }
+
+        template<typename T, std::enable_if_t<cuco::is_bitwise_comparable_v<T>, int> = 0>
         std::pair<std::unique_ptr<gamax::column>, gamax::size_type> operator()(
             const gamax::column& column, 
             const gamax::size_type dictionary_size_hint,

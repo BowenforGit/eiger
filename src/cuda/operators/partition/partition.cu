@@ -105,9 +105,17 @@ struct RadixExtractor
     int begin_bit;
     int mask;
     __host__ __device__ RadixExtractor(int begin_bit, int end_bit) : begin_bit(begin_bit), mask((1 << (end_bit - begin_bit)) - 1) {}
+    
+    template<typename U = T, std::enable_if_t<std::is_integral<U>::value, int> = 0>
     __host__ __device__ __forceinline__
     T operator()(const T &a) const {
         return (a >> begin_bit) & mask;
+    }
+
+    template<typename U = T, std::enable_if_t<!std::is_integral<U>::value, int> = 0>
+    __device__ __forceinline__
+    T operator()(const T &a) const {
+        GAMAX_UNREACHABLE("Cannot extract radix from non-integral type");
     }
 };
 

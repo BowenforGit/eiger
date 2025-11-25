@@ -16,6 +16,8 @@ public:
         int16_t int16_v;
         int32_t int32_v;
         int64_t int64_v;
+        float float32_v;
+        double float64_v;
     };
     __host__ __device__ scalar() = default;
     __host__ __device__ scalar(type_id type, scalar_data_type data) 
@@ -27,6 +29,8 @@ public:
     __host__ __device__ constexpr scalar(int16_t data) : _data{.int16_v = data}, _type(gamax::type_id::INT16) {}
     __host__ __device__ constexpr scalar(int32_t data) : _data{.int32_v = data}, _type(gamax::type_id::INT32) {}
     __host__ __device__ constexpr scalar(int64_t data) : _data{.int64_v = data}, _type(gamax::type_id::INT64) {}
+    __host__ __device__ constexpr scalar(float data) : _data{.float32_v = data}, _type(gamax::type_id::FLOAT32) {}
+    __host__ __device__ constexpr scalar(double data) : _data{.float64_v = data}, _type(gamax::type_id::FLOAT64) {}
     
     template<typename T>
     __host__ __device__ constexpr T get() const noexcept {
@@ -40,9 +44,12 @@ public:
             return _data.int32_v;
         } else if constexpr (std::is_same_v<T, int64_t>) {
             return _data.int64_v;
+        } else if constexpr (std::is_same_v<T, float>) {
+            return _data.float32_v;
+        } else if constexpr (std::is_same_v<T, double>) {
+            return _data.float64_v;
         } else {
-            // Fallback or error handling if needed, though static_assert is better
-            return T{};
+            static_assert(sizeof(T) == 0, "Unsupported type for scalar::get");
         }
     }
 
@@ -63,6 +70,14 @@ public:
         } else if constexpr (std::is_same_v<T, int64_t>) {
             _data.int64_v = value;
             _type = gamax::type_id::INT64;
+        } else if constexpr (std::is_same_v<T, float>) {
+            _data.float32_v = value;
+            _type = gamax::type_id::FLOAT32;
+        } else if constexpr (std::is_same_v<T, double>) {
+            _data.float64_v = value;
+            _type = gamax::type_id::FLOAT64;
+        } else {
+            static_assert(sizeof(T) == 0, "Unsupported type for scalar::set");
         }
     }
 

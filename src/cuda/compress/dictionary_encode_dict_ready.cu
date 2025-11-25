@@ -15,7 +15,17 @@ namespace gamax::compress {
 namespace {
     template<typename Encode>
     struct dict_ready_dict_enc_helper {
-        template<typename Key>
+        template<typename Key, std::enable_if_t<!cuco::is_bitwise_comparable_v<Key>, int> = 0>
+        void operator()(
+            const gamax::column_view keys, 
+            const gamax::column_view dict, 
+            gamax::mutable_column_view encoded_keys, 
+            cudaStream_t stream)
+        {
+            throw std::runtime_error("Dictionary encoding is not supported for non-integral type.");
+        }
+
+        template<typename Key, std::enable_if_t<cuco::is_bitwise_comparable_v<Key>, int> = 0>
         void operator()(
             const gamax::column_view keys, 
             const gamax::column_view dict, 

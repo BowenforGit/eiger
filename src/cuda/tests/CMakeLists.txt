@@ -27,6 +27,7 @@ if(USE_CUDA)
         join/semi_join_test.cu
         select/select_fast_test.cu
         expr/expr_fast_test.cu
+        types/floating_point_test.cu
     )
 endif()
 

@@ -20,7 +20,7 @@ namespace {
     using tid_type = gamax::size_type;
 
     struct hash_join_impl {
-        template<typename Key, std::enable_if_t<sizeof(Key) == sizeof(cuda::atomic<Key>), int> = 0>
+        template<typename Key, std::enable_if_t<sizeof(Key) == sizeof(cuda::atomic<Key>) && cuco::is_bitwise_comparable_v<Key>, int> = 0>
         std::unique_ptr<gamax::table> operator()(
             gamax::table_view left, 
             gamax::table_view right,
@@ -58,14 +58,18 @@ namespace {
             return res_table;
         }   
 
-        template<typename Key, std::enable_if_t<sizeof(Key) != sizeof(cuda::atomic<Key>), int> = 0>
+        template<typename Key, std::enable_if_t<sizeof(Key) != sizeof(cuda::atomic<Key>) || !cuco::is_bitwise_comparable_v<Key>, int> = 0>
         std::unique_ptr<gamax::table> operator()(
             gamax::table_view left, 
             gamax::table_view right,
             gamax::join::join_hint const& hint,
             cudaStream_t stream)
         {
-            throw std::runtime_error("Hash join only supports atomic types");
+            if constexpr (sizeof(Key) != sizeof(cuda::atomic<Key>)) {
+                throw std::runtime_error("Hash join only supports atomic types");
+            } else {
+                throw std::runtime_error("Hash join only supports bitwise comparable types");
+            }
         } 
     };
 } // namespace

@@ -137,6 +137,19 @@ __device__ void evaluate_one(
                     op2));
             return;
         }
+        case ExprId::Divide: {
+            auto op1 = s.load(e.operand_regs[0]);
+            auto op2 = s.load(e.operand_regs[1]);
+            s.store(
+                e.return_reg,
+                gamax::double_type_dispatcher(
+                    op1.type(),
+                    op2.type(),
+                    detail::divide_helper{},
+                    op1,
+                    op2));
+            return;
+        }
         case ExprId::GreaterThan: {
             auto op1 = s.load(e.operand_regs[0]);
             auto op2 = s.load(e.operand_regs[1]);
@@ -356,17 +369,25 @@ __device__ void evaluate_one(
             return;
         }
         case ExprId::LeftShift: {
-            auto op1 = s.load(e.operand_regs[0]);
-            s.store(
-                e.return_reg,
-                op1 << e.data.lshift.bits);
+            if constexpr (!std::is_integral<T>::value) {
+                GAMAX_UNREACHABLE("Only integral types can be left-shifted.");
+            } else {
+                auto op1 = s.load(e.operand_regs[0]);
+                s.store(
+                    e.return_reg,
+                    op1 << e.data.lshift.bits);
+            }
             return;
         }
         case ExprId::RightShift: {
-            auto op1 = s.load(e.operand_regs[0]);
-            s.store(
-                e.return_reg,
-                op1 >> e.data.rshift.bits);
+            if constexpr (!std::is_integral<T>::value) {
+                GAMAX_UNREACHABLE("Only integral types can be right-shifted.");
+            } else {
+                auto op1 = s.load(e.operand_regs[0]);
+                s.store(
+                    e.return_reg,
+                    op1 >> e.data.rshift.bits);
+            }
             return;
         }
         case ExprId::Add: {
@@ -391,6 +412,14 @@ __device__ void evaluate_one(
             s.store(
                 e.return_reg,
                 op1 * op2);
+            return;
+        }
+        case ExprId::Divide: {
+            auto op1 = s.load(e.operand_regs[0]);
+            auto op2 = s.load(e.operand_regs[1]);
+            s.store(
+                e.return_reg,
+                op1 / op2);
             return;
         }
         case ExprId::GreaterThan: {

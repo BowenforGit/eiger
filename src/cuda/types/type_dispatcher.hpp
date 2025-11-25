@@ -50,8 +50,8 @@ GAMAX_TYPE_MAPPING(bool, type_id::BOOL8)
 // GAMAX_TYPE_MAPPING(uint16_t, type_id::UINT16)
 // GAMAX_TYPE_MAPPING(uint32_t, type_id::UINT32)
 GAMAX_TYPE_MAPPING(uint64_t, type_id::UINT64)
-// GAMAX_TYPE_MAPPING(float, type_id::FLOAT32)
-// GAMAX_TYPE_MAPPING(double, type_id::FLOAT64)
+GAMAX_TYPE_MAPPING(float, type_id::FLOAT32)
+GAMAX_TYPE_MAPPING(double, type_id::FLOAT64)
 
 #define size_type_id type_to_id<gamax::size_type>()
 
@@ -80,6 +80,12 @@ __host__ __device__ __forceinline__ constexpr decltype(auto) type_dispatcher(gam
         std::forward<Ts>(args)...);
     case type_id::BOOL8: 
       return f.template operator()<typename IdTypeMap<type_id::BOOL8>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::FLOAT32:
+      return f.template operator()<typename IdTypeMap<type_id::FLOAT32>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::FLOAT64:
+      return f.template operator()<typename IdTypeMap<type_id::FLOAT64>::type>(
         std::forward<Ts>(args)...);
     case type_id::UINT64: // so far we do not allow the uint64_t type to be dispatched
     default: {

@@ -342,7 +342,27 @@ namespace {
     }
 
     struct join_copartitions_impl {
-        template<typename KeyT, typename ValT>
+        template<typename KeyT, typename ValT,
+                 typename std::enable_if_t<!std::is_integral<KeyT>::value, int> = 0>
+        void operator()(
+            gamax::column_view left_key,
+            gamax::column_view left_val,
+            gamax::column_view left_offs,
+            gamax::column_view right_key,
+            gamax::column_view right_val,
+            gamax::column_view right_offs,
+            partition_hash_join_params const& params,
+            gamax::mutable_column_view res_key,
+            gamax::mutable_column_view res_left,
+            gamax::mutable_column_view res_right,
+            gamax::size_type& n_matches,
+            cudaStream_t stream)
+        {
+            throw std::runtime_error("join_copartitions_impl does not support non-integral key types");
+        }
+
+        template<typename KeyT, typename ValT,
+                 typename std::enable_if_t<std::is_integral<KeyT>::value, int> = 0>
         void operator()(
             gamax::column_view left_key,
             gamax::column_view left_val,
@@ -379,7 +399,25 @@ namespace {
             cudaStreamSynchronize(stream);
         }
 
-        template<typename KeyT>
+        template<typename KeyT,
+                 typename std::enable_if_t<!std::is_integral<KeyT>::value, int> = 0>
+        void operator()(
+            gamax::column_view left_key,
+            gamax::column_view left_offs,
+            gamax::column_view right_key,
+            gamax::column_view right_offs,
+            partition_hash_join_params const& params,
+            gamax::mutable_column_view res_key,
+            gamax::mutable_column_view res_left,
+            gamax::mutable_column_view res_right,
+            gamax::size_type& n_matches,
+            cudaStream_t stream)
+        {
+            throw std::runtime_error("join_copartitions_impl does not support non-integral key types");
+        }
+
+        template<typename KeyT,
+                 typename std::enable_if_t<std::is_integral<KeyT>::value, int> = 0>
         void operator()(
             gamax::column_view left_key,
             gamax::column_view left_offs,

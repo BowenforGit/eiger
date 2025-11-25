@@ -33,24 +33,42 @@ struct negate_helper {
 struct left_shift_helper {
     template <typename T>
     __host__ __device__ gamax::scalar operator()(gamax::scalar value, int bits) const {
-        return gamax::scalar(value.get<T>() << bits);
+        return gamax::scalar(this->operator()(value.get<T>(), bits));
     }
 
-    template <typename T>
+    template <typename T, typename std::enable_if<std::is_integral<T>::value, int>::type = 0>
     __host__ __device__ T operator()(T value, int bits) const {
         return value << bits;
+    }
+
+    template <typename T, typename std::enable_if<!std::is_integral<T>::value, int>::type = 0>
+    __host__ __device__ T operator()(T value, int bits) const {
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
+            throw std::runtime_error("Only integral types can be left-shifted.");
+#else
+            GAMAX_UNREACHABLE("Only integral types can be left-shifted.");
+#endif
     }
 };
 
 struct right_shift_helper {
     template <typename T>
     __host__ __device__ gamax::scalar operator()(gamax::scalar value, int bits) const {
-        return gamax::scalar(value.get<T>() >> bits);
+        return gamax::scalar(this->operator()(value.get<T>(), bits));
     }
 
-    template <typename T>
+    template <typename T, typename std::enable_if<std::is_integral<T>::value, int>::type = 0>
     __host__ __device__ T operator()(T value, int bits) const {
         return value >> bits;
+    }
+
+    template <typename T, typename std::enable_if<!std::is_integral<T>::value, int>::type = 0>
+    __host__ __device__ T operator()(T value, int bits) const {
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
+            throw std::runtime_error("Only integral types can be right-shifted.");
+#else
+            GAMAX_UNREACHABLE("Only integral types can be right-shifted.");
+#endif
     }
 };
 
@@ -87,6 +105,18 @@ struct multiply_helper {
     template <typename T>
     __host__ __device__ T operator()(T lhs, T rhs) const {
         return lhs * rhs;
+    }
+};
+
+struct divide_helper {
+    template <typename T, typename U>
+    __host__ __device__ gamax::scalar operator()(gamax::scalar e1, gamax::scalar e2) const {
+        return gamax::scalar(e1.get<T>() / e2.get<U>());
+    }
+
+    template <typename T>
+    __host__ __device__ T operator()(T lhs, T rhs) const {
+        return lhs / rhs;
     }
 };
 

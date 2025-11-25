@@ -10,7 +10,17 @@
 namespace gamax::join::detail {
 namespace {
     struct semi_hash_join_impl {
-        template<typename Key>
+        template<typename Key, std::enable_if_t<sizeof(Key) != sizeof(cuda::atomic<Key>) || !cuco::is_bitwise_comparable_v<Key>, int> = 0>
+        std::unique_ptr<gamax::table> operator()(
+            gamax::table_view left, 
+            gamax::table_view right,
+            gamax::join::join_hint const& hint,
+            cudaStream_t stream)
+        {
+            throw std::runtime_error("Semi-join is not supported for non-integral keys.");
+        }
+
+        template<typename Key, std::enable_if_t<sizeof(Key) == sizeof(cuda::atomic<Key>) && cuco::is_bitwise_comparable_v<Key>, int> = 0>
         std::unique_ptr<gamax::table> operator()(
             gamax::table_view left, 
             gamax::table_view right,

@@ -23,6 +23,7 @@ enum ExprId {
     Add,
     Substract,
     Multiply,
+    Divide,
     GreaterThan,
     LessThan,
     GreaterEqual,
@@ -165,6 +166,17 @@ public:
         });
     }
     
+    static ExprTree divide(ExprTree left, ExprTree right) {
+        auto type = left.type();
+        Expr e{};
+        e.id = ExprId::Divide;
+        e.type = type;
+        return ExprTree(e, {
+            std::make_shared<ExprTree>(std::move(left)),
+            std::make_shared<ExprTree>(std::move(right))
+        });
+    }
+    
     // Comparison operators
     static ExprTree equal(ExprTree left, ExprTree right) {
         Expr e{};
@@ -261,6 +273,10 @@ public:
     
     ExprTree operator*(const ExprTree& other) const {
         return multiply(*this, other);
+    }
+    
+    ExprTree operator/(const ExprTree& other) const {
+        return divide(*this, other);
     }
     
     ExprTree operator>(const ExprTree& other) const {

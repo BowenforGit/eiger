@@ -294,7 +294,18 @@ std::unique_ptr<gamax::table> compute_aggregate(
 
 template<int window_size, int numWindows, bool kUseGFUR = false>
 struct partition_groupby_impl {
-    template<typename Key>
+    template<typename Key, typename std::enable_if_t<!std::is_integral<Key>::value, int> = 0>
+    std::unique_ptr<gamax::table> operator()(
+            gamax::table_view key,
+            gamax::table_view val,
+            std::vector<gamax::groupby::aggregation_request>& agg_requests,
+            gamax::groupby::groupby_hint& hint,
+            cudaStream_t stream = cudaStreamDefault)
+    {
+        throw std::runtime_error("Non-integral key type is not supported for partition-based groupby.");
+    }
+
+    template<typename Key, typename std::enable_if_t<std::is_integral<Key>::value, int> = 0>
     std::unique_ptr<gamax::table> operator()(
             gamax::table_view key,
             gamax::table_view val,
