@@ -24,6 +24,9 @@ enum ExprId {
     Substract,
     Multiply,
     Divide,
+    Sqrt,
+    Log,
+    Exp,
     GreaterThan,
     LessThan,
     GreaterEqual,
@@ -129,6 +132,30 @@ public:
         e.id = ExprId::RightShift;
         e.type = type;
         e.data.rshift.bits = bits;
+        return ExprTree(e, {std::make_shared<ExprTree>(std::move(child))});
+    }
+    
+    static ExprTree sqrt(ExprTree child) {
+        auto type = child.type();
+        Expr e{};
+        e.id = ExprId::Sqrt;
+        e.type = type;
+        return ExprTree(e, {std::make_shared<ExprTree>(std::move(child))});
+    }
+    
+    static ExprTree log(ExprTree child) {
+        auto type = child.type();
+        Expr e{};
+        e.id = ExprId::Log;
+        e.type = type;
+        return ExprTree(e, {std::make_shared<ExprTree>(std::move(child))});
+    }
+    
+    static ExprTree exp(ExprTree child) {
+        auto type = child.type();
+        Expr e{};
+        e.id = ExprId::Exp;
+        e.type = type;
         return ExprTree(e, {std::make_shared<ExprTree>(std::move(child))});
     }
     

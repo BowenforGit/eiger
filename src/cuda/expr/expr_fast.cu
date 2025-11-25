@@ -98,6 +98,36 @@ __device__ void evaluate_one(
                     e.data.rshift.bits));
             return;
         }
+        case ExprId::Sqrt: {
+            auto op1 = s.load(e.operand_regs[0]);
+            s.store(
+                e.return_reg,
+                gamax::type_dispatcher(
+                    op1.type(),
+                    detail::sqrt_helper{},
+                    op1));
+            return;
+        }
+        case ExprId::Log: {
+            auto op1 = s.load(e.operand_regs[0]);
+            s.store(
+                e.return_reg,
+                gamax::type_dispatcher(
+                    op1.type(),
+                    detail::log_helper{},
+                    op1));
+            return;
+        }
+        case ExprId::Exp: {
+            auto op1 = s.load(e.operand_regs[0]);
+            s.store(
+                e.return_reg,
+                gamax::type_dispatcher(
+                    op1.type(),
+                    detail::exp_helper{},
+                    op1));
+            return;
+        }
         case ExprId::Add: {
             auto op1 = s.load(e.operand_regs[0]);
             auto op2 = s.load(e.operand_regs[1]);
@@ -387,6 +417,39 @@ __device__ void evaluate_one(
                 s.store(
                     e.return_reg,
                     op1 >> e.data.rshift.bits);
+            }
+            return;
+        }
+        case ExprId::Sqrt: {
+            auto op1 = s.load(e.operand_regs[0]);
+            if constexpr (std::is_same<T, float>::value) {
+                s.store(e.return_reg, sqrtf(op1));
+            } else if constexpr (std::is_same<T, double>::value) {
+                s.store(e.return_reg, sqrt(op1));
+            } else {
+                s.store(e.return_reg, static_cast<T>(sqrt(static_cast<double>(op1))));
+            }
+            return;
+        }
+        case ExprId::Log: {
+            auto op1 = s.load(e.operand_regs[0]);
+            if constexpr (std::is_same<T, float>::value) {
+                s.store(e.return_reg, logf(op1));
+            } else if constexpr (std::is_same<T, double>::value) {
+                s.store(e.return_reg, log(op1));
+            } else {
+                s.store(e.return_reg, static_cast<T>(log(static_cast<double>(op1))));
+            }
+            return;
+        }
+        case ExprId::Exp: {
+            auto op1 = s.load(e.operand_regs[0]);
+            if constexpr (std::is_same<T, float>::value) {
+                s.store(e.return_reg, expf(op1));
+            } else if constexpr (std::is_same<T, double>::value) {
+                s.store(e.return_reg, exp(op1));
+            } else {
+                s.store(e.return_reg, static_cast<T>(exp(static_cast<double>(op1))));
             }
             return;
         }

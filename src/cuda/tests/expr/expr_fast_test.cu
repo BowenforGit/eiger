@@ -529,6 +529,120 @@ TEST(ExprFastTest, RightShiftOperatorOverloading) {
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
+// Test: Square root function
+TEST(ExprFastTest, SqrtExpr) {
+    double val[] = {4.0, 9.0, 16.0, 25.0};
+    auto col1 = gamax::make_column_from_host(val, 4);
+    
+    std::vector<std::unique_ptr<gamax::column>> columns;
+    columns.push_back(std::move(col1));
+    auto table = gamax::make_table(std::move(columns));
+    
+    // Create expression tree: sqrt(column[0])
+    auto expr = ExprTree::sqrt(
+        ExprTree::column(0, gamax::data_type(gamax::type_id::FLOAT64))
+    );
+    
+    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    
+    double expected[] = {2.0, 3.0, 4.0, 5.0};
+    auto expected_col = gamax::make_column_from_host(expected, 4);
+    ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
+}
+
+// Test: Natural logarithm function
+TEST(ExprFastTest, LogExpr) {
+    double val[] = {1.0, 2.718281828459045, 7.389056098930650, 20.085536923187668};
+    auto col1 = gamax::make_column_from_host(val, 4);
+    
+    std::vector<std::unique_ptr<gamax::column>> columns;
+    columns.push_back(std::move(col1));
+    auto table = gamax::make_table(std::move(columns));
+    
+    // Create expression tree: log(column[0])
+    auto expr = ExprTree::log(
+        ExprTree::column(0, gamax::data_type(gamax::type_id::FLOAT64))
+    );
+    
+    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    
+    // log(1) = 0, log(e) = 1, log(e^2) = 2, log(e^3) = 3
+    double expected[] = {0.0, 1.0, 2.0, 3.0};
+    auto expected_col = gamax::make_column_from_host(expected, 4);
+    ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
+}
+
+// Test: Exponential function
+TEST(ExprFastTest, ExpExpr) {
+    double val[] = {0.0, 1.0, 2.0, 3.0};
+    auto col1 = gamax::make_column_from_host(val, 4);
+    
+    std::vector<std::unique_ptr<gamax::column>> columns;
+    columns.push_back(std::move(col1));
+    auto table = gamax::make_table(std::move(columns));
+    
+    // Create expression tree: exp(column[0])
+    auto expr = ExprTree::exp(
+        ExprTree::column(0, gamax::data_type(gamax::type_id::FLOAT64))
+    );
+    
+    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    
+    // exp(0) = 1, exp(1) = e, exp(2) = e^2, exp(3) = e^3
+    double expected[] = {1.0, 2.718281828459045, 7.389056098930650, 20.085536923187668};
+    auto expected_col = gamax::make_column_from_host(expected, 4);
+    ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
+}
+
+// Test: Float square root
+TEST(ExprFastTest, SqrtFloatExpr) {
+    float val[] = {1.0f, 4.0f, 9.0f, 16.0f};
+    auto col1 = gamax::make_column_from_host(val, 4);
+    
+    std::vector<std::unique_ptr<gamax::column>> columns;
+    columns.push_back(std::move(col1));
+    auto table = gamax::make_table(std::move(columns));
+    
+    // Create expression tree: sqrt(column[0])
+    auto expr = ExprTree::sqrt(
+        ExprTree::column(0, gamax::data_type(gamax::type_id::FLOAT32))
+    );
+    
+    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    
+    float expected[] = {1.0f, 2.0f, 3.0f, 4.0f};
+    auto expected_col = gamax::make_column_from_host(expected, 4);
+    ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
+}
+
+// Test: Complex expression with sqrt, log, and exp
+TEST(ExprFastTest, ComplexMathExpr) {
+    double val[] = {4.0, 9.0, 16.0, 25.0};
+    auto col1 = gamax::make_column_from_host(val, 4);
+    
+    std::vector<std::unique_ptr<gamax::column>> columns;
+    columns.push_back(std::move(col1));
+    auto table = gamax::make_table(std::move(columns));
+    
+    // Create expression tree: exp(log(sqrt(column[0])))
+    auto expr = ExprTree::exp(
+        ExprTree::log(
+            ExprTree::sqrt(
+                ExprTree::column(0, gamax::data_type(gamax::type_id::FLOAT64))
+            )
+        )
+    );
+    
+    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    
+    double expected[] = {2.0, 3.0, 4.0, 5.0};
+    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto res_host = gamax::copy_column_to_host<double>(res->view());
+    for(size_t i = 0; i < 4; ++i) {
+        ASSERT_NEAR(res_host[i], expected[i], 1e-6);
+    }
+}
+
 // Test: Operator overloading with comparisons
 TEST(ExprFastTest, OperatorOverloadingComparison) {
     int val1[] = {1, 2, 3, 4};

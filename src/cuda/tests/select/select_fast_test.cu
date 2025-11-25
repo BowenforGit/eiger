@@ -879,6 +879,108 @@ TEST(SelectFastTest, WithShiftOperators) {
     test_select_with_shift_operators();
 }
 
+// Test: Select with sqrt function
+TEST(SelectFastTest, WithSqrtFunction) {
+    std::vector<std::vector<double>> input_data = {
+        {4.0, 9.0, 16.0, 25.0, 36.0}
+    };
+    auto table = make_test_table(input_data);
+
+    // Build expression: sqrt(col[0]) > 4.0
+    auto double_type = gamax::data_type(gamax::type_id::FLOAT64);
+    auto expr = ExprTree::greater_than(
+        ExprTree::sqrt(ExprTree::column(0, double_type)),
+        ExprTree::constant(gamax::scalar(4.0))
+    );
+
+    auto result = gamax::select::select(table->view(), expr);
+
+    // Expected: rows where sqrt(col[0]) > 4.0
+    // sqrt(4)=2 (no), sqrt(9)=3 (no), sqrt(16)=4 (no), sqrt(25)=5 (yes), sqrt(36)=6 (yes)
+    std::vector<std::vector<double>> expected_data = {
+        {25.0, 36.0}
+    };
+
+    ASSERT_TRUE(verify_table_result(result->view(), expected_data));
+}
+
+// Test: Select with log function
+TEST(SelectFastTest, WithLogFunction) {
+    std::vector<std::vector<double>> input_data = {
+        {1.0, 2.718281828459045, 7.389056098930650, 20.085536923187668, 54.598150033144236}
+    };
+    auto table = make_test_table(input_data);
+
+    // Build expression: log(col[0]) >= 2.0
+    auto double_type = gamax::data_type(gamax::type_id::FLOAT64);
+    auto expr = ExprTree::greater_equal(
+        ExprTree::log(ExprTree::column(0, double_type)),
+        ExprTree::constant(gamax::scalar(2.0))
+    );
+
+    auto result = gamax::select::select(table->view(), expr);
+
+    // Expected: rows where log(col[0]) >= 2.0
+    // log(1)=0 (no), log(e)=1 (no), log(e^2)=2 (yes), log(e^3)=3 (yes), log(e^4)=4 (yes)
+    std::vector<std::vector<double>> expected_data = {
+        {7.389056098930650, 20.085536923187668, 54.598150033144236}
+    };
+
+    ASSERT_TRUE(verify_table_result(result->view(), expected_data));
+}
+
+// Test: Select with exp function
+TEST(SelectFastTest, WithExpFunction) {
+    std::vector<std::vector<double>> input_data = {
+        {0.0, 0.5, 1.0, 1.5, 2.0}
+    };
+    auto table = make_test_table(input_data);
+
+    // Build expression: exp(col[0]) > 3.0
+    auto double_type = gamax::data_type(gamax::type_id::FLOAT64);
+    auto expr = ExprTree::greater_than(
+        ExprTree::exp(ExprTree::column(0, double_type)),
+        ExprTree::constant(gamax::scalar(3.0))
+    );
+
+    auto result = gamax::select::select(table->view(), expr);
+
+    // Expected: rows where exp(col[0]) > 3.0
+    // exp(0)=1 (no), exp(0.5)≈1.65 (no), exp(1)≈2.72 (no), exp(1.5)≈4.48 (yes), exp(2)≈7.39 (yes)
+    std::vector<std::vector<double>> expected_data = {
+        {1.5, 2.0}
+    };
+
+    ASSERT_TRUE(verify_table_result(result->view(), expected_data));
+}
+
+// Test: Complex select with math functions combined
+TEST(SelectFastTest, ComplexMathFunctions) {
+    std::vector<std::vector<double>> input_data = {
+        {1.0, 4.0, 9.0, 16.0, 25.0},  // col1
+        {1.0, 2.0, 3.0, 4.0, 5.0}     // col2
+    };
+    auto table = make_test_table(input_data);
+
+    // Build expression: sqrt(col[0]) == col[1]
+    auto double_type = gamax::data_type(gamax::type_id::FLOAT64);
+    auto expr = ExprTree::equal(
+        ExprTree::sqrt(ExprTree::column(0, double_type)),
+        ExprTree::column(1, double_type)
+    );
+
+    auto result = gamax::select::select(table->view(), expr);
+
+    // Expected: rows where sqrt(col[0]) == col[1]
+    // All rows should match
+    std::vector<std::vector<double>> expected_data = {
+        {1.0, 4.0, 9.0, 16.0, 25.0},
+        {1.0, 2.0, 3.0, 4.0, 5.0}
+    };
+
+    ASSERT_TRUE(verify_table_result(result->view(), expected_data));
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

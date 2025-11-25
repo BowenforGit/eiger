@@ -1,4 +1,5 @@
 #pragma once
+#include <cmath>
 #include "memory/column.hpp"
 #include "memory/scalar.hpp"
 #include "types/data_type.hpp"
@@ -68,6 +69,72 @@ struct right_shift_helper {
             throw std::runtime_error("Only integral types can be right-shifted.");
 #else
             GAMAX_UNREACHABLE("Only integral types can be right-shifted.");
+#endif
+    }
+};
+
+struct sqrt_helper {
+    template <typename T>
+    __host__ __device__ gamax::scalar operator()(gamax::scalar value) const {
+        return gamax::scalar(this->operator()(value.get<T>()));
+    }
+
+    template <typename T>
+    __host__ __device__ T operator()(T value) const {
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+        if constexpr (std::is_same<T, float>::value) {
+            return sqrtf(value);
+        } else if constexpr (std::is_same<T, double>::value) {
+            return sqrt(value);
+        } else {
+            return static_cast<T>(sqrt(static_cast<double>(value)));
+        }
+#else
+        return static_cast<T>(std::sqrt(static_cast<double>(value)));
+#endif
+    }
+};
+
+struct log_helper {
+    template <typename T>
+    __host__ __device__ gamax::scalar operator()(gamax::scalar value) const {
+        return gamax::scalar(this->operator()(value.get<T>()));
+    }
+
+    template <typename T>
+    __host__ __device__ T operator()(T value) const {
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+        if constexpr (std::is_same<T, float>::value) {
+            return logf(value);
+        } else if constexpr (std::is_same<T, double>::value) {
+            return log(value);
+        } else {
+            return static_cast<T>(log(static_cast<double>(value)));
+        }
+#else
+        return static_cast<T>(std::log(static_cast<double>(value)));
+#endif
+    }
+};
+
+struct exp_helper {
+    template <typename T>
+    __host__ __device__ gamax::scalar operator()(gamax::scalar value) const {
+        return gamax::scalar(this->operator()(value.get<T>()));
+    }
+
+    template <typename T>
+    __host__ __device__ T operator()(T value) const {
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+        if constexpr (std::is_same<T, float>::value) {
+            return expf(value);
+        } else if constexpr (std::is_same<T, double>::value) {
+            return exp(value);
+        } else {
+            return static_cast<T>(exp(static_cast<double>(value)));
+        }
+#else
+        return static_cast<T>(std::exp(static_cast<double>(value)));
 #endif
     }
 };
