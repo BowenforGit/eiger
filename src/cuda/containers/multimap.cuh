@@ -86,7 +86,7 @@ namespace gamax::containers {
             
             cudaStreamSynchronize(stream);
 
-            auto n_matches = thrust::distance(probe_kv_pairs_out, probe_kv_pairs_out_end);
+            auto n_matches = cuda::std::distance(probe_kv_pairs_out, probe_kv_pairs_out_end);
             probe_keys_out->set_size(n_matches);
             probe_tids_out->set_size(n_matches);
             build_keys_out->set_size(n_matches);

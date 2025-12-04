@@ -12,7 +12,7 @@
 namespace gamax::containers {
 template <typename Key,
           typename Value = Key, // used for the mapping table case 
-          typename KeyEqual = thrust::equal_to<Value>,
+          typename KeyEqual = cuda::std::equal_to<Value>,
           typename HashFn = cuco::default_hash_function<Value>,
           typename ProbingScheme = cuco::double_hashing<4, HashFn>>
 class set {
@@ -48,6 +48,17 @@ public:
         auto result = gamax::make_column<bool>(num_keys);
         _set.contains(keys_ptr, keys_ptr+num_keys, result->data<bool>(), stream); // this synchronizes the stream
         return result;
+    }
+
+    std::size_t count(
+        gamax::column_view const& probe_keys,
+        cudaStream_t stream = cudaStreamDefault) 
+    {
+        auto keys_ptr = probe_keys.data<Key>();
+        auto num_keys = probe_keys.size();
+        auto n_matches = _set.count(keys_ptr, keys_ptr + num_keys, stream);
+        
+        return n_matches;
     }
 
 private:

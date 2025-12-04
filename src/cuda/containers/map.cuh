@@ -17,7 +17,7 @@ namespace gamax::containers {
               typename Value = gamax::size_type,  
               int CG_SIZE = 2,
               typename Allocator = ThrustAllocator<cuco::pair<Key, Value>>,
-              typename KeyEqual = thrust::equal_to<Key>, 
+              typename KeyEqual = cuda::std::equal_to<Key>, 
               typename ProbingScheme = cuco::linear_probing<CG_SIZE, cuco::default_hash_function<Key>>>
     class map {
     public:
