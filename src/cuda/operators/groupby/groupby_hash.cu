@@ -162,14 +162,12 @@ namespace {
             last_i = i;
             
             auto out_type = res.get_column(i+1).type();
-            gamax::column temp_col(gamax::device_buffer(
-                                        cur_agg_buffer, 
-                                        num_groups*gamax::size_of(out_type)), 
-                                    num_groups, 
-                                    out_type);
+            gamax::column_view temp_col(cur_agg_buffer, 
+                                        num_groups, 
+                                        out_type);
             gamax::groupby::details::aggregate(
                 aggs[i].agg_kind,
-                temp_col.view(), j,
+                temp_col, j,
                 res.get_column(i+1), j);
         }
     }

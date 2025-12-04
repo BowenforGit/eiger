@@ -19,7 +19,7 @@ public:
     table_device_view_base() = delete;
     table_device_view_base(table_device_view_base const&) = default; // shallow copy
     table_device_view_base(table_device_view_base&&)      = default;
-    __host__ __device__ ~table_device_view_base() {}
+    ~table_device_view_base() = default;
     
     __host__ table_device_view_base(std::vector<column_view_t> const& cols, cudaStream_t stream = cudaStreamDefault) {
         _num_columns = cols.size();
@@ -73,10 +73,10 @@ public:
     using column_view = column_view_t;
     using device_view_t = experimental::table_device_view_base<column_view_t>;
 
-    table_view_base() = default;
-    ~table_view_base() = default;
+    __host__ table_view_base() = default;
+    __host__ ~table_view_base() = default;
 
-    table_view_base(std::vector<std::unique_ptr<column>> const& cols) : _columns(cols.size()) {
+    __host__ table_view_base(std::vector<std::unique_ptr<column>> const& cols) : _columns(cols.size()) {
         for (gamax::size_type i = 0; i < cols.size(); ++i) {
             if constexpr (std::is_const_v<std::remove_pointer_t<decltype(std::declval<column_view_t>().data())>>) {
                 _columns[i] = cols[i]->view();
@@ -86,7 +86,7 @@ public:
         }
     }
 
-    table_view_base(std::vector<column_view_t> const& cols) : _columns(cols) {}
+    __host__ table_view_base(std::vector<column_view_t> const& cols) : _columns(cols) {}
 
     gamax::size_type num_columns() const noexcept {
         return _columns.size();

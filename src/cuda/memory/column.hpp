@@ -108,7 +108,7 @@ public:
         , _type(type)
         , _data(num_rows * gamax::size_of(type), clear) {}
     
-    __host__ __device__ explicit column(gamax::device_buffer&& buffer, size_type size, data_type type) 
+    explicit column(gamax::device_buffer&& buffer, size_type size, data_type type) 
     : _data(std::move(buffer))
     , _size(size)
     , _type(type) {}
@@ -120,15 +120,15 @@ public:
         , _size{size}
         , _data{std::move(data)} {}
 
-    __host__ __device__ size_type size() const noexcept {
+    size_type size() const noexcept {
         return _size;
     }
 
-    __host__ __device__ data_type type() const noexcept {
+    data_type type() const noexcept {
         return _type;
     }
 
-    __host__ __device__ device_buffer& buffer() noexcept {
+    device_buffer& buffer() noexcept {
         return _data;
     }
 
@@ -144,16 +144,16 @@ public:
     }
 
     template <typename T = void>
-    __host__ __device__ T* data() const noexcept
+    T* data() const noexcept
     {
         return static_cast<T*>(_data.data());
     }
 
-    __host__ __device__ column_view view(const size_type offset = 0) const {
+    column_view view(const size_type offset = 0) const {
         return column_view(_data.data(), _size, _type, offset);
     }
 
-    __host__ __device__ mutable_column_view mutable_view(const size_type offset = 0) {
+    mutable_column_view mutable_view(const size_type offset = 0) {
         return mutable_column_view(_data.data(), _size, _type, offset);
     }
 
