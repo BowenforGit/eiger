@@ -22,6 +22,7 @@ enum class type_id {
     UINT64,                  ///< 8 byte unsigned integer
     FLOAT32,                 ///< 4 byte floating point
     FLOAT64,                 ///< 8 byte floating point
+    STRING,                  ///< String type
     // `NUM_TYPE_IDS` must be last!
     NUM_TYPE_IDS  ///< Total number of type ids
 };

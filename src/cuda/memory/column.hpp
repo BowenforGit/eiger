@@ -96,17 +96,17 @@ public:
 class column {
 public:
     column() = delete;
-    ~column() = default;
+    virtual ~column() = default;
     column& operator=(column const& other) = delete;
     column(column const& other)            = delete; // disallow copy constructor to because the column has the exclusive ownership of the data
     column& operator=(column&& other)      = delete;
 
     column(column&& other) noexcept;
     
-    explicit column(data_type type, size_type num_rows, bool clear = false) 
+    explicit column(data_type type, size_type num_rows, bool clear = false, cudaStream_t stream = cudaStreamDefault) 
         : _size(num_rows)
         , _type(type)
-        , _data(num_rows * gamax::size_of(type), clear) {}
+        , _data(num_rows * gamax::size_of(type), clear, stream) {}
     
     explicit column(gamax::device_buffer&& buffer, size_type size, data_type type) 
     : _data(std::move(buffer))
@@ -132,11 +132,19 @@ public:
         return _data;
     }
 
+    const device_buffer& buffer() const noexcept {
+        return _data;
+    }
+
     void set_size (size_type size) noexcept{
         _size = size;
     }
 
-    std::unique_ptr<column> deep_copy(cudaStream_t stream = cudaStreamDefault) const {
+    gamax::size_type bytes() const noexcept {
+        return _data.size();
+    }
+
+    virtual std::unique_ptr<column> deep_copy(cudaStream_t stream = cudaStreamDefault) const {
         auto clone = std::make_unique<column>(_type, _size);
         cudaMemcpyAsync(clone->data(), data(), _size * gamax::size_of(_type), cudaMemcpyDeviceToDevice, stream);
         cudaStreamSynchronize(stream);
@@ -149,11 +157,11 @@ public:
         return static_cast<T*>(_data.data());
     }
 
-    column_view view(const size_type offset = 0) const {
+    virtual column_view view(const size_type offset = 0) const {
         return column_view(_data.data(), _size, _type, offset);
     }
 
-    mutable_column_view mutable_view(const size_type offset = 0) {
+    virtual mutable_column_view mutable_view(const size_type offset = 0) {
         return mutable_column_view(_data.data(), _size, _type, offset);
     }
 
@@ -163,59 +171,62 @@ private:
     gamax::data_type _type;
 };
 
-std::unique_ptr<column> make_column(data_type type, size_type size, bool clear=false); 
-std::unique_ptr<column> make_idx_column(size_type size, bool clear=false); 
+using column_ptr = std::unique_ptr<column>;
+
+std::unique_ptr<column> make_column(data_type type, size_type size, bool clear=false, cudaStream_t stream = cudaStreamDefault); 
+std::unique_ptr<column> make_idx_column(size_type size, bool clear=false, cudaStream_t stream = cudaStreamDefault); 
 void free_column(std::unique_ptr<column> column);
 
 template<typename T>
-std::unique_ptr<column> make_column(size_type size, bool clear=false) {
-    return make_column(data_type{type_to_id<T>()}, size, clear);
+std::unique_ptr<column> make_column(size_type size, bool clear=false, cudaStream_t stream = cudaStreamDefault) {
+    return make_column(data_type{type_to_id<T>()}, size, clear, stream);
 }
 
 template <typename T>
-std::unique_ptr<column> make_column_from_host(T* host_data, size_type num_items) {
-    gamax::device_buffer buffer(num_items * sizeof(T), false);
-    cudaMemcpy(buffer.data(), host_data, num_items * sizeof(T), cudaMemcpyHostToDevice);
+std::unique_ptr<column> make_column_from_host(T* host_data, size_type num_items, cudaStream_t stream = cudaStreamDefault) {
+    gamax::device_buffer buffer(num_items * sizeof(T), false, stream);
+    cudaMemcpyAsync(buffer.data(), host_data, num_items * sizeof(T), cudaMemcpyHostToDevice, stream);
     return std::make_unique<column>(gamax::data_type{gamax::type_to_id<std::__remove_cvref_t<T>>()}, num_items, std::move(buffer));
 }
 
 template <typename T>
-std::unique_ptr<column> make_column_from_device(T* device_data, size_type num_items) {
-    gamax::device_buffer buffer(num_items * sizeof(T), false);
-    cudaMemcpy(buffer.data(), device_data, num_items * sizeof(T), cudaMemcpyDeviceToDevice);
+std::unique_ptr<column> make_column_from_device(T* device_data, size_type num_items, cudaStream_t stream = cudaStreamDefault) {
+    gamax::device_buffer buffer(num_items * sizeof(T), false, stream);
+    cudaMemcpyAsync(buffer.data(), device_data, num_items * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return std::make_unique<column>(gamax::data_type{gamax::type_to_id<std::__remove_cvref_t<T>>()}, num_items, std::move(buffer));
 }
 
 template <typename T>
-void copy_column_to_host(column_view col, T* host_data) {
-    cudaMemcpy(host_data, col.data<T>(), col.size() * sizeof(T), cudaMemcpyDeviceToHost);
+void copy_column_to_host(column_view col, T* host_data, cudaStream_t stream = cudaStreamDefault) {
+    cudaMemcpyAsync(host_data, col.data<T>(), col.size() * sizeof(T), cudaMemcpyDeviceToHost, stream);
 }
 
 template <typename T>
-void copy_column_to_host(column const& col, T* host_data) {
-    // cudaMemcpy(host_data, col.data<T>(), col.size() * sizeof(T), cudaMemcpyDeviceToHost);
-    copy_column_to_host(col.view(), host_data);
+void copy_column_to_host(column const& col, T* host_data, cudaStream_t stream = cudaStreamDefault) {
+    copy_column_to_host(col.view(), host_data, stream);
 }
 
 template <typename T>
-std::unique_ptr<T[]> copy_column_to_host(column_view col) {
+std::unique_ptr<T[]> copy_column_to_host(column_view col, cudaStream_t stream = cudaStreamDefault) {
     std::unique_ptr<T[]> host_col(new T[col.size()]);
-    copy_column_to_host(col, host_col.get());
+    copy_column_to_host(col, host_col.get(), stream);
     return host_col;
 }
 
 std::unique_ptr<column> make_sequence(
     size_type size, 
     gamax::scalar start, 
-    gamax::scalar step);
+    gamax::scalar step, 
+    cudaStream_t stream = cudaStreamDefault);
 
 template<typename T = gamax::size_type, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
 std::unique_ptr<column> make_sequence(
     size_type size, 
     T start = 0, 
-    T step = 1) 
+    T step = 1,
+    cudaStream_t stream = cudaStreamDefault) 
 {
-    return make_sequence(size, gamax::scalar(start), gamax::scalar(step));
+    return make_sequence(size, gamax::scalar(start), gamax::scalar(step), stream);
 }
 
 template<typename column_view_type>

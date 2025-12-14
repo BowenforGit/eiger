@@ -8,9 +8,10 @@
 namespace gamax {
 class device_buffer {
 public:
+    device_buffer() = default;
     device_buffer(void* data, size_t size) : data_(data), size_(size) {}
-    device_buffer(size_t size, bool clear = false) : size_(size) {
-        allocate_mem(&data_, clear, size_);
+    device_buffer(size_t size, bool clear = false, cudaStream_t stream = cudaStreamDefault) : size_(size) {
+        allocate_mem(&data_, clear, size_, stream);
     }
     
     // not copy-constructible or copy-assignable

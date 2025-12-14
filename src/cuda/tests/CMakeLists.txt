@@ -28,6 +28,8 @@ if(USE_CUDA)
         select/select_fast_test.cu
         expr/expr_fast_test.cu
         types/floating_point_test.cu
+        string/string_factory_test.cu
+        string/string_test.cu
     )
 endif()
 

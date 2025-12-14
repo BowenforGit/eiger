@@ -45,6 +45,8 @@ set(srcs
     memory/mem_manager.cu
     data_gen/table_gen.cu
     utils/transform.cu
+    string/string_factory.cu
+    string/string.cu
     )
     
 if(USE_CUDA)

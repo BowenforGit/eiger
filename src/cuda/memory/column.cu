@@ -17,12 +17,12 @@ column::column(column&& other) noexcept
   other._type       = data_type{type_id::EMPTY};
 }
 
-std::unique_ptr<column> make_column(data_type type, size_type size, bool clear) {
-    return std::make_unique<column>(type, size, clear);
+std::unique_ptr<column> make_column(data_type type, size_type size, bool clear, cudaStream_t stream) {
+    return std::make_unique<column>(type, size, clear, stream);
 }
 
-std::unique_ptr<column> make_idx_column(size_type size, bool clear) {
-    return make_column(data_type{size_type_id}, size, clear);
+std::unique_ptr<column> make_idx_column(size_type size, bool clear, cudaStream_t stream) {
+    return make_column(data_type{size_type_id}, size, clear, stream);
 }
 
 void free_column(std::unique_ptr<column> col) {
@@ -35,10 +35,11 @@ struct make_sequence_impl {
     std::unique_ptr<column> operator()(
         size_type size, 
         gamax::scalar start, 
-        gamax::scalar step)
+        gamax::scalar step,
+        cudaStream_t stream)
     {
         auto col = make_column(data_type{type_to_id<T>()}, size);
-        gamax::utils::device::create_sequence(col->data<T>(), size, start.get<T>(), step.get<T>());
+        gamax::utils::device::create_sequence(col->data<T>(), size, start.get<T>(), step.get<T>(), stream);
         return col;
     }
 };
@@ -47,8 +48,9 @@ struct make_sequence_impl {
 std::unique_ptr<column> make_sequence(
     size_type size, 
     gamax::scalar start, 
-    gamax::scalar step)
+    gamax::scalar step,
+    cudaStream_t stream)
 {
-    return type_dispatcher(start.type(), make_sequence_impl{}, size, start, step);
+    return type_dispatcher(start.type(), make_sequence_impl{}, size, start, step, stream);
 }
 } // namespace gamax
