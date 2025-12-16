@@ -10,6 +10,7 @@
 #include "string/string_column.hpp"
 #include "string/string_impl.cuh"
 #include "utils/utils.cuh"
+#include "utils/transform.hpp"
 #include "memory/column.hpp"
 #include "memory/mem_manager.hpp"
 
@@ -46,7 +47,7 @@ __global__ void create_german_string_kernel(
 template<
     typename german_string_impl_t, 
     typename input_length_t = typename german_string_impl_t::LengthType>
-column_ptr get_german_string_offsets(column_view strlen, cudaStream_t stream) 
+column_ptr get_german_string_offsets(column_view offsets, cudaStream_t stream) 
 {
     using buffer_index_t = typename german_string_impl_t::BufferIndexType;
     using str_length_t = typename german_string_impl_t::LengthType;
@@ -54,25 +55,24 @@ column_ptr get_german_string_offsets(column_view strlen, cudaStream_t stream)
     constexpr auto inline_limit = german_string_impl_t::max_inlined_len();
     constexpr auto prefix_len = german_string_impl_t::prefix_len();
     
-    auto overflow_strlen = gamax::make_column<str_length_t>(strlen.size(), false, stream);
+    auto overflow_strlen = gamax::make_column<str_length_t>(offsets.size() - 1, false, stream);
+    auto itr = thrust::make_counting_iterator<gamax::size_type>(0);
     thrust::transform(
         thrust::cuda::par(*get_thrust_allocator()).on(stream),
-        strlen.data<input_length_t>(),
-        strlen.data<input_length_t>() + strlen.size(),
+        itr,
+        itr + overflow_strlen->size(),
         overflow_strlen->template data<str_length_t>(),
-        [] __device__ (input_length_t l) {
+        [offsets_ptr = offsets.data<int64_t>()] __device__ (gamax::size_type i) {
+            input_length_t l = offsets_ptr[i + 1] - offsets_ptr[i];
             auto res = (l <= inline_limit) ? 0 : (l - prefix_len);
             return static_cast<str_length_t>(res);
-        });
-        
-    auto offsets = gamax::make_column<buffer_index_t>(strlen.size());
-    thrust::exclusive_scan(
-        thrust::cuda::par(*get_thrust_allocator()).on(stream),
-        overflow_strlen->template data<str_length_t>(),
-        overflow_strlen->template data<str_length_t>() + strlen.size(),
-        offsets->template data<buffer_index_t>());
+        }
+    );
 
-    return offsets;
+    return gamax::util::device::prefix_sum(overflow_strlen->view(), 
+        gamax::prefix_sum_options::EXCLUSIVE, 
+        gamax::data_type{gamax::type_id::INT64},
+        stream);
 }
 
 template<
@@ -80,17 +80,35 @@ template<
     typename input_length_t = typename arrow_string_impl_t::LengthType>
 column_ptr get_arrow_string_offsets(column_view strlen, cudaStream_t stream) 
 {
+    // using buffer_index_t = typename arrow_string_impl_t::BufferIndexType;
+    // using str_length_t = typename arrow_string_impl_t::LengthType;
+
+    return gamax::util::device::prefix_sum(strlen, 
+        gamax::prefix_sum_options::INCLUSIVE_PAD_ZERO, 
+        gamax::data_type{gamax::type_id::INT64},
+        stream);
+}
+
+template<
+    typename arrow_string_impl_t, 
+    typename input_length_t = typename arrow_string_impl_t::LengthType>
+std::unique_ptr<string_column> make_arrow_string_column(
+    device_buffer data,
+    column_view strlen,
+    const size_type num_strings,
+    cudaStream_t stream)
+{
     using buffer_index_t = typename arrow_string_impl_t::BufferIndexType;
     using str_length_t = typename arrow_string_impl_t::LengthType;
-    
-    auto offsets = gamax::make_column<buffer_index_t>(strlen.size() + 1, true, stream);
-    thrust::inclusive_scan(
-        thrust::cuda::par(*get_thrust_allocator()).on(stream),
-        strlen.data<str_length_t>(),
-        strlen.data<str_length_t>() + strlen.size(),
-        offsets->template data<buffer_index_t>() + 1);
 
-    return offsets;
+    auto offsets = get_arrow_string_offsets<arrow_string_impl_t, input_length_t>(strlen, stream);
+    
+    cudaStreamSynchronize(stream);
+    return std::make_unique<string_column>(
+        std::move(data),
+        std::move(offsets->buffer()),
+        num_strings,
+        string_impl_id::ARROW_STRING);
 }
 
 template<
@@ -125,12 +143,11 @@ std::unique_ptr<string_column> make_arrow_string_column(
         cudaMemcpyHostToDevice, 
         stream);
     
-    cudaStreamSynchronize(stream);
-    return std::make_unique<string_column>(
+    return make_arrow_string_column<arrow_string_impl_t, input_length_t>(
         std::move(d_data),
-        std::move(offsets->buffer()),
+        d_strlen->view(),
         num_strings,
-        string_impl_id::ARROW_STRING);
+        stream);
 }
 
 template<
@@ -138,15 +155,15 @@ template<
     typename other_string_impl_t,
     typename input_length_t = typename german_string_impl_t::LengthType>
 std::unique_ptr<string_column> make_german_string_column(
-    const input_length_t* h_strlen,
     string_column_view in, // another string format
     cudaStream_t stream)
 {
-    using buffer_index_t = typename german_string_impl_t::BufferIndexType;
-    using str_length_t = typename german_string_impl_t::LengthType;
-
-    auto d_strlen = gamax::make_column_from_host(h_strlen, in.size(), stream);
-    auto offsets = get_german_string_offsets<german_string_impl_t, input_length_t>(d_strlen->view(), stream);
+    auto arrow_offsets = gamax::column_view(
+        const_cast<void*>(in.meta()), 
+        in.size() + 1, 
+        gamax::data_type{gamax::type_id::INT64}, 
+        0);
+    auto offsets = get_german_string_offsets<german_string_impl_t, input_length_t>(arrow_offsets, stream);
 
     auto meta_buffer = gamax::device_buffer(
         in.size() * sizeof(typename german_string_impl_t::header_entry_type), 
@@ -181,7 +198,7 @@ std::unique_ptr<string_scalar> make_string_scalar(
     return std::make_unique<string_scalar>(str, stream);
 }
 
-column_ptr make_string_column(
+string_column_ptr make_string_column(
     const char* flat_data,
     const int32_t* lengths,
     size_type num_strings,
@@ -200,7 +217,32 @@ column_ptr make_string_column(
     } else if(impl == string_impl_id::GERMAN_STRING) {
         using german_string_impl_t = typename gamax::detail::id_to_string_impl<string_impl_id::GERMAN_STRING>::string_col_impl;
         return make_german_string_column<german_string_impl_t, arrow_string_impl_t>(
-            lengths,
+            arrow->view_s(),
+            stream);
+    } else {
+        throw std::runtime_error("Unsupported string implementation");
+    }
+}
+
+string_column_ptr make_string_column(
+    device_buffer flat_data,
+    device_buffer offsets,
+    size_type num_strings,
+    cudaStream_t stream,
+    string_impl_id impl) 
+{
+    using arrow_string_impl_t = typename gamax::detail::id_to_string_impl<string_impl_id::ARROW_STRING>::string_col_impl;
+    auto arrow = std::make_unique<string_column>(
+        std::move(flat_data),
+        std::move(offsets),
+        num_strings,
+        string_impl_id::ARROW_STRING);
+    
+    if(impl == string_impl_id::ARROW_STRING) {
+        return arrow;
+    } else if(impl == string_impl_id::GERMAN_STRING) {
+        using german_string_impl_t = typename gamax::detail::id_to_string_impl<string_impl_id::GERMAN_STRING>::string_col_impl;
+        return make_german_string_column<german_string_impl_t, arrow_string_impl_t>(
             arrow->view_s(),
             stream);
     } else {

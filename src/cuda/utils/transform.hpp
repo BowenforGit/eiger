@@ -7,6 +7,13 @@
 #include "memory/table.hpp"
 
 namespace gamax {
+
+enum prefix_sum_options {
+    INCLUSIVE,
+    EXCLUSIVE,
+    INCLUSIVE_PAD_ZERO
+};
+
 namespace util {
 namespace device {
     /**
@@ -38,6 +45,16 @@ namespace device {
     std::unique_ptr<gamax::table> compact(
         gamax::table_view input, 
         gamax::column_view mask, 
+        cudaStream_t stream = cudaStreamDefault);
+
+    std::unique_ptr<gamax::column> prefix_sum( 
+        gamax::column_view input, 
+        gamax::prefix_sum_options option,
+        gamax::data_type output_type,
+        cudaStream_t stream = cudaStreamDefault);
+    
+    gamax::size_type count_nonzero(
+        gamax::column_view input,
         cudaStream_t stream = cudaStreamDefault);
 } // namespace device
 } // namespace util

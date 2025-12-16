@@ -44,7 +44,9 @@ public:
         const auto prefix_len = prefix.size();
         const auto str_len = str.size();
         if (prefix_len > str_len) return false;
-        for (size_type i = 0; i < prefix_len; ++i) {
+
+        #pragma unroll
+        for (int i = 0; i < prefix_len; ++i) {
             if (str[i] != prefix[i]) return false;
         }
         return true;

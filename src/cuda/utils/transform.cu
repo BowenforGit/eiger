@@ -5,6 +5,8 @@
 #include <thrust/execution_policy.h>
 #include <thrust/shuffle.h>
 #include <thrust/reduce.h>
+#include <thrust/scan.h>
+#include <thrust/iterator/transform_iterator.h> 
 #include <cub/device/device_select.cuh>
 #include <memory>
 #include <stdexcept>
@@ -75,6 +77,58 @@ namespace {
             return output;
         }
     };
+
+    struct prefix_sum_impl {
+        template <typename T, typename U>
+        void operator()(
+        gamax::column_view const& input, 
+        gamax::mutable_column_view output, 
+        gamax::prefix_sum_options option,
+        cudaStream_t stream)
+        {
+            const auto& policy = thrust::cuda::par(*get_thrust_allocator()).on(stream);
+            auto in_ptr = input.data<T>();
+            auto out_ptr = output.data<U>();
+            auto n = input.size();
+
+            auto itr_in = thrust::make_transform_iterator(
+                in_ptr,
+                [] __host__ __device__ (T val) { return static_cast<U>(val); });
+
+            switch(option) {
+                case INCLUSIVE:
+                thrust::inclusive_scan(thrust::cuda::par(*get_thrust_allocator()).on(stream), itr_in, itr_in + n, out_ptr);
+                break;
+                case EXCLUSIVE:
+                thrust::exclusive_scan(thrust::cuda::par(*get_thrust_allocator()).on(stream), itr_in, itr_in + n, out_ptr);
+                break;
+                case INCLUSIVE_PAD_ZERO:
+                cudaMemsetAsync(out_ptr, 0, sizeof(U), stream);
+                thrust::inclusive_scan(thrust::cuda::par(*get_thrust_allocator()).on(stream), itr_in, itr_in + n, out_ptr + 1);
+                break;
+            }
+        }
+    };
+
+    struct count_nonzero_impl {
+        template <typename T>
+        gamax::size_type operator()(
+            gamax::column_view const& input,
+            cudaStream_t stream)
+        {
+            auto itr = thrust::make_transform_iterator(
+                input.data<T>(),
+                [] __host__ __device__ (T val) -> gamax::size_type 
+                    { return val != static_cast<T>(0) ? static_cast<gamax::size_type>(1) : static_cast<gamax::size_type>(0); });
+            
+            return thrust::reduce(
+                thrust::cuda::par(*get_thrust_allocator()).on(stream), 
+                itr, 
+                itr + input.size(), 
+                static_cast<gamax::size_type>(0),
+                thrust::plus<gamax::size_type>());
+        }
+    };
 }
 
     std::unique_ptr<gamax::column> gather(
@@ -140,6 +194,26 @@ namespace {
         }
         
         return res;
+    }
+
+    std::unique_ptr<gamax::column> prefix_sum( 
+        gamax::column_view input, 
+        gamax::prefix_sum_options option,
+        gamax::data_type output_type,
+        cudaStream_t stream)
+    {
+        auto output_size = input.size() + ((option == INCLUSIVE_PAD_ZERO) ? 1 : 0);
+        auto output = gamax::make_column(output_type, output_size, false, stream);
+
+        double_type_dispatcher(input.type(), output_type, prefix_sum_impl{}, input, output->mutable_view(), option, stream);
+        return output;
+    }
+
+    gamax::size_type count_nonzero(
+        gamax::column_view input,
+        cudaStream_t stream)
+    {
+        return type_dispatcher(input.type(), count_nonzero_impl{}, input, stream);
     }
 
 } // namespace device

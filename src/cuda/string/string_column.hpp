@@ -107,6 +107,8 @@ private:
     string_impl_id _impl {DEFAULT_STRING_IMPL};
 };
 
+using string_column_ptr = std::unique_ptr<string_column>;
+
 class string_scalar_view {
 public:
     string_scalar_view() = default;
@@ -163,9 +165,16 @@ std::unique_ptr<string_scalar> make_string_scalar(
     std::string_view str, 
     cudaStream_t stream = cudaStreamDefault);
 
-column_ptr make_string_column(
+string_column_ptr make_string_column(
     const char* flat_data,
     const int32_t* lengths,
+    size_type num_strings,
+    cudaStream_t stream = cudaStreamDefault,
+    string_impl_id impl = DEFAULT_STRING_IMPL);
+
+string_column_ptr make_string_column(
+    device_buffer flat_data,
+    device_buffer offsets,
     size_type num_strings,
     cudaStream_t stream = cudaStreamDefault,
     string_impl_id impl = DEFAULT_STRING_IMPL);
