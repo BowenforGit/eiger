@@ -5,7 +5,7 @@
 
 #include "memory/column.hpp"
 #include "memory/table.hpp"
-#include "expr/expr_fast.cuh"
+#include "expr/expr_fast.hpp"
 
 namespace gamax::select {
     std::unique_ptr<gamax::table> select(

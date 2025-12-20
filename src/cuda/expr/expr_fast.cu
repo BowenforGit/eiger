@@ -9,7 +9,7 @@
 #include "memory/table.hpp"
 #include "memory/mem_manager.hpp"
 #include "memory/device_buffer.hpp"
-#include "expr/expr_fast.cuh"
+#include "expr/expr_fast.hpp"
 #include "expr/expr_impl.cuh"
 #include "memory/scalar.hpp"
 #include "utils/utils.cuh"

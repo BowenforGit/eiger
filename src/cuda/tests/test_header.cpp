@@ -17,7 +17,10 @@
 #include "operators/groupby/groupby_sort.hpp"
 #include "operators/groupby/groupby_hash.hpp"
 #include "operators/groupby/groupby_partition.hpp"
-
+#include "operators/select/select.hpp"
+#include "expr/expr_fast.hpp"
+#include "string/string.hpp"
+#include "string/string_column.hpp"
 
 #include <gtest/gtest.h>
 

@@ -2,7 +2,7 @@
 #include <memory>
 #include <cuda.h>
 
-#include "expr/expr_fast.cuh"
+#include "expr/expr_fast.hpp"
 #include "tests/test_helper.hpp"
 #include "memory/column.hpp"
 #include "memory/table.hpp"

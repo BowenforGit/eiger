@@ -10,7 +10,7 @@
 #include <type_traits>
 
 #include "operators/select/select.hpp"
-#include "expr/expr_fast.cuh"
+#include "expr/expr_fast.hpp"
 #include "data_gen/table_gen.hpp"
 #include "utils/utils.cuh"
 #include "memory/column.hpp"

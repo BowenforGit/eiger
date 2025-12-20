@@ -4,7 +4,7 @@
 #include <cuda.h>
 
 #include "operators/select/select.hpp"
-#include "expr/expr_fast.cuh"
+#include "expr/expr_fast.hpp"
 #include "memory/column.hpp"
 #include "memory/table.hpp"
 #include "types/data_type.hpp"
