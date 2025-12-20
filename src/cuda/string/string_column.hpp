@@ -114,6 +114,7 @@ public:
     string_scalar_view() = default;
     ~string_scalar_view() = default;
 
+    __host__ __device__ __forceinline__
     string_scalar_view(const void* data, size_type size) 
         : _data(static_cast<const char*>(data)), _size(size) {}
 

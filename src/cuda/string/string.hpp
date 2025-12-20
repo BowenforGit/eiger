@@ -6,21 +6,29 @@
 #include "memory/column.hpp"
 
 namespace gamax {
+struct string_op_options {
+    int cg_size {1};
+    bool use_kmp {false};
+};
+
 column_ptr startswith(
     gamax::string_column_view in,
     gamax::string_scalar_view prefix,
-    cudaStream_t stream = cudaStreamDefault
+    cudaStream_t stream = cudaStreamDefault,
+    string_op_options options = {}
 );
 
 column_ptr endswith(
     gamax::string_column_view in,
     gamax::string_scalar_view suffix,
-    cudaStream_t stream = cudaStreamDefault
+    cudaStream_t stream = cudaStreamDefault,
+    string_op_options options = {}
 );
 
 column_ptr contains(
     gamax::string_column_view in,
     gamax::string_scalar_view substring,
-    cudaStream_t stream = cudaStreamDefault
+    cudaStream_t stream = cudaStreamDefault,
+    string_op_options options = {}
 );
 }

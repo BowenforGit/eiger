@@ -48,9 +48,6 @@ public:
     static_assert(is_valid_header_policy<Policy>::value, "Invalid header policy");
     static_assert(Policy::supports_inlining, "Policy must support inlining for inlined header impl");
     
-    // constexpr static int prefix_len = Policy::prefix_len;
-    // constexpr static int max_inlined_len = prefix_len + sizeof(BufferIndexType);
-    
     using buffer_offset_type = BufferIndexType;
     using len_type = LengthType;
     using policy_type = Policy;
@@ -87,7 +84,7 @@ public:
         return const_cast<char&>(static_cast<const string_header_entry_inlined_impl&>(*this).charAt(index));
     }
 
-    __host__ __device__ __forceinline__ BufferIndexType offset() const noexcept {
+    __host__ __device__ __forceinline__ constexpr BufferIndexType offset() const noexcept {
         return buffer_offset_;
     }
 
@@ -97,6 +94,11 @@ public:
 
     __host__ __device__ __forceinline__ void set_offset(BufferIndexType offset) noexcept {
         buffer_offset_ = offset;
+    }
+
+    __host__ __device__ __forceinline__ void prefetch() const noexcept {
+        uint4 v = *reinterpret_cast<const uint4*>(this);
+        asm volatile("" :: "r"(v.x), "r"(v.y), "r"(v.z), "r"(v.w));
     }
 
 private:
@@ -139,12 +141,11 @@ public:
         GAMAX_UNREACHABLE("Cannot access inlined data in offset-only header");
     }
 
+    __host__ __device__ __forceinline__ void prefetch() const noexcept {}
+
 private:
     BufferIndexType offset_ {0};
 };
-
-// static_assert(sizeof(string_header_entry_impl<int32_t, gamax::size_type, offset_only_header_policy>) == 8, "Offset-only header must only contain offset");
-
 
 // Convenient alias
 template<typename LengthType, typename BufferIndexType, typename Policy>
@@ -175,6 +176,7 @@ public:
     }
 
     __host__ __device__ __forceinline__ header_entry_type const& operator[](size_type index) const noexcept {
+        headers_[index].prefetch();
         return headers_[index];
     }
 
@@ -187,6 +189,9 @@ private:
     header_entry_type* headers_ {nullptr};
 };
 
+struct from_buffer_tag{};
+struct from_header_tag{};
+
 template<typename Header>
 class string_flat_buffer {
 public:
@@ -195,7 +200,7 @@ public:
     using buffer_type = char*;
     using str_idx_type = typename Header::len_type;
 
-    __host__ __device__ string_flat_buffer(char* data_ptr, buffer_offset_type size)
+    __host__ __device__ __forceinline__ string_flat_buffer(char* data_ptr, buffer_offset_type size)
         : data_ptr_(data_ptr), size_(size) {}
     
     __host__ __device__ __forceinline__ const char* data() const noexcept {
@@ -218,19 +223,6 @@ public:
         return data_ptr_[index];
     }
 
-
-    __host__ __device__ __forceinline__ const char& charAt(typename Header::header_entry_type const& header, str_idx_type rel_index) const noexcept {
-        if constexpr (header.max_inlined_len() == 0) {
-            return charAt(header.offset() + rel_index);
-        } else {
-            if(header.length() <= header.max_inlined_len() || rel_index < header.prefix_len()) {
-                return header.charAt(rel_index);
-            } else {
-                return charAt(header.offset() + rel_index - header.prefix_len());
-            }
-        }
-    }
-
     __host__ __device__ __forceinline__ char& charAt(typename Header::header_entry_type& header, str_idx_type rel_index) noexcept {
         if constexpr (header.max_inlined_len() == 0) {
             return charAt(header.offset() + rel_index);
@@ -243,6 +235,10 @@ public:
         }
     }
 
+    __host__ __device__ __forceinline__ string_flat_buffer<Header> operator+(buffer_offset_type offset) const noexcept {
+        return string_flat_buffer<Header>(data_ptr_ + offset, size_ - offset);
+    }
+
 private:
     char* data_ptr_ {nullptr};
     buffer_offset_type size_ {0};
@@ -253,6 +249,7 @@ class string_view {
 public:
     using header_entry_type = typename Header::header_entry_type;
     using buffer_type = typename Buffer::buffer_type;
+    using buffer_offset_type = typename Buffer::buffer_offset_type;
     using len_type = typename Header::len_type;
     using str_idx_type = len_type;
 
@@ -265,7 +262,7 @@ public:
     
     __host__ __device__ __forceinline__
     string_view(header_entry_type const& header_impl, Buffer const& buffer_impl, len_type len)
-        : header_(header_impl), buffer_(buffer_impl), len_(len) {}
+        : header_(header_impl), buffer_(buffer_impl + (header_impl.offset() - header_impl.prefix_len())), len_(len) {}
     
     __host__ __device__ __forceinline__ constexpr len_type size() const noexcept {
         return len_;
@@ -276,12 +273,98 @@ public:
     }
 
     __host__ __device__ __forceinline__ const char& operator[](str_idx_type index) const noexcept {
-        return buffer_.charAt(header_, index);
+        if constexpr (header_.max_inlined_len() == 0) {
+            return buffer_.charAt(index);
+        } else {
+            if(header_.length() <= header_.max_inlined_len() || index < header_.prefix_len()) {
+                return header_.charAt(index);
+            } else {
+                return buffer_.charAt(index);
+            }
+        }
+    }
+    
+    __host__ __device__ __forceinline__ const char& charAt(const str_idx_type index, from_header_tag) const noexcept {
+        return header_.charAt(index);
+    }
+
+    __host__ __device__ __forceinline__ const char& charAt(const str_idx_type index, from_buffer_tag) const noexcept {
+        return buffer_.charAt(index);
+    }
+
+
+    static __host__ __device__ __forceinline__ constexpr len_type prefix_len() noexcept {
+        return header_entry_type::prefix_len();
+    }
+
+    static __host__ __device__ __forceinline__ constexpr len_type max_inlined_len() noexcept {
+        return header_entry_type::max_inlined_len();
+    }
+
+    __host__ __device__ __forceinline__ bool compare(const char* this_ptr, const char* other_ptr, len_type other_size) const noexcept {
+        if((reinterpret_cast<uintptr_t>(this_ptr)) % 4 == 0 && (reinterpret_cast<uintptr_t>(other_ptr)) % 4 == 0) {
+            const int32_t* this_ptr_32 = reinterpret_cast<const int32_t*>(this_ptr);
+            const int32_t* other_ptr_32 = reinterpret_cast<const int32_t*>(other_ptr);
+            size_type n_chunks = other_size / 4;
+            for(size_type i = 0; i < n_chunks; ++i) {
+                if(this_ptr_32[i] != other_ptr_32[i]) {
+                    return false;
+                }
+            }
+            size_type remaining = other_size % 4;
+            const char* this_ptr_char = reinterpret_cast<const char*>(this_ptr_32 + n_chunks);
+            const char* other_ptr_char = reinterpret_cast<const char*>(other_ptr_32 + n_chunks);
+            for(size_type i = 0; i < remaining; ++i) {
+                if(this_ptr_char[i] != other_ptr_char[i]) {
+                    return false;
+                }
+            }
+            return true;
+        } else {
+            for(size_type i = 0; i < other_size; ++i) {
+                if(this_ptr[i] != other_ptr[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    __host__ __device__ __forceinline__ bool compare(string_scalar_view const& other, str_idx_type start = 0) const noexcept {
+        const auto this_size = size();
+        const auto other_size = other.size();
+        if(other_size > this_size - start) {
+            return false;
+        }
+
+        if constexpr (header_.max_inlined_len() == 0) { // arrow strings
+            const auto* this_ptr = buffer_.data() + start;
+            const auto* other_ptr = other.data();
+            return compare(this_ptr, other_ptr, other_size);
+        } else { // german strings
+            // To be implemented
+            bool match = true;
+            int idx = 0;
+            int stridx = start;
+            #pragma unroll
+            for (; match && stridx < this->prefix_len() && idx < other_size; idx += 1, stridx += 1) {
+                match = (this->charAt(stridx, from_header_tag{}) == other[idx]);
+            }
+            #pragma unroll
+            for (; match && this->size() < this->max_inlined_len() && idx < other_size; idx += 1, stridx += 1) {
+                match = (this->charAt(stridx, from_header_tag{}) == other[idx]);
+            }
+            #pragma unroll
+            for (; match && idx < other_size; idx += 1, stridx += 1) {
+                match = (this->charAt(stridx, from_buffer_tag{}) == other[idx]);
+            }
+            return match;
+        }
     }
 
 private:
     header_entry_type const& header_;
-    Buffer const& buffer_;
+    Buffer buffer_;
     len_type len_ {0};
 };
 
@@ -342,17 +425,17 @@ public:
     string_column_impl(string_column_impl&& other) noexcept = default;
     string_column_impl& operator=(string_column_impl&& other) noexcept = default;
     
-    __device__
+    __device__ __forceinline__
     string_column_impl(Header header_impl, Buffer buffer_impl)
         : header_impl_(header_impl), buffer_impl_(buffer_impl) {}
     
     // TODO: use the const_cast is not elegant, find a better way
-    __device__
+    __device__ __forceinline__
     string_column_impl(gamax::string_column_view const& col)
         : header_impl_(static_cast<typename Header::header_entry_type*>(const_cast<void*>(col.meta()))), 
           buffer_impl_(static_cast<char*>(const_cast<void*>(col.data())), col.size()) {}
     
-    __device__
+    __device__ __forceinline__
     string_column_impl(gamax::mutable_string_column_view const& col)
         : header_impl_(static_cast<typename Header::header_entry_type*>(col.meta())), 
           buffer_impl_(static_cast<char*>(col.data()), col.size()) {}

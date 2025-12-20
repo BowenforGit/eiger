@@ -51,9 +51,9 @@ protected:
             case Operation::StartsWith: {
                 if (id == OpDatasetId::Case1) {
                     return {
-                        {"apple","app","banana","","application"},
+                        {"apple","app","banana","","application","apjdklajlskadsa"},
                         "app",
-                        {true,true,false,false,true}
+                        {true,true,false,false,true,false}
                     };
                 } else {
                     return {

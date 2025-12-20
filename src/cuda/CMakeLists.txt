@@ -44,6 +44,7 @@ set(srcs
     memory/table.cu
     memory/mem_manager.cu
     data_gen/table_gen.cu
+    data_gen/string_generator.cu
     utils/transform.cu
     string/string_factory.cu
     string/string.cu
