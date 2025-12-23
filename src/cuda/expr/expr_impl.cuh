@@ -73,6 +73,44 @@ struct right_shift_helper {
     }
 };
 
+struct left_shift_helper_v2 {
+    int bits;
+    left_shift_helper_v2(int bits) : bits(bits) {}
+
+    template <typename T, typename std::enable_if<std::is_integral<T>::value, int>::type = 0>
+    __host__ __device__ T operator()(T value) const {
+        return value << bits;
+    }
+
+    template <typename T, typename std::enable_if<!std::is_integral<T>::value, int>::type = 0>
+    __host__ __device__ T operator()(T value) const {
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
+            throw std::runtime_error("Only integral types can be left-shifted.");
+#else
+            GAMAX_UNREACHABLE("Only integral types can be left-shifted.");
+#endif
+    }
+};
+
+struct right_shift_helper_v2 {
+    int bits;
+    right_shift_helper_v2(int bits) : bits(bits) {}
+
+    template <typename T, typename std::enable_if<std::is_integral<T>::value, int>::type = 0>
+    __host__ __device__ T operator()(T value) const {
+        return value >> bits;
+    }
+
+    template <typename T, typename std::enable_if<!std::is_integral<T>::value, int>::type = 0>
+    __host__ __device__ T operator()(T value) const {
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
+            throw std::runtime_error("Only integral types can be right-shifted.");
+#else
+            GAMAX_UNREACHABLE("Only integral types can be right-shifted.");
+#endif
+    }
+};
+
 struct sqrt_helper {
     template <typename T>
     __host__ __device__ gamax::scalar operator()(gamax::scalar value) const {
@@ -149,6 +187,11 @@ struct add_helper {
     __host__ __device__ T operator()(T lhs, T rhs) const {
         return lhs + rhs;
     }
+
+    template <typename T, typename U>
+    __host__ __device__ std::common_type_t<T, U> operator()(T lhs, U rhs) const {
+        return lhs + rhs;
+    }
 };
 
 struct substract_helper {
@@ -159,6 +202,11 @@ struct substract_helper {
 
     template <typename T>
     __host__ __device__ T operator()(T lhs, T rhs) const {
+        return lhs - rhs;
+    }
+
+    template <typename T, typename U>
+    __host__ __device__ std::common_type_t<T, U> operator()(T lhs, U rhs) const {
         return lhs - rhs;
     }
 };
@@ -173,6 +221,11 @@ struct multiply_helper {
     __host__ __device__ T operator()(T lhs, T rhs) const {
         return lhs * rhs;
     }
+
+    template <typename T, typename U>
+    __host__ __device__ std::common_type_t<T, U> operator()(T lhs, U rhs) const {
+        return lhs * rhs;
+    }
 };
 
 struct divide_helper {
@@ -183,6 +236,11 @@ struct divide_helper {
 
     template <typename T>
     __host__ __device__ T operator()(T lhs, T rhs) const {
+        return lhs / rhs;
+    }
+
+    template <typename T, typename U>
+    __host__ __device__ std::common_type_t<T, U> operator()(T lhs, U rhs) const {
         return lhs / rhs;
     }
 };
@@ -197,6 +255,11 @@ struct gt_helper {
     __host__ __device__ bool operator()(T lhs, T rhs) const {
         return lhs > rhs;
     }
+
+    template <typename T, typename U>
+    __host__ __device__ bool operator()(T lhs, U rhs) const {
+        return lhs > rhs;
+    }
 };
 
 struct lt_helper {
@@ -207,6 +270,11 @@ struct lt_helper {
 
     template <typename T>
     __host__ __device__ bool operator()(T lhs, T rhs) const {
+        return lhs < rhs;
+    }
+
+    template <typename T, typename U>
+    __host__ __device__ bool operator()(T lhs, U rhs) const {
         return lhs < rhs;
     }
 };
@@ -221,6 +289,11 @@ struct ge_helper {
     __host__ __device__ bool operator()(T lhs, T rhs) const {
         return lhs >= rhs;
     }
+
+    template <typename T, typename U>
+    __host__ __device__ bool operator()(T lhs, U rhs) const {
+        return lhs >= rhs;
+    }
 };
 
 struct le_helper {
@@ -231,6 +304,11 @@ struct le_helper {
 
     template <typename T>
     __host__ __device__ bool operator()(T lhs, T rhs) const {
+        return lhs <= rhs;
+    }
+
+    template <typename T, typename U>
+    __host__ __device__ bool operator()(T lhs, U rhs) const {
         return lhs <= rhs;
     }
 };
@@ -245,6 +323,11 @@ struct eq_helper {
     __host__ __device__ bool operator()(T lhs, T rhs) const {
         return lhs == rhs;
     }
+
+    template <typename T, typename U>
+    __host__ __device__ bool operator()(T lhs, U rhs) const {
+        return lhs == rhs;
+    }
 };
 
 struct neq_helper {
@@ -255,6 +338,11 @@ struct neq_helper {
 
     template <typename T>
     __host__ __device__ bool operator()(T lhs, T rhs) const {
+        return lhs != rhs;
+    }
+
+    template <typename T, typename U>
+    __host__ __device__ bool operator()(T lhs, U rhs) const {
         return lhs != rhs;
     }
 };
@@ -269,6 +357,11 @@ struct and_helper {
     __host__ __device__ bool operator()(T lhs, T rhs) const {
         return lhs && rhs;
     }
+
+    template <typename T, typename U>
+    __host__ __device__ bool operator()(T lhs, U rhs) const {
+        return lhs && rhs;
+    }
 };
 
 struct or_helper {
@@ -279,6 +372,11 @@ struct or_helper {
 
     template <typename T>
     __host__ __device__ bool operator()(T lhs, T rhs) const {
+        return lhs || rhs;
+    }
+
+    template <typename T, typename U>
+    __host__ __device__ bool operator()(T lhs, U rhs) const {
         return lhs || rhs;
     }
 };

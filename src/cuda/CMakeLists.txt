@@ -64,6 +64,7 @@ if(USE_CUDA)
         operators/join/hash_join.cu
         operators/select/select.cu
         expr/expr_fast.cu
+        expr/expr_nofuse.cu
     )
 endif()
 

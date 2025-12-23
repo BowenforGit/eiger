@@ -359,10 +359,16 @@ public:
         return _root.type;
     }
 
-    auto make_program(cudaStream_t stream = cudaStreamDefault) {
+    auto make_program_host() {
         std::vector<Expr> program_exprs;
         
         generate_code_sethi_ullman(*this, 0, program_exprs);
+
+        return program_exprs;
+    }
+
+    auto make_program(cudaStream_t stream = cudaStreamDefault) {
+        std::vector<Expr> program_exprs = make_program_host();
 
         Expr* d_exprs;
         gamax::size_type n_exprs = program_exprs.size();
@@ -376,6 +382,32 @@ public:
 
     int max_regs() const {
         return _max_regs;
+    }
+
+    gamax::type_id get_common_type() const {
+        gamax::type_id common_type = gamax::type_id::EMPTY;
+        bool first = true;
+        
+        std::function<void(const ExprTree&)> traverse = [&](const ExprTree& tree) {
+            if (tree._root.id == ExprId::Constant || tree._root.id == ExprId::Column) {
+                gamax::type_id current_type = tree._root.type.id();
+                if (first) {
+                    common_type = current_type;
+                    first = false;
+                } else if (common_type != current_type) {
+                    common_type = gamax::type_id::EMPTY;
+                }
+            }
+            
+            for (const auto& child : tree._children) {
+                if (child) {
+                    traverse(*child);
+                }
+            }
+        };
+        
+        traverse(*this);
+        return common_type;
     }
 
 private:
@@ -478,6 +510,12 @@ private:
 };
 
 std::unique_ptr<gamax::column> evaluate_expr(
+    gamax::table_view table,
+    ExprTree& et, 
+    cudaStream_t stream = cudaStreamDefault);
+
+// one operator per kernel
+std::unique_ptr<gamax::column> evaluate_expr_nofuse(
     gamax::table_view table,
     ExprTree& et, 
     cudaStream_t stream = cudaStreamDefault);

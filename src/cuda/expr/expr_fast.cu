@@ -15,12 +15,6 @@
 #include "utils/utils.cuh"
 
 namespace gamax::expression {
-namespace {
-    gamax::type_id is_fast_path_compatible(ExprTree const& et) {
-        // TODO: implement checks for fast path compatibility
-        return gamax::type_id::EMPTY;
-    }
-} // namespace anonymous
 
 namespace detail::common {
 struct expr_intermediate_storage {
@@ -621,7 +615,7 @@ std::unique_ptr<gamax::column> evaluate_expr(
     ExprTree& et, 
     cudaStream_t stream) 
 {   
-    auto common_type = is_fast_path_compatible(et);
+    auto common_type = et.get_common_type();
     if (common_type != gamax::type_id::EMPTY) {
         return gamax::double_type_dispatcher(
             gamax::data_type(common_type),
