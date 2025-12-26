@@ -2,9 +2,8 @@ import pylibcudf as plc
 import pyarrow as pa
 import timeit
 import string
-import socket
 from cudf.core.column.column import ColumnBase
-from datetime import datetime
+from bench_cudf_utils import *
 
 WARMUP_RUNS = 5
 BENCHMARK_RUNS = 10
@@ -31,6 +30,7 @@ def bench_contains(col, pattern, use_kmp=False):
     return result, elapsed_time
 
 op_to_bench_func = {
+    "equal": bench_startswith,  # Reuse startswith for equal benchmarking
     "startswith": bench_startswith,
     "endswith": bench_endswith,
     "contains": bench_contains,
@@ -63,7 +63,7 @@ def generate_contains_strings(num_strings, str_len, pattern):
     return generate_plc_col(string, num_strings)
 
 def generate_strings(op, num_strings, str_len, pattern):
-    if op == "startswith":
+    if op == "startswith" or op == "equal":
         return generate_startswith_strings(num_strings, str_len, pattern)
     elif op == "endswith":
         return generate_endswith_strings(num_strings, str_len, pattern)
@@ -101,29 +101,31 @@ def bench(plc_col, plc_pattern, op):
     thpt = num_strings / avg_time
     return avg_time, thpt
 
-def write_results_to_csv(results, basename, header):
-    hostname = socket.gethostname().split('.')[0]
-    today = datetime.now().strftime('%Y%m%d')
-    filename = f"{basename}_{hostname}_{today}.csv"
-    with open(filename, "w") as f:
-        f.write(header + "\n")
-        for line in results:
-            f.write(line + "\n")
-
 if __name__ == "__main__":
     all_results = []
-    for plen in [4, 12, 36]:
+    for plen in [5, 50]:
         pattern, plc_pattern = generate_pattern(plen)
         for op in ["startswith", "endswith", "contains"]:
-            for num_strings in [2**28]:
-                for strlen in [30, 60, 90, 120, 150]:
+            for num_strings in [2**26, 2**28]:
+                for strlen in [30, 45, 60, 75, 90, 105, 120, 135]:
                     print(f"Benchmarking {op} with strlen={strlen}, plen={plen}, num_strings={num_strings}")
                     if plen > strlen:
                         print("[Skip]")
                         continue
                     plc_col = generate_strings(op, num_strings, strlen, pattern)
                     avg_time, thpt = bench(plc_col, plc_pattern, op)
+                    print(f"Avg Time: {avg_time*1000}, Throughput: {thpt/1e9} GStrings/s")
                     all_results.append(f"cudf,{op},{num_strings},{strlen},{plen},{avg_time},{thpt}")
+    
+    for op in ["equal"]:
+        for num_strings in [2**26, 2**28]:
+            for strlen in [30, 45, 60, 75, 90, 105, 120, 135]:
+                pattern, plc_pattern = generate_pattern(strlen)
+                print(f"Benchmarking {op} with strlen={strlen}, plen={strlen}, num_strings={num_strings}")
+                plc_col = generate_strings(op, num_strings, strlen, pattern)
+                avg_time, thpt = bench(plc_col, plc_pattern, op)
+                print(f"Avg Time: {avg_time*1000}, Throughput: {thpt/1e9} GStrings/s")
+                all_results.append(f"cudf,{op},{num_strings},{strlen},{strlen},{avg_time},{thpt}")
     
     write_results_to_csv(
         all_results, 

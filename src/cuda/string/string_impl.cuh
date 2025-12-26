@@ -80,6 +80,14 @@ public:
         }
     }
 
+    __host__ __device__ __forceinline__ const char* prefix() const noexcept {
+        return prefix_;
+    }
+
+    __host__ __device__ __forceinline__ char* prefix() noexcept {
+        return prefix_;
+    }
+
     __host__ __device__ __forceinline__ char& charAt(LengthType index) noexcept {
         return const_cast<char&>(static_cast<const string_header_entry_inlined_impl&>(*this).charAt(index));
     }
@@ -283,6 +291,10 @@ public:
             }
         }
     }
+
+    __host__ __device__ __forceinline__ const char* data() const noexcept {
+        return buffer_.data();
+    }
     
     __host__ __device__ __forceinline__ const char& charAt(const str_idx_type index, from_header_tag) const noexcept {
         return header_.charAt(index);
@@ -361,6 +373,52 @@ public:
             return match;
         }
     }
+
+    // __host__ __device__ __forceinline__ bool compare_german_string(string_scalar_view const& other, str_idx_type start = 0) const noexcept {
+    //     const auto this_size = size();
+    //     const auto other_size = other.size();
+    //     if(other_size > this_size - start) {
+    //         return false;
+    //     }
+
+    //     if(this_size <= prefix_len()) {
+    //         // Entire string is inlined in prefix field of header
+    //         bool match = true;
+    //         #pragma unroll
+    //         for(size_type i = 0; match && i < other_size; ++i) {
+    //             match = (this->charAt(start + i, from_header_tag{}) == other[i]);
+    //         }
+    //         return match;
+    //     } else if(this_size <= max_inlined_len()) {
+    //         // Entire string is inlined in header
+    //         bool match = true;
+    //         int idx = 0;
+    //         int stridx = start;
+    //         #pragma unroll
+    //         for (; match && idx < other_size; idx += 1, stridx += 1) {
+    //             match = (this->charAt(stridx, from_header_tag{}) == other[idx]);
+    //         }
+    //         return match;
+    //     } else {
+    //         // String is stored partly in header prefix field and partly in buffer
+    //         bool match = true;
+    //         int idx = 0;
+    //         int stridx = start;
+            
+    //         #pragma unroll
+    //         for (; match && stridx < this->prefix_len() && idx < other_size; idx += 1, stridx += 1) {
+    //             match = (this->charAt(stridx, from_header_tag{}) == other[idx]);
+    //         }
+    //         if(!match)  return false;
+            
+    //         const char* this_buffer_ptr = buffer_.data() + (stridx - this->prefix_len());
+    //         const char* other_ptr = other.data() + idx;
+    //         size_type remaining = other_size - idx;
+    //         match = compare(this_buffer_ptr, other_ptr, remaining);
+    //         return match;
+    //     }
+    //     return match;
+    // }
 
 private:
     header_entry_type const& header_;

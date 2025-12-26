@@ -8,8 +8,16 @@
 namespace gamax {
 struct string_op_options {
     int cg_size {1};
+    int access_width {4};
     bool use_kmp {false};
 };
+
+column_ptr equal(
+    gamax::string_column_view in,
+    gamax::string_scalar_view string,
+    cudaStream_t stream = cudaStreamDefault,
+    string_op_options options = {}
+);
 
 column_ptr startswith(
     gamax::string_column_view in,

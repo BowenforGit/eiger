@@ -11,13 +11,26 @@
 namespace gamax {
 namespace test {
 
-enum class Operation { StartsWith, EndsWith, Contains };
+enum class Operation { Equal, StartsWith, EndsWith, Contains };
 enum class OpDatasetId { Case1, Case2 };
 
 struct TestParams {
     string_impl_id impl;
     Operation op;
     OpDatasetId dataset_id;
+    int cg_size;
+    int access_width;
+    bool use_kmp;
+
+    friend std::ostream& operator<<(std::ostream& os, const TestParams& params) {
+        os << "Impl=" << static_cast<int>(params.impl)
+           << "_Op=" << static_cast<int>(params.op)
+           << "_Dataset=" << static_cast<int>(params.dataset_id)
+           << "_CGSize=" << params.cg_size
+           << "_AccessWidth=" << params.access_width
+           << "_UseKMP=" << params.use_kmp;
+        return os;
+    }
 };
 
 struct OpDataset {
@@ -48,16 +61,51 @@ protected:
 
     static OpDataset getDataset(Operation op, OpDatasetId id) {
         switch(op) {
+            case Operation::Equal: {
+                if (id == OpDatasetId::Case1) {
+                    return {
+                        {
+                            "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456",
+                            "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456",
+                            "ABCD EFGH IJKL MNOP QRST",
+                            "",
+                            "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456 7890 !@#$%^&*()",
+                            "ABCD EFGH IJKL MNOP !@#$ UVWX YZ12 3456 7890"
+                        },
+                        "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456",
+                        {true,true,false,false,false,false}
+                    };
+                } else {
+                    return {
+                        {"test","test","testing","string",""},
+                        "test",
+                        {true,true,false,false,false}
+                    };
+                }
+            }
             case Operation::StartsWith: {
                 if (id == OpDatasetId::Case1) {
                     return {
-                        {"apple","app","banana","","application","apjdklajlskadsa"},
-                        "app",
+                        {
+                            "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456 7890",
+                            "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456 abcde",
+                            "ABCD EFGH IJKL MNOP QRST",
+                            "",
+                            "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456 7890 !@#$%^&*()",
+                            "ABCD EFGH IJKL MNOP !@#$ UVWX YZ12 3456 7890"
+                        },
+                        "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456",
                         {true,true,false,false,true,false}
                     };
                 } else {
                     return {
-                        {"hello world, my name is Eiger.","world world world","he","hell hello hallo guten morgen","hello world!!!"},
+                        {
+                            "hello world, my name is Eiger.",
+                            "world world world",
+                            "he",
+                            "hell hello hallo guten morgen",
+                            "hello world!!!"
+                        },
                         "hello",
                         {true,false,false,false,true}
                     };
@@ -66,9 +114,16 @@ protected:
             case Operation::EndsWith: {
                 if (id == OpDatasetId::Case1) {
                     return {
-                        {"filejfklafsjkla.txt","docjdkflsjfl;ak.txt","imagekdjalkdkslajs;ld.png","","text"},
-                        ".txt",
-                        {true,true,false,false,false}
+                        {
+                            "7890 ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456",
+                            "abcde ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456",
+                            "ABCD EFGH IJKL MNOP QRST",
+                            "",
+                            "7890 !@#$%^&*() ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456",
+                            "ABCD EFGH IJKL MNOP !@#$ UVWX YZ12 3456"
+                        },
+                        "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456",
+                        {true,true,false,false,true,false}
                     };
                 } else {
                     return {
@@ -81,9 +136,16 @@ protected:
             case Operation::Contains: {
                 if (id == OpDatasetId::Case1) {
                     return {
-                        {"cuda is fast, looooool","fast","very fast indeed","slow",""},
-                        "fast",
-                        {true,true,true,false,false}
+                        {
+                            "fa09 901jd ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456 7890 djailsja",
+                            "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456 abcde",
+                            "ABCD EFGH IJKL MNOP QRST",
+                            "",
+                            "jflak;jfslajla; ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456 7890 !@#$%^&*()",
+                            "ABCD EFGH IJKL MNOP !@#$ UVWX YZ12 3456 7890"
+                        },
+                        "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456",
+                        {true,true,false,false,true,false}
                     };
                 } else {
                     return {
@@ -102,12 +164,14 @@ protected:
         Operation op,
         const gamax::string_column_view& in,
         const gamax::string_scalar_view& param,
-        cudaStream_t stream)
+        cudaStream_t stream,
+        string_op_options options)
     {
         switch(op) {
-            case Operation::StartsWith: return startswith(in, param, stream);
-            case Operation::EndsWith:   return endswith(in, param, stream);
-            case Operation::Contains:   return contains(in, param, stream);
+            case Operation::Equal:      return equal(in, param, stream, options);
+            case Operation::StartsWith: return startswith(in, param, stream, options);
+            case Operation::EndsWith:   return endswith(in, param, stream, options);
+            case Operation::Contains:   return contains(in, param, stream, options);
         }
         return nullptr;
     }
@@ -116,6 +180,11 @@ protected:
 TEST_P(StringOpsTest, StringOperationProducesExpectedMask) {
     const auto params = GetParam();
     const auto ds = getDataset(params.op, params.dataset_id);
+    
+    gamax::string_op_options options{};
+    options.cg_size = params.cg_size;
+    options.access_width = params.access_width;
+    options.use_kmp = params.use_kmp;
 
     auto [flat, lens] = prepareFlatData(ds.strings);
     auto str_col_ptr = make_string_column(
@@ -131,7 +200,7 @@ TEST_P(StringOpsTest, StringOperationProducesExpectedMask) {
 
     auto scalar_ptr = make_string_scalar(ds.query, stream_);
     ASSERT_NE(scalar_ptr, nullptr);
-    auto result = runOp(params.op, str_view, scalar_ptr->view(), stream_);
+    auto result = runOp(params.op, str_view, scalar_ptr->view(), stream_, options);
 
     ASSERT_NE(result, nullptr);
     EXPECT_EQ(result->type().id(), gamax::type_id::BOOL8);
@@ -144,34 +213,43 @@ TEST_P(StringOpsTest, StringOperationProducesExpectedMask) {
     }
 }
 
+#define TEST_VALUES(IMPL, OP, USE_KMP) \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case1, 1, 1, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case1, 1, 2, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case1, 1, 4, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case1, 1, 8, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case1, 4, 1, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case1, 4, 2, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case1, 4, 4, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case1, 4, 8, USE_KMP}
+
 INSTANTIATE_TEST_SUITE_P(
-    StartsWithBothLayouts,
+    Equal,
     StringOpsTest,
     ::testing::Values(
-        TestParams{string_impl_id::GERMAN_STRING, Operation::StartsWith, OpDatasetId::Case1},
-        TestParams{string_impl_id::ARROW_STRING,  Operation::StartsWith, OpDatasetId::Case1},
-        TestParams{string_impl_id::GERMAN_STRING, Operation::StartsWith, OpDatasetId::Case2},
-        TestParams{string_impl_id::ARROW_STRING,  Operation::StartsWith, OpDatasetId::Case2}
+        TEST_VALUES(ARROW_STRING,  Equal, false)
     ));
 
 INSTANTIATE_TEST_SUITE_P(
-    EndsWithBothLayouts,
+    StartsWith,
     StringOpsTest,
     ::testing::Values(
-        TestParams{string_impl_id::GERMAN_STRING, Operation::EndsWith, OpDatasetId::Case1},
-        TestParams{string_impl_id::ARROW_STRING,  Operation::EndsWith, OpDatasetId::Case1},
-        TestParams{string_impl_id::GERMAN_STRING, Operation::EndsWith, OpDatasetId::Case2},
-        TestParams{string_impl_id::ARROW_STRING,  Operation::EndsWith, OpDatasetId::Case2}
+        TEST_VALUES(ARROW_STRING,  StartsWith, false)
     ));
 
 INSTANTIATE_TEST_SUITE_P(
-    ContainsBothLayouts,
+    EndsWith,
     StringOpsTest,
     ::testing::Values(
-        TestParams{string_impl_id::GERMAN_STRING, Operation::Contains, OpDatasetId::Case1},
-        TestParams{string_impl_id::ARROW_STRING,  Operation::Contains, OpDatasetId::Case1},
-        TestParams{string_impl_id::GERMAN_STRING, Operation::Contains, OpDatasetId::Case2},
-        TestParams{string_impl_id::ARROW_STRING,  Operation::Contains, OpDatasetId::Case2}
+        TEST_VALUES(ARROW_STRING,  EndsWith, false)
+    ));
+
+INSTANTIATE_TEST_SUITE_P(
+    Contains,
+    StringOpsTest,
+    ::testing::Values(
+        TEST_VALUES(ARROW_STRING,  Contains, false),
+        TEST_VALUES(ARROW_STRING,  Contains, true)
     ));
 
 } // namespace test

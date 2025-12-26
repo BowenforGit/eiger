@@ -47,7 +47,7 @@ set(srcs
     data_gen/string_generator.cu
     utils/transform.cu
     string/string_factory.cu
-    string/string.cu
+    string/string_fast.cu
     )
     
 if(USE_CUDA)

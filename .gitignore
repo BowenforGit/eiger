@@ -11,3 +11,7 @@ build*/
 src-hip/
 hip/
 compile_commands.json
+tools/visualize/data/measurements/**
+tools/results
+__pycache__/
+nsight-compute-lock

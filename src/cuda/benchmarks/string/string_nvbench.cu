@@ -28,7 +28,7 @@ string_length_distribution parse_length_dist(const std::string& value) {
 }
 
 gamax::string_impl_id parse_impl(const std::string& value) {
-    if (value == "german") return gamax::string_impl_id::GERMAN_STRING;
+    // if (value == "german") return gamax::string_impl_id::GERMAN_STRING;
     if (value == "arrow") return gamax::string_impl_id::ARROW_STRING;
     throw std::runtime_error("Unknown string impl value: " + value);
 }
@@ -43,6 +43,7 @@ struct bm_params {
     std::string op;
     int cg_size;
     bool use_kmp;
+    int access_width;
 
     explicit bm_params(nvbench::state& state)
         : num_strings(state.get_int64("num_strings")),
@@ -50,10 +51,11 @@ struct bm_params {
           impl(parse_impl(state.get_string("impl"))),
           selectivity(state.get_float64("selectivity")),
           fixed_length(state.get_int64("fixed_length")),
-          pattern_length(state.get_int64("pattern_length")),
+          pattern_length(state.get_int64_or_default("pattern_length", state.get_int64("fixed_length"))),
           op(state.get_string("op")),
           cg_size(state.get_int64("cg_size")),
-          use_kmp(state.get_int64("use_kmp")) {}
+          use_kmp(state.get_int64_or_default("use_kmp", 0)),
+          access_width(state.get_int64("access_width")) {}
           
     bool should_skip(nvbench::state& state) {
         if (length_dist != string_length_distribution::FIXED) {
@@ -80,6 +82,10 @@ struct bm_params {
             state.skip("cg_size > 1 is not implemented for 'contains' operation.");
             return true;
         }
+        if(use_kmp && access_width != 1) {
+            state.skip("access_width > 1 is not implemented for KMP.");
+            return true;
+        }
 
         return false;
     }
@@ -99,7 +105,7 @@ void bench_string_ops(nvbench::state& state) {
     options.impl = params.impl;
     options.selectivity = params.selectivity;
     options.fixed.length = params.fixed_length;
-    if(params.op == "startswith") {
+    if(params.op == "startswith" or params.op == "equal") {
         options.pattern_pos = gamax::datagen::device::PREFIX;
     } else if(params.op == "endswith") {
         options.pattern_pos = gamax::datagen::device::SUFFIX;
@@ -122,14 +128,17 @@ void bench_string_ops(nvbench::state& state) {
     state.add_element_count(params.num_strings, "num_strings");
 
     gamax::string_op_options op_options;
-    op_options.cg_size = static_cast<int>(state.get_int64("cg_size"));
+    op_options.cg_size = params.cg_size;
     op_options.use_kmp = params.use_kmp;
+    op_options.access_width = params.access_width;
 
     auto fn = gamax::startswith;
     if (params.op == "endswith") {
         fn = gamax::endswith;
     } else if (params.op == "contains") {
         fn = gamax::contains;
+    } else if (params.op == "equal") {
+        fn = gamax::equal;
     } else if (params.op != "startswith") {
         throw std::runtime_error("Unknown operation: " + params.op);
     }
@@ -154,13 +163,25 @@ void bench_string_ops(nvbench::state& state) {
 }
 
 NVBENCH_BENCH(bench_string_ops)
-    .set_name("string_startswith")
+    .set_name("string_partial_match")
     .add_string_axis("op", {"startswith", "endswith", "contains"})
     .add_string_axis("length_dist", {"fixed"})
-    .add_string_axis("impl", {"german", "arrow"})
+    .add_string_axis("impl", {"arrow"})
     .add_float64_axis("selectivity", {1.0})
-    .add_int64_axis("fixed_length", {30, 60, 90, 120, 150})
-    .add_int64_axis("pattern_length", {4, 12, 36})
-    .add_int64_power_of_two_axis("num_strings", {28})
-    .add_int64_axis("cg_size", {1, 2, 4, 8, 16, 32})
-    .add_int64_axis("use_kmp", {0});
+    .add_int64_axis("fixed_length", {30, 45, 60, 75, 90, 105, 120, 135})
+    .add_int64_axis("pattern_length", {5, 50})
+    .add_int64_power_of_two_axis("num_strings", {26, 28})
+    .add_int64_axis("cg_size", {1, 2, 4})
+    .add_int64_axis("access_width", {1, 2, 4, 8})
+    .add_int64_axis("use_kmp", {0, 1});
+
+NVBENCH_BENCH(bench_string_ops)
+    .set_name("string_full_match")
+    .add_string_axis("op", {"equal"})
+    .add_string_axis("length_dist", {"fixed"})
+    .add_string_axis("impl", {"arrow"})
+    .add_float64_axis("selectivity", {1.0})
+    .add_int64_axis("fixed_length", {30, 45, 60, 75, 90, 105, 120, 135})
+    .add_int64_power_of_two_axis("num_strings", {26, 28})
+    .add_int64_axis("cg_size", {1, 2, 4})
+    .add_int64_axis("access_width", {1, 2, 4, 8});

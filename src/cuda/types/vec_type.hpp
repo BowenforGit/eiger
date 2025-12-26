@@ -1,4 +1,5 @@
 #include <cuda_runtime_api.h>
+#include <cstdint>
 
 namespace gamax {
 
@@ -93,5 +94,23 @@ template <> struct vec_type<double, 4> { using type = double4; };
 // Helper type alias for convenience (C++14 and later)
 template <typename T, int N>
 using vec_type_t = typename vec_type<T, N>::type;
+
+// Meta-programming helper that returns the widest integer type (scalar or vector)
+// that can be accessed when alignment is exactly kAlignAt bytes. For unsupported
+// alignments, falls back to char.
+template <int kAlignAt>
+struct widest_int_for_alignment {
+	static_assert(kAlignAt > 0, "Alignment must be positive");
+	using type = char;
+};
+
+template <> struct widest_int_for_alignment<2>  { using type = std::int16_t; };
+template <> struct widest_int_for_alignment<4>  { using type = std::int32_t; };
+template <> struct widest_int_for_alignment<8>  { using type = std::int64_t; };
+template <> struct widest_int_for_alignment<16> { using type = vec_type_t<long long, 2>; };
+template <> struct widest_int_for_alignment<32> { using type = vec_type_t<long long, 4>; };
+
+template <int kAlignAt>
+using widest_int_for_alignment_t = typename widest_int_for_alignment<kAlignAt>::type;
 
 }
