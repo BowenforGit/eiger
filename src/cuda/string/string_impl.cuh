@@ -263,10 +263,10 @@ public:
 
     string_view() = delete;
     ~string_view() = default;
-    string_view(string_view const& other) = default;
-    string_view& operator=(string_view const& other) = default;
-    string_view(string_view&& other) noexcept = default;
-    string_view& operator=(string_view&& other) noexcept = default;
+    __host__ __device__ string_view(string_view const& other) = default;
+    __host__ __device__ string_view& operator=(string_view const& other) = default;
+    __host__ __device__ string_view(string_view&& other) noexcept = default;
+    __host__ __device__ string_view& operator=(string_view&& other) noexcept = default;
     
     __host__ __device__ __forceinline__
     string_view(header_entry_type const& header_impl, Buffer const& buffer_impl, len_type len)
@@ -436,10 +436,10 @@ public:
 
     mutable_string_view() = delete;
     ~mutable_string_view() = default;
-    mutable_string_view(mutable_string_view const& other) = default;
-    mutable_string_view& operator=(mutable_string_view const& other) = default;
-    mutable_string_view(mutable_string_view&& other) noexcept = default;
-    mutable_string_view& operator=(mutable_string_view&& other) noexcept = default;
+    __host__ __device__ mutable_string_view(mutable_string_view const& other) = default;
+    __host__ __device__ mutable_string_view& operator=(mutable_string_view const& other) = default;
+    __host__ __device__ mutable_string_view(mutable_string_view&& other) noexcept = default;
+    __host__ __device__ mutable_string_view& operator=(mutable_string_view&& other) noexcept = default;
     
     __host__ __device__ __forceinline__
     mutable_string_view(header_entry_type& header_impl, Buffer& buffer_impl, len_type len)
@@ -476,24 +476,24 @@ public:
     using BufferIndexType = typename Header::header_entry_type::buffer_offset_type;
     using header_entry_type = typename Header::header_entry_type;
 
-    string_column_impl() = default;
-    ~string_column_impl() = default;
-    string_column_impl(string_column_impl const& other) = default;
-    string_column_impl& operator=(string_column_impl const& other) = default;
-    string_column_impl(string_column_impl&& other) noexcept = default;
-    string_column_impl& operator=(string_column_impl&& other) noexcept = default;
+    __host__ __device__ string_column_impl() = default;
+    __host__ __device__ ~string_column_impl() = default;
+    __host__ __device__ string_column_impl(string_column_impl const& other) = default;
+    __host__ __device__ string_column_impl& operator=(string_column_impl const& other) = default;
+    __host__ __device__ string_column_impl(string_column_impl&& other) noexcept = default;
+    __host__ __device__ string_column_impl& operator=(string_column_impl&& other) noexcept = default;
     
-    __device__ __forceinline__
+    __host__ __device__ __forceinline__
     string_column_impl(Header header_impl, Buffer buffer_impl)
         : header_impl_(header_impl), buffer_impl_(buffer_impl) {}
     
     // TODO: use the const_cast is not elegant, find a better way
-    __device__ __forceinline__
+    __host__ __device__ __forceinline__
     string_column_impl(gamax::string_column_view const& col)
         : header_impl_(static_cast<typename Header::header_entry_type*>(const_cast<void*>(col.meta()))), 
           buffer_impl_(static_cast<char*>(const_cast<void*>(col.data())), col.size()) {}
     
-    __device__ __forceinline__
+    __host__ __device__ __forceinline__
     string_column_impl(gamax::mutable_string_column_view const& col)
         : header_impl_(static_cast<typename Header::header_entry_type*>(col.meta())), 
           buffer_impl_(static_cast<char*>(col.data()), col.size()) {}
@@ -511,7 +511,7 @@ public:
      * @param index Row index in the column
      * @return Read-only view of the string
      */
-    __device__ __forceinline__ string_view_type viewAt(size_type index) const noexcept {
+    __host__ __device__ __forceinline__ string_view_type viewAt(size_type index) const noexcept {
         return string_view_type(header_impl_[index], buffer_impl_, header_impl_.length(index));
     }
 
@@ -520,7 +520,7 @@ public:
      * @param index Row index in the column
      * @return Mutable view of the string
      */
-    __device__ __forceinline__ mutable_string_view_type mutableViewAt(size_type index) noexcept {
+    __host__ __device__ __forceinline__ mutable_string_view_type mutableViewAt(size_type index) noexcept {
         return mutable_string_view_type(header_impl_[index], buffer_impl_, header_impl_.length(index));
     }
 

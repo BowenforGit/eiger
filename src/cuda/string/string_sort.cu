@@ -19,28 +19,29 @@
 
 namespace gamax {
 using namespace gamax::detail;
-using prefix_t = int32_t;
+using prefix_t = int32_t; // TODO: this better to be unsigned
 constexpr size_t PREFIX_SIZE = sizeof(prefix_t);
 
 namespace {
     template<typename string_col_impl_t>
     struct string_sort_comparator {
         __host__ __device__
-        string_sort_comparator(gamax::string_column_view strings, gamax::sort_order order)
+        string_sort_comparator(gamax::string_column_view const& strings, gamax::sort_order order)
             : _strings(strings), is_ascending(order == gamax::sort_order::ASCENDING) {}
 
         __host__ __device__
-       bool operator()(
+        bool operator()(
             const gamax::size_type lhs_idx, 
             const gamax::size_type rhs_idx) const 
         {
-            auto lhs = _strings.viewAt(lhs_idx);
-            auto rhs = _strings.viewAt(rhs_idx);
+            string_col_impl_t impl(_strings);
+            auto lhs = impl.viewAt(lhs_idx);
+            auto rhs = impl.viewAt(rhs_idx);
             auto min_len = lhs.size() < rhs.size() ? lhs.size() : rhs.size();
             const char* lhs_data = lhs.data();
             const char* rhs_data = rhs.data();
 
-            for(gamax::size_type i = 0; i < min_len; ++i) {
+            for(int i = 0; i < min_len; ++i) {
                 if(lhs_data[i] < rhs_data[i]) {
                     return final(true);
                 } else if(lhs_data[i] > rhs_data[i]) {
@@ -52,7 +53,7 @@ namespace {
         }
     
     private:
-        string_col_impl_t _strings;
+        const string_column_view _strings;
         bool is_ascending;
 
         __host__ __device__
@@ -65,27 +66,15 @@ namespace {
     struct string_sort_comparator_fast {
         __host__ __device__
         string_sort_comparator_fast(
-            gamax::string_column_view strings,
-            column_view prefix, gamax::sort_order order)
+            gamax::string_column_view const& strings,
+            column_view prefix, 
+            gamax::sort_order order)
             : _strings(strings)
             , _prefix(prefix.data<prefix_t>())
-            , is_ascending(order == gamax::sort_order::ASCENDING) 
-        {
-            if(_prefix == nullptr) {
-                throw std::runtime_error("Prefix column is null.");
-            }
-
-            if(prefix.size() != strings.size()) {
-                throw std::runtime_error("Prefix column size does not match string column size.");
-            }
-
-            if(prefix.type().id() != gamax::type_to_id<prefix_t>()) {
-                throw std::runtime_error("Prefix column type is not prefix_t.");
-            }
-        }
+            , is_ascending(order == gamax::sort_order::ASCENDING) {}
 
         __host__ __device__
-       bool operator()(
+        bool operator()(
             const gamax::size_type lhs_idx, 
             const gamax::size_type rhs_idx) const 
         {
@@ -97,13 +86,14 @@ namespace {
                 return final(false);
             }
 
-            auto lhs = _strings.viewAt(lhs_idx);
-            auto rhs = _strings.viewAt(rhs_idx);
+            string_col_impl_t impl(_strings);
+            auto lhs = impl.viewAt(lhs_idx);
+            auto rhs = impl.viewAt(rhs_idx);
             auto min_len = lhs.size() < rhs.size() ? lhs.size() : rhs.size();
             const char* lhs_data = lhs.data();
             const char* rhs_data = rhs.data();
 
-            for(gamax::size_type i = 0; i < min_len; ++i) {
+            for(int i = PREFIX_SIZE; i < min_len; ++i) {
                 if(lhs_data[i] < rhs_data[i]) {
                     return final(true);
                 } else if(lhs_data[i] > rhs_data[i]) {
@@ -115,8 +105,8 @@ namespace {
         }
     
     private:
-        string_col_impl_t _strings;
-        prefix_t* _prefix;
+        const string_column_view _strings;
+        const prefix_t* _prefix;
         bool is_ascending;
 
         __host__ __device__
@@ -151,22 +141,22 @@ namespace {
 
         auto prefix_col = gamax::make_column<prefix_t>(in.size(), stream);;
         auto itr = thrust::make_counting_iterator<gamax::size_type>(0);
-        string_col_impl_t str_impl(in);
         thrust::transform(
             thrust::cuda::par(*get_thrust_allocator()).on(stream),
             itr, itr + in.size(),
             prefix_col->template data<prefix_t>(),
-            [str_impl] __device__ (gamax::size_type idx) {
+            [in] __device__ (gamax::size_type idx) {
                 prefix_t prefix = static_cast<prefix_t>(0);
+                string_col_impl_t str_impl(in);
                 auto str = str_impl.viewAt(idx);
                 auto len = str.size() < PREFIX_SIZE ? str.size() : PREFIX_SIZE;
                 const char* str_data = str.data();
                 for(gamax::size_type i = 0; i < len; ++i) {
-                    reinterpret_cast<char*>(&prefix)[i] = str_data[i];
+                    reinterpret_cast<char*>(&prefix)[PREFIX_SIZE - 1 - i] = str_data[i];
                 }
                 return prefix;
             });
-
+        
         string_sort_comparator_fast<string_col_impl_t> comparator(in, prefix_col->view(), order);
         CALL_CUB_FUNC(
             cub::DeviceMergeSort::SortKeys, 

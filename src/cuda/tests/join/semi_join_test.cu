@@ -41,7 +41,7 @@ namespace {
 
         ASSERT_EQ(res_view.num_columns(), cols);
         ASSERT_EQ(res_view.num_rows(), nitems * match_ratio);
-        ASSERT_TRUE(thrust::all_of(thrust::cuda::par(*get_thrust_allocator()), res_view[0].data<T>(), res_view[0].data<T>() + res_view[0].size(), [npk] __device__ (T const& v) { return v < npk && v >= 0; }));
+        ASSERT_TRUE(thrust::all_of(thrust::cuda::par(*get_thrust_allocator()), res_view[0].data<T>(), res_view[0].data<T>() + res_view[0].size(), [npk] __device__ (T const& v) -> bool { return v < npk && v >= 0; }));
         for(gamax::size_type i = 1; i < res_view.num_columns(); i++) {
             ASSERT_TRUE(gamax::test::check_cols_eq(res_view[0], res_view[i]));
         }

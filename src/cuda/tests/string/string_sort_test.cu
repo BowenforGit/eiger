@@ -124,7 +124,7 @@ TEST_P(StringSortTest, ArgsortProducesCorrectIndices) {
     auto result = argsort_strings(str_view, params.order, stream_, options);
 
     ASSERT_NE(result, nullptr);
-    EXPECT_EQ(result->type().id(), gamax::type_id::INT32);
+    EXPECT_EQ(result->type().id(), size_type_id);
     EXPECT_EQ(result->size(), static_cast<size_type>(test_strings.size()));
 
     auto host_indices = gamax::copy_column_to_host<size_type>(result->view(), stream_);
