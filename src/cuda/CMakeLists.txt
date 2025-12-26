@@ -48,6 +48,7 @@ set(srcs
     utils/transform.cu
     string/string_factory.cu
     string/string_fast.cu
+    string/string_sort.cu
     )
     
 if(USE_CUDA)

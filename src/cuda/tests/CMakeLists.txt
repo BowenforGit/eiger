@@ -30,6 +30,7 @@ if(USE_CUDA)
         types/floating_point_test.cu
         string/string_factory_test.cu
         string/string_test.cu
+        string/string_sort_test.cu
     )
 endif()
 

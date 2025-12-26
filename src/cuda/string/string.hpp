@@ -10,6 +10,7 @@ struct string_op_options {
     int cg_size {1};
     int access_width {4};
     bool use_kmp {false};
+    bool use_prefix_sort {false};
 };
 
 column_ptr equal(
@@ -36,6 +37,13 @@ column_ptr endswith(
 column_ptr contains(
     gamax::string_column_view in,
     gamax::string_scalar_view substring,
+    cudaStream_t stream = cudaStreamDefault,
+    string_op_options options = {}
+);
+
+column_ptr argsort_strings(
+    gamax::string_column_view in,
+    gamax::sort_order order,
     cudaStream_t stream = cudaStreamDefault,
     string_op_options options = {}
 );
