@@ -16,6 +16,7 @@
 #include "utils/utils.cuh"
 #include "utils/cub_wrapper.cuh"
 #include "memory/mem_manager.hpp"
+#include "utils/transform.hpp"
 
 namespace gamax {
 using namespace gamax::detail;
@@ -23,6 +24,31 @@ using prefix_t = int32_t; // TODO: this better to be unsigned
 constexpr size_t PREFIX_SIZE = sizeof(prefix_t);
 
 namespace {
+    template<typename string_col_impl_t, typename buffer_index_type>
+    __global__ void gather_strings_kernel(
+        gamax::string_column_view in,
+        const gamax::size_type* gather_map_data,
+        char* out_data_ptr,
+        const buffer_index_type* out_offsets_ptr,
+        gamax::size_type num_strings)
+    {
+        gamax::size_type idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_strings) return;
+
+        const auto gather_idx = gather_map_data[idx];
+        string_col_impl_t str_impl(in);
+        auto str = str_impl.viewAt(gather_idx);
+        const char* str_data = str.data();
+        const auto str_len = str.size();
+
+        const auto out_offset = out_offsets_ptr[idx];
+        char* out_str_ptr = out_data_ptr + out_offset;
+        for(int i = 0; i < str_len; ++i) {
+            out_str_ptr[i] = str_data[i];
+        }
+    }
+
+
     template<typename string_col_impl_t>
     struct string_sort_comparator {
         __host__ __device__
@@ -168,4 +194,74 @@ namespace {
         cudaStreamSynchronize(stream);
         return tid;
     }
+
+    string_column_ptr sort_strings(
+        gamax::string_column_view in,
+        gamax::sort_order order,
+        cudaStream_t stream,
+        string_op_options options)
+    {
+        auto sorted_indices = argsort_strings(in, order, stream, options);
+        return gather_strings(in, sorted_indices->view(), stream, options);
+    }
+
+    string_column_ptr gather_strings(
+        gamax::string_column_view in,
+        gamax::column_view const& gather_map,
+        cudaStream_t stream,
+        string_op_options options)
+    {
+        using string_col_impl_t = typename id_to_string_impl<ARROW_STRING>::string_col_impl;
+        using len_type = typename string_col_impl_t::LengthType;
+        using buffer_index_type = typename string_col_impl_t::header_entry_type::buffer_offset_type;
+
+        const buffer_index_type* offsets = reinterpret_cast<const buffer_index_type*>(in.meta());
+
+        auto out_strlen = gamax::make_column<len_type>(gather_map.size(), stream);
+        auto itr = thrust::make_counting_iterator<gamax::size_type>(0);
+
+        const auto gather_map_data = gather_map.data<gamax::size_type>();
+        thrust::transform(
+            thrust::cuda::par(*get_thrust_allocator()).on(stream),
+            itr, itr + gather_map.size(),
+            out_strlen->template data<len_type>(),
+            [gather_map_data, offsets] __device__ (gamax::size_type idx) {
+                const auto gather_idx = gather_map_data[idx];
+                const auto str_len = offsets[gather_idx + 1] - offsets[gather_idx];
+                return static_cast<len_type>(str_len);
+            });
+        
+        auto out_offsets = gamax::util::device::prefix_sum(
+            out_strlen->view(), 
+            gamax::prefix_sum_options::INCLUSIVE_PAD_ZERO,
+            gamax::data_type{type_to_id<buffer_index_type>()},
+            stream);
+        gamax::size_type total_bytes = 0;
+        cudaMemcpyAsync(
+            &total_bytes, 
+            out_offsets->data<buffer_index_type>() + gather_map.size(),
+            sizeof(buffer_index_type),
+            cudaMemcpyDeviceToHost,
+            stream);
+        cudaStreamSynchronize(stream);
+        
+        gamax::device_buffer out_data(total_bytes, false, stream);
+        char* out_data_ptr = reinterpret_cast<char*>(out_data.data());
+        const buffer_index_type* out_offsets_ptr = out_offsets->data<buffer_index_type>();
+        
+        constexpr int block_size = 256;
+        int num_blocks = (gather_map.size() + block_size - 1) / block_size;
+        gather_strings_kernel<string_col_impl_t, buffer_index_type><<<num_blocks, block_size, 0, stream>>>(
+            in, gather_map_data, out_data_ptr, out_offsets_ptr, gather_map.size());
+        
+        cudaStreamSynchronize(stream);
+        return gamax::make_string_column(
+            std::move(out_data),
+            std::move(out_offsets->buffer()),
+            gather_map.size(),
+            stream,
+            ARROW_STRING);
+    }     
+
+    
 } // namespace gamax

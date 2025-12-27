@@ -47,4 +47,18 @@ column_ptr argsort_strings(
     cudaStream_t stream = cudaStreamDefault,
     string_op_options options = {}
 );
+
+string_column_ptr sort_strings(
+    gamax::string_column_view in,
+    gamax::sort_order order,
+    cudaStream_t stream = cudaStreamDefault,
+    string_op_options options = {}
+);
+
+string_column_ptr gather_strings(
+    gamax::string_column_view in,
+    gamax::column_view const& gather_map,
+    cudaStream_t stream = cudaStreamDefault,
+    string_op_options options = {}
+);
 }

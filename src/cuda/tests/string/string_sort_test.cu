@@ -100,6 +100,66 @@ protected:
         
         return indices;
     }
+
+    void verifyArrowStringLayout(
+        const string_column& col,
+        const std::vector<std::string>& expected_strings)
+    {
+        using offset_t = gamax::size_type;
+        
+        // Copy offsets from device to host (num_strings + 1 offsets)
+        std::vector<offset_t> offsets(col.size() + 1);
+        cudaMemcpy(
+            offsets.data(),
+            col.meta_buffer().data(),
+            (col.size() + 1) * sizeof(offset_t),
+            cudaMemcpyDeviceToHost);
+        
+        // Copy data buffer from device to host
+        std::vector<char> data_buffer(col.bytes());
+        cudaMemcpy(
+            data_buffer.data(),
+            col.buffer().data(),
+            col.bytes(),
+            cudaMemcpyDeviceToHost);
+        
+        // Verify each string
+        for (size_t i = 0; i < expected_strings.size(); ++i) {
+            const auto& expected = expected_strings[i];
+            
+            offset_t start = offsets[i];
+            offset_t end = offsets[i + 1];
+            offset_t length = end - start;
+            
+            EXPECT_EQ(length, expected.size())
+                << "String " << i << " has incorrect length";
+            
+            std::string reconstructed(data_buffer.begin() + start, 
+                                     data_buffer.begin() + end);
+            
+            EXPECT_EQ(reconstructed, expected)
+                << "String " << i << " content mismatch. Expected: '" 
+                << expected << "', Got: '" << reconstructed << "'";
+        }
+        
+        // Verify first offset is 0
+        EXPECT_EQ(offsets[0], 0) << "First offset should be 0";
+    }
+
+    static std::vector<std::string> getSortedStrings(
+        const std::vector<std::string>& strings,
+        sort_order order)
+    {
+        std::vector<std::string> sorted = strings;
+        
+        if (order == sort_order::ASCENDING) {
+            std::sort(sorted.begin(), sorted.end());
+        } else {
+            std::sort(sorted.begin(), sorted.end(), std::greater<std::string>());
+        }
+        
+        return sorted;
+    }
 };
 
 TEST_P(StringSortTest, ArgsortProducesCorrectIndices) {
@@ -140,6 +200,42 @@ TEST_P(StringSortTest, ArgsortProducesCorrectIndices) {
             << "got index " << host_indices[i] 
             << " (string: '" << test_strings[host_indices[i]] << "')";
     }
+}
+
+TEST_P(StringSortTest, SortStringsProducesCorrectlySortedColumn) {
+    const auto params = GetParam();
+    const auto test_strings = getTestDataset();
+    
+    gamax::string_op_options options{};
+    options.use_prefix_sort = params.use_prefix_sort;
+
+    auto [flat, lens] = prepareFlatData(test_strings);
+    auto str_col_ptr = make_string_column(
+        flat.data(),
+        lens.data(),
+        static_cast<size_type>(test_strings.size()),
+        stream_,
+        params.impl);
+
+    ASSERT_NE(str_col_ptr, nullptr);
+    auto& str_col = dynamic_cast<gamax::string_column&>(*str_col_ptr);
+    auto str_view = str_col.view_s();
+    auto result = sort_strings(str_view, params.order, stream_, options);
+
+    ASSERT_NE(result, nullptr);
+    auto& result_col = dynamic_cast<gamax::string_column&>(*result);
+    // Verify the output is in arrow format
+    EXPECT_EQ(result_col.impl(), string_impl_id::ARROW_STRING)
+        << "sort_strings should produce output in arrow format";
+    EXPECT_EQ(result_col.size(), static_cast<size_type>(test_strings.size()));
+    
+    cudaStreamSynchronize(stream_);
+    
+    // Get expected sorted strings
+    auto expected_sorted = getSortedStrings(test_strings, params.order);
+    
+    // Verify the string content matches the expected sorted order
+    verifyArrowStringLayout(result_col, expected_sorted);
 }
 
 INSTANTIATE_TEST_SUITE_P(
