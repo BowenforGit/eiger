@@ -7,6 +7,7 @@
 
 #include "types/data_type.hpp" // sort_order
 #include "memory/column.hpp" // column
+#include "memory/table.hpp" // table
 
 namespace gamax {
 namespace sort {
@@ -71,6 +72,20 @@ argsort(
     gamax::sort_order order = gamax::sort_order::ASCENDING,
     void* d_temp_storage = nullptr,
     size_t temp_storage_bytes = 0,
+    cudaStream_t stream = 0);
+
+std::unique_ptr<gamax::table>
+sort_table(
+    gamax::table_view const& table,
+    std::vector<int> const& sort_keys,
+    std::vector<gamax::sort_order> const& sort_orders,
+    cudaStream_t stream = 0);
+
+std::unique_ptr<gamax::table>
+sort_table(
+    gamax::table_view const& table,
+    int sort_key_index,
+    gamax::sort_order sort_order,
     cudaStream_t stream = 0);
 } // namespace sort
 } // namespace gamax
