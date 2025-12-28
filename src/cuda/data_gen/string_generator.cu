@@ -6,6 +6,7 @@
 #include <memory>
 #include <thrust/fill.h>
 #include <thrust/execution_policy.h>
+#include <thrust/random/linear_congruential_engine.h>
 
 #include "string/string_column.hpp"
 #include "memory/column.hpp"
@@ -210,5 +211,63 @@ namespace {
             num_strings,
             stream,
             options.impl);
+    }
+
+    __global__ void generate_random_strings_kernel(
+        char* __restrict__ data,
+        const int64_t* __restrict__ offsets,
+        gamax::size_type num_strings,
+        int seed)
+    {
+        for(gamax::size_type idx = get_cuda_tid(); idx < num_strings; idx += nthreads()) {
+            auto length = offsets[idx + 1] - offsets[idx];
+            char* str_ptr = data + offsets[idx];
+            
+            // Use a simple LCG for random character generation
+            // Each string gets a unique seed based on its index
+            thrust::minstd_rand rng(seed + idx);
+            
+            for(gamax::size_type i = 0; i < length; ++i) {
+                // Generate lowercase letters 'a' to 'z' (26 characters)
+                str_ptr[i] = 'a' + (rng() % 26);
+            }
+        }   
+    }
+
+    string_column_ptr generate_random_strings(
+        gamax::size_type num_strings,
+        gamax::size_type string_length,
+        gamax::string_impl_id impl,
+        int seed,
+        cudaStream_t stream)
+    {
+        // Create options for fixed length strings
+        string_generation_options options{};
+        options.length_dist = FIXED;
+        options.fixed.length = string_length;
+        options.impl = impl;
+
+        // Generate lengths (all same for fixed length)
+        auto string_lengths = generate_string_lengths(num_strings, options, stream);
+        
+        // Generate offsets from lengths
+        auto [offsets, total_bytes] = generate_offsets_from_lengths(string_lengths->view(), stream);
+
+        // Allocate data buffer
+        device_buffer string_data(total_bytes, false, stream);
+        
+        // Generate random strings
+        generate_random_strings_kernel<<<num_tb(num_strings, 256), 256, 0, stream>>>(
+            static_cast<char*>(string_data.data()),
+            offsets->template data<int64_t>(),
+            num_strings,
+            seed);
+        
+        return gamax::make_string_column(
+            std::move(string_data),
+            std::move(offsets->buffer()),
+            num_strings,
+            stream,
+            impl);
     }
 } // namespace gamax::datagen::device

@@ -24,6 +24,7 @@ set(benchmarkSources
     select/select_fast_nvbench.cu
     select/select_handwritten_nvbench.cu
     string/string_nvbench.cu
+    string/string_sort_nvbench.cu
     expr/expr_nvbench.cu
 )
 
