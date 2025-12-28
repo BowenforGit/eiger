@@ -8,6 +8,9 @@
 #include "utils/assert.cuh"
 
 namespace gamax {
+// Tag type for dispatching STRING - since STRING doesn't map to a simple C++ type
+struct string_type_tag {};
+
 template <typename T>
 inline constexpr type_id type_to_id()
 {
@@ -52,8 +55,23 @@ GAMAX_TYPE_MAPPING(bool, type_id::BOOL8)
 GAMAX_TYPE_MAPPING(uint64_t, type_id::UINT64)
 GAMAX_TYPE_MAPPING(float, type_id::FLOAT32)
 GAMAX_TYPE_MAPPING(double, type_id::FLOAT64)
+GAMAX_TYPE_MAPPING(string_type_tag, type_id::STRING)
 
 #define size_type_id type_to_id<gamax::size_type>()
+
+// Overload that takes type_id directly
+#ifdef __CUDACC__
+#pragma nv_exec_check_disable
+#endif
+template <template <gamax::type_id> typename IdTypeMap = id_to_type_impl,
+          typename Functor,
+          typename... Ts>
+__host__ __device__ __forceinline__ constexpr decltype(auto) type_dispatcher(gamax::type_id id,
+                                                                          Functor f,
+                                                                          Ts&&... args)
+{
+  return type_dispatcher<IdTypeMap>(gamax::data_type{id}, std::forward<Functor>(f), std::forward<Ts>(args)...);
+}
 
 #ifdef __CUDACC__
 #pragma nv_exec_check_disable
@@ -97,6 +115,75 @@ __host__ __device__ __forceinline__ constexpr decltype(auto) type_dispatcher(gam
 #endif
     }
   }
+}
+
+/**
+ * @brief Type dispatcher that handles ALL types including STRING.
+ * 
+ * This dispatcher includes STRING type which maps to string_type_tag.
+ * Use this when you need to dispatch over all column types.
+ */
+#ifdef __CUDACC__
+#pragma nv_exec_check_disable
+#endif
+template <template <gamax::type_id> typename IdTypeMap = id_to_type_impl,
+          typename Functor,
+          typename... Ts>
+__host__ __device__ __forceinline__ constexpr decltype(auto) type_dispatcher_all(gamax::type_id id,
+                                                                                  Functor f,
+                                                                                  Ts&&... args)
+{
+  switch (id) {
+    case type_id::INT8:
+      return f.template operator()<typename IdTypeMap<type_id::INT8>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::INT16:
+      return f.template operator()<typename IdTypeMap<type_id::INT16>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::INT32:
+      return f.template operator()<typename IdTypeMap<type_id::INT32>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::INT64:
+      return f.template operator()<typename IdTypeMap<type_id::INT64>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::BOOL8:
+      return f.template operator()<typename IdTypeMap<type_id::BOOL8>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::UINT64:
+      return f.template operator()<typename IdTypeMap<type_id::UINT64>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::FLOAT32:
+      return f.template operator()<typename IdTypeMap<type_id::FLOAT32>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::FLOAT64:
+      return f.template operator()<typename IdTypeMap<type_id::FLOAT64>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::STRING:
+      return f.template operator()<typename IdTypeMap<type_id::STRING>::type>(
+        std::forward<Ts>(args)...);
+    default: {
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
+      std::string type_id_str = std::to_string(static_cast<int>(id));
+      throw std::runtime_error("Invalid type_id: " + type_id_str);
+#else
+      GAMAX_UNREACHABLE("Invalid type_id.");
+#endif
+    }
+  }
+}
+
+// Overload that takes data_type
+#ifdef __CUDACC__
+#pragma nv_exec_check_disable
+#endif
+template <template <gamax::type_id> typename IdTypeMap = id_to_type_impl,
+          typename Functor,
+          typename... Ts>
+__host__ __device__ __forceinline__ constexpr decltype(auto) type_dispatcher_all(gamax::data_type dtype,
+                                                                                  Functor f,
+                                                                                  Ts&&... args)
+{
+  return type_dispatcher_all<IdTypeMap>(dtype.id(), std::forward<Functor>(f), std::forward<Ts>(args)...);
 }
 
 namespace {

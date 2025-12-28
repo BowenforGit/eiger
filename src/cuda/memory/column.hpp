@@ -157,11 +157,11 @@ public:
         return static_cast<T*>(_data.data());
     }
 
-    virtual column_view view(const size_type offset = 0) const {
+    virtual column_view view(const size_type offset = 0, cudaStream_t stream = cudaStreamDefault) const {
         return column_view(_data.data(), _size, _type, offset);
     }
 
-    virtual mutable_column_view mutable_view(const size_type offset = 0) {
+    virtual mutable_column_view mutable_view(const size_type offset = 0, cudaStream_t stream = cudaStreamDefault) {
         return mutable_column_view(_data.data(), _size, _type, offset);
     }
 
