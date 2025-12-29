@@ -1,7 +1,11 @@
 import pandas as pd
 import os
+import matplotlib
 from matplotlib import pyplot as plt
 import json
+
+matplotlib.rcParams['pdf.fonttype'] = 42
+matplotlib.rcParams['ps.fonttype'] = 42
 
 def json_to_df(path_to_json: str, fn: callable = None):
     if fn is None:
@@ -38,7 +42,7 @@ def filter_df(df, strict = False, must_have_attr=None, **filters):
             df = df[df[key] == value]
 
         if len(df) == 0:
-            raise ValueError(f"No data found for filter {key}={value}")
+            break
         
     return df
 
@@ -100,6 +104,9 @@ def adjust_ax(ax, **params):
     
     if "xticklabels" in params:
         ax.set_xticklabels(params["xticklabels"].get("ticks", ax.get_xticklabels()), rotation=params["xticklabels"].get("rotation", 0))
+    
+    if "yticklabels" in params:
+        ax.set_yticklabels(params["yticklabels"].get("ticks", ax.get_yticklabels()), rotation=params["yticklabels"].get("rotation", 0))
     
     if "xscale" in params:
         ax.set_xscale(params["xscale"].get("scale", ax.get_xscale()), base=params["xscale"].get("base", 10))
