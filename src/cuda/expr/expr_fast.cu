@@ -15,9 +15,12 @@
 #include "utils/utils.cuh"
 
 namespace gamax::expression {
+namespace {
+    using expr_program_ptr_t = decltype(std::declval<ExprTree>().make_program(cudaStreamDefault));
+}
 
 namespace detail::common {
-struct expr_intermediate_storage {
+struct expr_intermediate_storage_regs {
     gamax::scalar::scalar_data_type d0, d1, d2;
     gamax::type_id t0, t1, t2;
 
@@ -40,11 +43,34 @@ struct expr_intermediate_storage {
     }
 };
 
+struct expr_intermediate_storage_shared {
+    gamax::scalar::scalar_data_type* data;
+    gamax::type_id* types;
+    int stride;   // max_regs per thread
+
+    __device__ __forceinline__ gamax::scalar::scalar_data_type& data_ref(int idx) {
+        return data[stride * static_cast<int>(threadIdx.x) + idx];
+    }
+    __device__ __forceinline__ gamax::type_id& type_ref(int idx) {
+        return types[stride * static_cast<int>(threadIdx.x) + idx];
+    }
+
+    __device__ __forceinline__ void store(int idx, gamax::scalar const& s) {
+        data_ref(idx) = s._data;
+        type_ref(idx) = s._type;
+    }
+
+    __device__ __forceinline__ gamax::scalar load(int idx) {
+        return gamax::scalar(type_ref(idx), data_ref(idx));
+    }
+};
+
+template <typename Storage>
 __device__ void evaluate_one(
     gamax::experimental::table_device_view table,
     Expr& e,
     gamax::size_type i,
-    expr_intermediate_storage& s)
+    Storage& s)
 {
     switch(e.id) {
         case ExprId::Constant: {
@@ -285,13 +311,13 @@ __device__ void evaluate_one(
     }
 }
 
+template <typename Storage>
 __device__ gamax::scalar evaluate(
     gamax::experimental::table_device_view table,
     ExprProgram           ep,
-    gamax::size_type      i)
+    gamax::size_type      i,
+    Storage& storage)
 {
-    expr_intermediate_storage storage;
-    
     // Execute each expression in the program sequentially
     for (gamax::size_type j = 0; j < ep.n_exprs; ++j) {
         evaluate_one(table, ep.exprs[j], i, storage);
@@ -312,22 +338,44 @@ __global__ void evaluate_expr_kernel(
         idx < nrows; 
         idx += blockDim.x * gridDim.x) 
     {
-        gamax::scalar res = evaluate(table, ep, idx);
+        expr_intermediate_storage_regs storage;
+        gamax::scalar res = evaluate(table, ep, idx, storage);
         output[idx] = res.get<T>();
     }
 }
 
-struct project_col_impl {
+template<typename T>
+__global__ void evaluate_expr_kernel_shared(
+    gamax::experimental::table_device_view table,
+    ExprProgram ep,
+    gamax::size_type nrows,
+    T* output,
+    int max_regs)
+{
+    extern __shared__ unsigned char smem[];
+    auto* data = reinterpret_cast<gamax::scalar::scalar_data_type*>(smem);
+    auto* types = reinterpret_cast<gamax::type_id*>(data + max_regs * blockDim.x);
+    expr_intermediate_storage_shared storage{data, types, max_regs};
+
+    for(std::size_t idx = blockIdx.x * blockDim.x + threadIdx.x; 
+        idx < nrows; 
+        idx += blockDim.x * gridDim.x) 
+    {
+        gamax::scalar res = evaluate(table, ep, idx, storage);
+        output[idx] = res.get<T>();
+    }
+}
+
+struct project_col_impl_reg {
     template<typename T>
     std::unique_ptr<gamax::column> operator()(
         gamax::table_view& table,
-        ExprTree& et,
+        expr_program_ptr_t expr_program_ptr,
         cudaStream_t stream)
     {
         gamax::size_type nrows = table.num_rows();
         auto col = gamax::make_column<T>(nrows);
 
-        auto expr_program_ptr = et.make_program(stream);
         auto device_table_ptr = table.device_view(stream);
 
         auto expr_program = *expr_program_ptr;
@@ -340,6 +388,47 @@ struct project_col_impl {
             col->template data<T>());
         cudaStreamSynchronize(stream);
         
+        return col;
+    }
+};
+
+struct project_col_impl_shared {
+    template<typename T>
+    std::unique_ptr<gamax::column> operator()(
+        gamax::table_view& table,
+        expr_program_ptr_t expr_program_ptr,
+        int max_regs,
+        cudaStream_t stream)
+    {
+        gamax::size_type nrows = table.num_rows();
+        auto col = gamax::make_column<T>(nrows);
+
+        auto device_table_ptr = table.device_view(stream);
+
+        auto expr_program = *expr_program_ptr;
+        auto device_table = *device_table_ptr;
+
+        const int block = 128;
+        std::size_t per_thread = static_cast<std::size_t>(max_regs) * (sizeof(gamax::scalar::scalar_data_type) + sizeof(gamax::type_id));
+        std::size_t shmem_bytes = per_thread * block;
+
+#ifdef __NVCC__
+        if (shmem_bytes > 48 * 1024) {
+            CHECK_CUDA_ERROR(cudaFuncSetAttribute(
+                evaluate_expr_kernel_shared<T>,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                static_cast<int>(shmem_bytes)));
+        }
+#endif
+
+        evaluate_expr_kernel_shared<<<num_tb(nrows, block), block, shmem_bytes, stream>>>(
+            device_table,
+            expr_program,
+            nrows,
+            col->template data<T>(),
+            max_regs);
+        cudaStreamSynchronize(stream);
+
         return col;
     }
 };
@@ -372,11 +461,24 @@ struct expr_intermediate_storage {
 };
 
 template<typename T>
+struct expr_intermediate_storage_shared {
+    T* data;
+    int stride;
+
+    __device__ __forceinline__ T& ref(int idx) {
+        return data[stride * static_cast<int>(threadIdx.x) + idx];
+    }
+
+    __device__ __forceinline__ void store(int idx, T const& v) { ref(idx) = v; }
+    __device__ __forceinline__ T load(int idx) { return ref(idx); }
+};
+
+template<typename T, typename Storage>
 __device__ void evaluate_one(
     gamax::experimental::table_device_view table,
     Expr& e,
     gamax::size_type i,
-    expr_intermediate_storage<T>& s)
+    Storage& s)
 {
     switch(e.id) {
         case ExprId::Constant: {
@@ -549,14 +651,13 @@ __device__ void evaluate_one(
     }
 }
 
-template<typename T>
+template<typename T, typename Storage>
 __device__ T evaluate(
     gamax::experimental::table_device_view table,
     ExprProgram           ep,
-    gamax::size_type      i)
+    gamax::size_type      i,
+    Storage& storage)
 {
-    expr_intermediate_storage<T> storage;
-    
     // Execute each expression in the program sequentially
     for (gamax::size_type j = 0; j < ep.n_exprs; ++j) {
         evaluate_one<T>(table, ep.exprs[j], i, storage);
@@ -577,22 +678,43 @@ __global__ void evaluate_expr_kernel(
         idx < nrows; 
         idx += blockDim.x * gridDim.x) 
     {
-        auto res = evaluate<T>(table, ep, idx);
+        expr_intermediate_storage<T> storage;
+        auto res = evaluate<T>(table, ep, idx, storage);
         output[idx] = static_cast<RetType>(res);
     }
 }
 
-struct project_col_impl {
+template<typename T, typename RetType>
+__global__ void evaluate_expr_kernel_shared(
+    gamax::experimental::table_device_view table,
+    ExprProgram ep,
+    gamax::size_type nrows,
+    RetType* output,
+    int max_regs)
+{
+    extern __shared__ unsigned char smem[];
+    auto* data = reinterpret_cast<T*>(smem);
+    expr_intermediate_storage_shared<T> storage{data, max_regs};
+
+    for(std::size_t idx = blockIdx.x * blockDim.x + threadIdx.x; 
+        idx < nrows; 
+        idx += blockDim.x * gridDim.x) 
+    {
+        auto res = evaluate<T>(table, ep, idx, storage);
+        output[idx] = static_cast<RetType>(res);
+    }
+}
+
+struct project_col_impl_reg {
     template<typename T, typename RetType>
     std::unique_ptr<gamax::column> operator()(
         gamax::table_view& table,
-        ExprTree& et,
+        expr_program_ptr_t expr_program_ptr,
         cudaStream_t stream)
     {
         gamax::size_type nrows = table.num_rows();
         auto col = gamax::make_column<RetType>(nrows);
 
-        auto expr_program_ptr = et.make_program(stream);
         auto device_table_ptr = table.device_view(stream);
 
         auto expr_program = *expr_program_ptr;
@@ -608,6 +730,47 @@ struct project_col_impl {
         return col;
     }
 };
+
+struct project_col_impl_shared {
+    template<typename T, typename RetType>
+    std::unique_ptr<gamax::column> operator()(
+        gamax::table_view& table,
+        expr_program_ptr_t expr_program_ptr,
+        int max_regs,
+        cudaStream_t stream)
+    {
+        gamax::size_type nrows = table.num_rows();
+        auto col = gamax::make_column<RetType>(nrows);
+
+        auto device_table_ptr = table.device_view(stream);
+
+        auto expr_program = *expr_program_ptr;
+        auto device_table = *device_table_ptr;
+
+        const int block = 128;
+        std::size_t per_thread = static_cast<std::size_t>(max_regs) * sizeof(T);
+        std::size_t shmem_bytes = per_thread * block;
+
+#ifdef __NVCC__
+        if (shmem_bytes > 48 * 1024) {
+            CHECK_CUDA_ERROR(cudaFuncSetAttribute(
+                evaluate_expr_kernel_shared<T, RetType>,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                static_cast<int>(shmem_bytes)));
+        }
+#endif
+
+        evaluate_expr_kernel_shared<T, RetType><<<num_tb(nrows, block), block, shmem_bytes, stream>>>(
+            device_table, 
+            expr_program, 
+            nrows,
+            col->template data<RetType>(),
+            max_regs);
+        cudaStreamSynchronize(stream);
+
+        return col;
+    }
+};
 } // namespace detail::fast_path
 
 std::unique_ptr<gamax::column> evaluate_expr(
@@ -615,22 +778,48 @@ std::unique_ptr<gamax::column> evaluate_expr(
     ExprTree& et, 
     cudaStream_t stream) 
 {   
+    auto expr_program_ptr = et.make_program(stream);
+
+    int max_regs = et.max_regs();
+    bool use_shared = max_regs > MAX_EXPR_REGISTERS;
+
     auto common_type = et.get_common_type();
     if (common_type != gamax::type_id::EMPTY) {
-        return gamax::double_type_dispatcher(
-            gamax::data_type(common_type),
-            et.type(),
-            detail::fast_path::project_col_impl{},
-            table,
-            et,
-            stream);
+        if (use_shared) {
+            return gamax::double_type_dispatcher(
+                gamax::data_type(common_type),
+                et.type(),
+                detail::fast_path::project_col_impl_shared{},
+                table,
+                std::move(expr_program_ptr),
+                max_regs,
+                stream);
+        } else {
+            return gamax::double_type_dispatcher(
+                gamax::data_type(common_type),
+                et.type(),
+                detail::fast_path::project_col_impl_reg{},
+                table,
+                std::move(expr_program_ptr),
+                stream);
+        }
     } else {
-        return gamax::type_dispatcher(
-            et.type(),
-            detail::common::project_col_impl{},
-            table,
-            et,
-            stream);
+        if (use_shared) {
+            return gamax::type_dispatcher(
+                et.type(),
+                detail::common::project_col_impl_shared{},
+                table,
+                std::move(expr_program_ptr),
+                max_regs,
+                stream);
+        } else {
+            return gamax::type_dispatcher(
+                et.type(),
+                detail::common::project_col_impl_reg{},
+                table,
+                std::move(expr_program_ptr),
+                stream);
+        }
     }
 }
 } // namespace gamax

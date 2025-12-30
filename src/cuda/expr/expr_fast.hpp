@@ -4,6 +4,8 @@
 #include <cuda_runtime_api.h>
 #include <vector>
 #include <functional>
+#include <string>
+#include <algorithm>
 
 #include "memory/column.hpp"
 #include "memory/table.hpp"
@@ -355,6 +357,10 @@ public:
         return _root;
     }
 
+    const std::vector<std::shared_ptr<ExprTree>>& children() const {
+        return _children;
+    }
+
     gamax::data_type type() const {
         return _root.type;
     }
@@ -415,27 +421,26 @@ private:
     ExprTree(Expr e, std::vector<std::shared_ptr<ExprTree>> children) 
         : _root(e), _children(std::move(children)) {}
 
-    // Helper to calculate Sethi-Ullman numbers (min registers needed)
+    // Helper to calculate Sethi-Ullman numbers (min registers needed) for arbitrary arity
     int calc_min_regs(const ExprTree& tree) const {
         if (tree._children.empty()) {
             return 1; // Leaf needs 1 register
         }
-        
-        int left_regs = 0;
-        int right_regs = 0;
-        
-        if (tree._children.size() > 0 && tree._children[0]) {
-            left_regs = calc_min_regs(*tree._children[0]);
-        }
-        if (tree._children.size() > 1 && tree._children[1]) {
-            right_regs = calc_min_regs(*tree._children[1]);
+
+        std::vector<int> child_regs;
+        child_regs.reserve(tree._children.size());
+        for (const auto& child : tree._children) {
+            child_regs.push_back(child ? calc_min_regs(*child) : 0);
         }
 
-        if (left_regs == right_regs) {
-            return left_regs + 1;
-        } else {
-            return std::max(left_regs, right_regs);
+        // Sort descending Sethi-Ullman numbers to model optimal evaluation order
+        std::sort(child_regs.begin(), child_regs.end(), std::greater<int>());
+
+        int need = 0;
+        for (std::size_t i = 0; i < child_regs.size(); ++i) {
+            need = std::max(need, child_regs[i] + static_cast<int>(i));
         }
+        return need;
     }
 
     // Helper to generate code based on Sethi-Ullman labeling
@@ -492,13 +497,30 @@ private:
             return;
         }
         
-        // Fallback for ternary (Select) or others: simple left-to-right
-        for (size_t i = 0; i < tree._children.size(); ++i) {
-            generate_code_sethi_ullman(*tree._children[i], stack_idx + i, program_exprs);
+        // N-ary (e.g., ternary Select) — evaluate children in decreasing SU order
+        std::vector<std::pair<std::size_t, int>> order;
+        order.reserve(tree._children.size());
+        for (std::size_t i = 0; i < tree._children.size(); ++i) {
+            int su = tree._children[i] ? calc_min_regs(*tree._children[i]) : 0;
+            order.emplace_back(i, su);
         }
+        std::sort(order.begin(), order.end(), [](auto a, auto b) {
+            return a.second > b.second; // descending SU
+        });
+
+        std::vector<int> child_base(tree._children.size(), 0);
+        for (std::size_t pos = 0; pos < order.size(); ++pos) {
+            auto idx = order[pos].first;
+            int base = stack_idx + static_cast<int>(pos);
+            child_base[idx] = base;
+            if (tree._children[idx]) {
+                generate_code_sethi_ullman(*tree._children[idx], base, program_exprs);
+            }
+        }
+
         Expr e = tree._root;
-        for (size_t i = 0; i < tree._children.size(); ++i) {
-            e.operand_regs[i] = stack_idx + i;
+        for (std::size_t i = 0; i < tree._children.size(); ++i) {
+            e.operand_regs[i] = child_base[i];
         }
         e.return_reg = stack_idx;
         program_exprs.push_back(e);
@@ -519,4 +541,7 @@ std::unique_ptr<gamax::column> evaluate_expr_nofuse(
     gamax::table_view table,
     ExprTree& et, 
     cudaStream_t stream = cudaStreamDefault);
+
+// Return a human-readable, indented representation of the expression tree.
+std::string expr_tree_to_string(const ExprTree& tree, int indent_spaces = 2);
 } // namespace gamax::expression
