@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cuda_runtime_api.h>
+#include <vector>
 
 #include "string/string_column.hpp"
 #include "memory/column.hpp"
@@ -37,6 +38,13 @@ column_ptr endswith(
 column_ptr contains(
     gamax::string_column_view in,
     gamax::string_scalar_view substring,
+    cudaStream_t stream = cudaStreamDefault,
+    string_op_options options = {}
+);
+
+column_ptr contains_multiple(
+    gamax::string_column_view in,
+    const std::vector<gamax::string_scalar_view>& patterns,
     cudaStream_t stream = cudaStreamDefault,
     string_op_options options = {}
 );
