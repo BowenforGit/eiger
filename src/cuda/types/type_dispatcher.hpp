@@ -260,4 +260,9 @@ inline std::string to_string(data_type element_type)
 {
   return type_dispatcher(element_type, to_string_helper{});
 }
+
+inline std::string to_string(type_id id)
+{
+  return to_string(data_type{id});
+}
 } // namespace gamax

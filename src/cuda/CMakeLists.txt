@@ -68,6 +68,8 @@ if(USE_CUDA)
         operators/project/project.cu
         expr/expr_fast.cu
         expr/expr_nofuse.cu
+        expr/expr_parser.cpp
+        expr/expr_visualize.cpp
     )
 endif()
 
