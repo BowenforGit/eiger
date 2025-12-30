@@ -65,6 +65,7 @@ if(USE_CUDA)
         operators/join/partition_hash_join.cu
         operators/join/hash_join.cu
         operators/select/select.cu
+        operators/project/project.cu
         expr/expr_fast.cu
         expr/expr_nofuse.cu
     )
