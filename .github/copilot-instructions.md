@@ -43,7 +43,7 @@ cmake --build . -- -j
 ```
 
 ### Adding New Source Files
-All `.cu/.cpp` files must be added to `src/cuda/CMakeLists.txt` in the `srcs` list. CUDA-only files go in the `if(USE_CUDA)` block.
+All `.cu/.cpp` files must be added to `src/cuda/CMakeLists.txt` in the `srcs` list. CUDA-only files go in the `if(USE_NVIDIA)` block.
 
 ## Development Patterns
 

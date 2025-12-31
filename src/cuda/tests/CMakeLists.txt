@@ -19,7 +19,7 @@ set(testSources
     test_header.cpp
 )
 
-if(USE_CUDA)
+if(USE_NVIDIA)
     list(APPEND testSources
         # groupby/groupby_partition_test.cu
         compress/dictionary_encode_test.cu

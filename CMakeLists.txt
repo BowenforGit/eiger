@@ -4,7 +4,7 @@ project(GPUOPS LANGUAGES CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(USE_CUDA "Use CUDA. [Default=ON]" OFF)
+option(USE_NVIDIA "Use CUDA. [Default=ON]" OFF)
 option(USE_ROCM "Use ROCm. [Default=OFF]" OFF)
 option(BUILD_TEST "Build tests. [Default=ON]" ON)
 option(BUILD_BENCHMARK "Build benchmarks. [Default=ON]" ON)
@@ -19,7 +19,7 @@ MESSAGE(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 include(CheckLanguage)
 check_language(CUDA)
 if(CMAKE_CUDA_COMPILER)
-    set(USE_CUDA ON)
+    set(USE_NVIDIA ON)
     MESSAGE(STATUS "CUDA is enabled.")
     enable_language(CUDA)
     set(SubDirName "cuda")
@@ -41,7 +41,7 @@ add_library(common INTERFACE)
 
 if(USE_ROCM)
     target_compile_features(common INTERFACE cxx_std_17 hip_std_17)
-else(USE_CUDA)
+else(USE_NVIDIA)
     target_compile_features(common INTERFACE cxx_std_17 cuda_std_17)
 endif()
 
@@ -75,7 +75,7 @@ if(USE_ROCM)
         INTERFACE 
         $<$<COMPILE_LANGUAGE:HIP>:ROCm_${CMAKE_HIP_ARCHITECTURES}>
     )
-else(USE_CUDA)
+else(USE_NVIDIA)
     message(STATUS "CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
     
     # no need to set the -gencode flag for because cmake will automatically add it based on CMAKE_CUDA_ARCHITECTURES

@@ -2,13 +2,13 @@ if(USE_ROCM)
     CPMAddPackage(
         NAME hipco
         GITHUB_REPOSITORY ROCm/hipCollections
-        GIT_TAG main
+        GIT_TAG release/rocmds-25.10
         OPTIONS
             "BUILD_TESTS OFF"
             "BUILD_BENCHMARKS OFF"
             "BUILD_EXAMPLES OFF"
     )
-else(USE_CUDA)
+else(USE_NVIDIA)
     CPMAddPackage(
         NAME CCCL
         GITHUB_REPOSITORY nvidia/cccl
@@ -53,7 +53,7 @@ set(srcs
     string/string_sort.cu
     )
     
-if(USE_CUDA)
+if(USE_NVIDIA)
     list(APPEND srcs
         compress/dictionary_encode.cu
         # operators/groupby/groupby_partition.cu
@@ -80,7 +80,7 @@ target_link_libraries(gamax PRIVATE OpenMP::OpenMP_CXX)
 
 if(USE_ROCM)
     target_link_libraries(gamax PUBLIC hipco)
-else(USE_CUDA)
+else(USE_NVIDIA)
     target_link_libraries(gamax PUBLIC cuco)
     target_link_libraries(gamax PUBLIC CCCL::CCCL)
 endif()

@@ -6,7 +6,7 @@ if(USE_ROCM)
         OPTIONS
             "NVBench_ENABLE_TESTING OFF"
     )
-else(USE_CUDA)
+else(USE_NVIDIA)
     CPMAddPackage(
         NAME nvbench
         GITHUB_REPOSITORY NVIDIA/nvbench
