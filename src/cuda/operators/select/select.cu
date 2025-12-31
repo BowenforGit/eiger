@@ -11,6 +11,19 @@
 
 namespace gamax::select {
 std::unique_ptr<gamax::table> select(
+        gamax::table_view table,
+        gamax::expression::ExprTree& expr,
+        select_options options,
+        cudaStream_t stream)
+{
+    if (options.fuse_operations) {
+        return select_fuse(table, expr, stream);
+    } else {
+        return select_nofuse(table, expr, stream);
+    }
+}
+
+std::unique_ptr<gamax::table> select_fuse(
     gamax::table_view table,
     gamax::expression::ExprTree& expr,
     cudaStream_t stream) 

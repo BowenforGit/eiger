@@ -12,6 +12,19 @@ namespace gamax::project {
     std::unique_ptr<gamax::table> project(
         gamax::table_view table,
         std::vector<gamax::expression::ExprTree>& expr,
+        project_options options,
+        cudaStream_t stream)
+    {
+        if (options.fuse_operations) {
+            return project_fuse(table, expr, stream);
+        } else {
+            return project_nofuse(table,  expr, stream);
+        }
+    }
+
+    std::unique_ptr<gamax::table> project_fuse(
+        gamax::table_view table,
+        std::vector<gamax::expression::ExprTree>& expr,
         cudaStream_t stream)
     {
         std::vector<column_ptr> projected_columns;

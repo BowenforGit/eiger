@@ -180,7 +180,7 @@ void bench_select_fast(nvbench::state& state, nvbench::type_list<KeyT>) {
     summary.set_string("value", expr_builder->to_string());
 
     auto fn = params.use_fuse ? 
-        gamax::select::select : 
+        gamax::select::select_fuse : 
         gamax::select::select_nofuse; // both use same function, but different expr evaluation internally
 
     try {
