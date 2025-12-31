@@ -16,6 +16,10 @@ public:
         int16_t int16_v;
         int32_t int32_v;
         int64_t int64_v;
+        uint8_t uint8_v;
+        uint16_t uint16_v;
+        uint32_t uint32_v;
+        uint64_t uint64_v;
         float float32_v;
         double float64_v;
     };
@@ -29,6 +33,10 @@ public:
     __host__ __device__ constexpr scalar(int16_t data) : _data{.int16_v = data}, _type(gamax::type_id::INT16) {}
     __host__ __device__ constexpr scalar(int32_t data) : _data{.int32_v = data}, _type(gamax::type_id::INT32) {}
     __host__ __device__ constexpr scalar(int64_t data) : _data{.int64_v = data}, _type(gamax::type_id::INT64) {}
+    __host__ __device__ constexpr scalar(uint8_t data) : _data{.uint8_v = data}, _type(gamax::type_id::UINT8) {}
+    __host__ __device__ constexpr scalar(uint16_t data) : _data{.uint16_v = data}, _type(gamax::type_id::UINT16) {}
+    __host__ __device__ constexpr scalar(uint32_t data) : _data{.uint32_v = data}, _type(gamax::type_id::UINT32) {}
+    __host__ __device__ constexpr scalar(uint64_t data) : _data{.uint64_v = data}, _type(gamax::type_id::UINT64) {}
     __host__ __device__ constexpr scalar(float data) : _data{.float32_v = data}, _type(gamax::type_id::FLOAT32) {}
     __host__ __device__ constexpr scalar(double data) : _data{.float64_v = data}, _type(gamax::type_id::FLOAT64) {}
     
@@ -44,6 +52,14 @@ public:
             return _data.int32_v;
         } else if constexpr (std::is_same_v<T, int64_t>) {
             return _data.int64_v;
+        } else if constexpr (std::is_same_v<T, uint8_t>) {
+            return _data.uint8_v;
+        } else if constexpr (std::is_same_v<T, uint16_t>) {
+            return _data.uint16_v;
+        } else if constexpr (std::is_same_v<T, uint32_t>) {
+            return _data.uint32_v;
+        } else if constexpr (std::is_same_v<T, uint64_t>) {
+            return _data.uint64_v;
         } else if constexpr (std::is_same_v<T, float>) {
             return _data.float32_v;
         } else if constexpr (std::is_same_v<T, double>) {
@@ -70,6 +86,18 @@ public:
         } else if constexpr (std::is_same_v<T, int64_t>) {
             _data.int64_v = value;
             _type = gamax::type_id::INT64;
+        } else if constexpr (std::is_same_v<T, uint8_t>) {
+            _data.uint8_v = value;
+            _type = gamax::type_id::UINT8;
+        } else if constexpr (std::is_same_v<T, uint16_t>) {
+            _data.uint16_v = value;
+            _type = gamax::type_id::UINT16;
+        } else if constexpr (std::is_same_v<T, uint32_t>) {
+            _data.uint32_v = value;
+            _type = gamax::type_id::UINT32;
+        } else if constexpr (std::is_same_v<T, uint64_t>) {
+            _data.uint64_v = value;
+            _type = gamax::type_id::UINT64;
         } else if constexpr (std::is_same_v<T, float>) {
             _data.float32_v = value;
             _type = gamax::type_id::FLOAT32;

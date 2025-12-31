@@ -49,9 +49,9 @@ GAMAX_TYPE_MAPPING(int16_t, type_id::INT16)
 GAMAX_TYPE_MAPPING(int32_t, type_id::INT32)
 GAMAX_TYPE_MAPPING(int64_t, type_id::INT64)
 GAMAX_TYPE_MAPPING(bool, type_id::BOOL8)
-// GAMAX_TYPE_MAPPING(uint8_t, type_id::UINT8)
-// GAMAX_TYPE_MAPPING(uint16_t, type_id::UINT16)
-// GAMAX_TYPE_MAPPING(uint32_t, type_id::UINT32)
+GAMAX_TYPE_MAPPING(uint8_t, type_id::UINT8)
+GAMAX_TYPE_MAPPING(uint16_t, type_id::UINT16)
+GAMAX_TYPE_MAPPING(uint32_t, type_id::UINT32)
 GAMAX_TYPE_MAPPING(uint64_t, type_id::UINT64)
 GAMAX_TYPE_MAPPING(float, type_id::FLOAT32)
 GAMAX_TYPE_MAPPING(double, type_id::FLOAT64)
@@ -105,7 +105,18 @@ __host__ __device__ __forceinline__ constexpr decltype(auto) type_dispatcher(gam
     case type_id::FLOAT64:
       return f.template operator()<typename IdTypeMap<type_id::FLOAT64>::type>(
         std::forward<Ts>(args)...);
-    case type_id::UINT64: // so far we do not allow the uint64_t type to be dispatched
+    case type_id::UINT8:
+      return f.template operator()<typename IdTypeMap<type_id::UINT8>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::UINT16:
+      return f.template operator()<typename IdTypeMap<type_id::UINT16>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::UINT32:
+      return f.template operator()<typename IdTypeMap<type_id::UINT32>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::UINT64: 
+      return f.template operator()<typename IdTypeMap<type_id::UINT64>::type>(
+        std::forward<Ts>(args)...);
     default: {
 #if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
       std::string type_id = std::to_string(static_cast<int>(dtype.id()));
@@ -148,6 +159,15 @@ __host__ __device__ __forceinline__ constexpr decltype(auto) type_dispatcher_all
         std::forward<Ts>(args)...);
     case type_id::BOOL8:
       return f.template operator()<typename IdTypeMap<type_id::BOOL8>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::UINT8:
+      return f.template operator()<typename IdTypeMap<type_id::UINT8>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::UINT16:
+      return f.template operator()<typename IdTypeMap<type_id::UINT16>::type>(
+        std::forward<Ts>(args)...);
+    case type_id::UINT32:
+      return f.template operator()<typename IdTypeMap<type_id::UINT32>::type>(
         std::forward<Ts>(args)...);
     case type_id::UINT64:
       return f.template operator()<typename IdTypeMap<type_id::UINT64>::type>(
@@ -248,11 +268,7 @@ struct to_string_helper {
 };
 
 inline __host__ __device__ std::size_t size_of(data_type element_type)
-{ 
-  if(element_type.id() == type_id::UINT64) {
-    return sizeof(uint64_t);
-  }
-  
+{   
   return type_dispatcher(element_type, size_of_helper{});
 }
 
