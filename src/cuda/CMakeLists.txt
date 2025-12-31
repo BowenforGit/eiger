@@ -10,6 +10,12 @@ if(USE_ROCM)
     )
 else(USE_CUDA)
     CPMAddPackage(
+        NAME CCCL
+        GITHUB_REPOSITORY nvidia/cccl
+        GIT_TAG main # Fetches the latest commit on the main branch
+    )
+
+    CPMAddPackage(
         NAME cuco
         GITHUB_REPOSITORY NVIDIA/cuCollections
         GIT_TAG dev
@@ -20,15 +26,9 @@ else(USE_CUDA)
     )
 
     CPMAddPackage(
-        NAME CCCL
-        GITHUB_REPOSITORY nvidia/cccl
-        GIT_TAG main # Fetches the latest commit on the main branch
-    )
-
-    CPMAddPackage(
         NAME NVTX
         GITHUB_REPOSITORY NVIDIA/NVTX
-        GIT_TAG v3.1.0-c-cpp
+        GIT_TAG v3.4.0-c-cpp
         GIT_SHALLOW TRUE)
     target_link_libraries(common INTERFACE nvtx3-cpp)
 endif()
@@ -39,6 +39,7 @@ set(srcs
     operators/groupby/aggregate.cu
     operators/sort/sort.cu
     operators/sort/sort_table.cu
+    operators/sort/topk_table.cu
     operators/partition/partition.cu
     compress/dictionary_encode_dict_ready.cu
     memory/column.cu

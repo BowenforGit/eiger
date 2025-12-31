@@ -87,5 +87,14 @@ sort_table(
     int sort_key_index,
     gamax::sort_order sort_order,
     cudaStream_t stream = 0);
+
+std::unique_ptr<gamax::table>
+topk_table(
+    gamax::table_view const& table,
+    std::vector<int> const& sort_keys,
+    std::vector<gamax::sort_order> const& sort_orders,
+    gamax::size_type k,
+    bool result_in_sorted_order,
+    cudaStream_t stream = 0);
 } // namespace sort
 } // namespace gamax

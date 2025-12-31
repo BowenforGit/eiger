@@ -34,6 +34,7 @@ if(USE_CUDA)
         string/string_contains_multiple_test.cu
         string/string_sort_test.cu
         sort/sort_table_test.cu
+        sort/topk_table_test.cu
     )
 endif()
 
