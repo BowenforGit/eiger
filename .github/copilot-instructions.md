@@ -89,6 +89,12 @@ Benchmarks use NVBench. See `benchmarks/groupby/groupby_nvbench.cu` for the patt
 1. Generate test data using utilities from `data_gen/`
 2. Call `state.exec()` with the operation to benchmark
 3. Use `state.skip()` for invalid parameter combinations
+4. Unless specified otherwise, always use the gamax::column and gamax::table abstractions instead of using raw device pointers or thrust::device_vector directly.
+5. If possible, reuse existing data generation utilities from the `data_gen/` folder to maintain consistency across benchmarks and tests.
+6. When writing benchmarks, ensure to document the parameters being tested and any assumptions made about the data.
+7. Follow the established pattern in existing benchmark files to ensure uniformity and ease of understanding for future contributors.
+8. Unless absolutely necessary, develop as few benchmark suites as possible to cover multiple related operators or functionalities, reducing redundancy and maintenance overhead.
+9. At the beginning of the benchmark function, always call `release_all_mem()` to reset the memory state before executing the benchmarked operation. The function is provided in `memory/mem_manager.hpp`.
 
 ## Common Gotchas
 - Always call `release_all_mem()` at benchmark start to reset memory state

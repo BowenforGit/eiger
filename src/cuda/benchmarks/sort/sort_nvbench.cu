@@ -35,12 +35,17 @@ struct sort_params {
         begin_bit = state.get_int64_or_default("begin_bit", 0);
         auto num_bits = state.get_int64_or_default("num_bits", 8*sizeof(KeyT));
         end_bit = begin_bit + num_bits;
-        assert(end_bit <= 8*sizeof(KeyT));
     }
 };
 
 template<typename KeyT>
 bool check_skip(sort_params<KeyT> const& params) {
+    if(params.begin_bit < 0 || params.begin_bit >= 8*sizeof(KeyT)) {
+        return true;
+    }
+    if(params.end_bit <= params.begin_bit || params.end_bit > 8*sizeof(KeyT)) {
+        return true;
+    }
     return false;
 }
 

@@ -27,6 +27,9 @@ set(benchmarkSources
     string/string_nvbench.cu
     string/string_sort_nvbench.cu
     expr/expr_nvbench.cu
+    misc/hash_fn_nvbench.cu
+    misc/gather_nvbench.cu
+    misc/read_write_nvbench.cu
 )
 
 foreach(source IN LISTS benchmarkSources)
