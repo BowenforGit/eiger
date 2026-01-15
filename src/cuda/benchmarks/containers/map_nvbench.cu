@@ -10,9 +10,7 @@
 #include <type_traits>
 #include <cassert>
 
-#ifdef __NVCC__
-#include <nvtx3/nvtx3.hpp>
-#endif
+#include "../common/nvtx_stub.hpp"
 
 #include "containers/map.cuh"
 #include "data_gen/table_gen.hpp"

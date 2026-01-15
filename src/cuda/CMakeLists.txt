@@ -1,6 +1,11 @@
 if(USE_ROCM)
     CPMAddPackage(
-        NAME hipco
+        NAME libhipcxx
+        GITHUB_REPOSITORY ROCm/libhipcxx
+        GIT_TAG release/2.7.x 
+    )
+    CPMAddPackage(
+        NAME cuco
         GITHUB_REPOSITORY ROCm/hipCollections
         GIT_TAG release/rocmds-25.10
         OPTIONS
@@ -39,7 +44,6 @@ set(srcs
     operators/groupby/aggregate.cu
     operators/sort/sort.cu
     operators/sort/sort_table.cu
-    operators/sort/topk_table.cu
     operators/partition/partition.cu
     compress/dictionary_encode_dict_ready.cu
     memory/column.cu
@@ -67,6 +71,7 @@ if(USE_NVIDIA)
         operators/join/hash_join.cu
         operators/select/select.cu
         operators/project/project.cu
+        operators/sort/topk_table.cu
         expr/expr_fast.cu
         expr/expr_nofuse.cu
         expr/expr_parser.cpp
@@ -79,7 +84,8 @@ target_link_libraries(gamax PRIVATE common)
 target_link_libraries(gamax PRIVATE OpenMP::OpenMP_CXX)
 
 if(USE_ROCM)
-    target_link_libraries(gamax PUBLIC hipco)
+    target_link_libraries(gamax PUBLIC cuco::cuco)
+    target_link_libraries(gamax PUBLIC libhipcxx::libhipcxx)
 else(USE_NVIDIA)
     target_link_libraries(gamax PUBLIC cuco)
     target_link_libraries(gamax PUBLIC CCCL::CCCL)

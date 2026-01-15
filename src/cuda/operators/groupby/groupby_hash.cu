@@ -245,10 +245,8 @@ namespace {
                                     cuco::empty_key{empty_key_sentinel},
                                     my_equal<Key>{key_ptr},
                                     cuco::linear_probing<1, my_hasher<Key>>{my_hasher{key_ptr}},
-#ifdef __NVCC__ // only supported for CUCO
                                     cuco::thread_scope_device,
                                     cuco::storage<1>{},
-#endif
                                     cuco_allocator, 
                                     stream
                                     };
@@ -285,7 +283,7 @@ namespace {
                 agg_bytes += gamax::size_of(res->get_column(i).type());
             }
             
-            constexpr std::size_t max_shared_mem_size = MAX_SMEM_BYTES;
+            const std::size_t max_shared_mem_size = static_cast<std::size_t>(gamax::max_smem_bytes());
             /* When the number of groups becomes larger, 
             it is no longer efficient to aggregate in SMEM 
             even though it goes not go beyond SMEM's capacity.

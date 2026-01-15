@@ -9,9 +9,7 @@
 #include <fstream>
 #include <type_traits>
 
-#ifdef __NVCC__
-#include <nvtx3/nvtx3.hpp>
-#endif
+#include "../common/nvtx_stub.hpp"
 
 #include "operators/join/join.hpp"
 #include "operators/join/inner_join.hpp"

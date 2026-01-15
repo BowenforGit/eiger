@@ -14,6 +14,8 @@
 #include "thrust/iterator/counting_iterator.h"
 #include "utils/utils.cuh"
 #include "atomics/atomics.cuh"
+#include "utils/device_info.hpp"
+#include "utils/warp_utils.cuh"
 
 namespace gamax::join{
 namespace detail {
@@ -36,20 +38,31 @@ namespace {
             max_build_bucket_size = 1 << 12;
             max_probe_bucket_size = 1 << 13;
             hash_table_size = 1 << 11;
-            shuffle_space_size = 1 << 5;
+            const int device_warp_size = gamax::warp_size();
+            shuffle_space_size = device_warp_size;
             max_output_size = gamax::join::detail::get_ieq_join_output_alloc_size(left, right, hint);
 
             join_kernel_tb_size = 512;
-            if(early_materialization) {
-                join_kernel_smem_bytes 
-                    = (max_build_bucket_size + 512) * (gamax::size_of(left[0].type()) + gamax::size_of(left[1].type()) + sizeof(int16_t))
-                    + hash_table_size * sizeof(int32_t)
-                    + shuffle_space_size * (join_kernel_tb_size / 32) * (gamax::size_of(left[0].type()) + gamax::size_of(left[1].type()) + gamax::size_of(right[1].type()));
-            } else {
-                join_kernel_smem_bytes 
-                    = (max_build_bucket_size + 512) * (gamax::size_of(left[0].type()) + sizeof(gamax::size_type) + sizeof(int16_t))
-                    + hash_table_size * sizeof(int32_t)
-                    + shuffle_space_size * (join_kernel_tb_size / 32) * (gamax::size_of(left[0].type()) + sizeof(gamax::size_type) * 2);
+
+            auto compute_smem_bytes = [&](int tb_size) {
+                const auto warp_chunks = tb_size / device_warp_size;
+                if(early_materialization) {
+                    return (max_build_bucket_size + 512) * (gamax::size_of(left[0].type()) + gamax::size_of(left[1].type()) + sizeof(int16_t))
+                        + hash_table_size * sizeof(int32_t)
+                        + shuffle_space_size * warp_chunks * (gamax::size_of(left[0].type()) + gamax::size_of(left[1].type()) + gamax::size_of(right[1].type()));
+                } else {
+                    return (max_build_bucket_size + 512) * (gamax::size_of(left[0].type()) + sizeof(gamax::size_type) + sizeof(int16_t))
+                        + hash_table_size * sizeof(int32_t)
+                        + shuffle_space_size * warp_chunks * (gamax::size_of(left[0].type()) + sizeof(gamax::size_type) * 2);
+                }
+            };
+
+            // HIP LDS is 64 KiB; shrink the block size until shared memory fits.
+            const std::size_t max_smem = static_cast<std::size_t>(gamax::MAX_SMEM_BYTES);
+            join_kernel_smem_bytes = compute_smem_bytes(join_kernel_tb_size);
+            while(join_kernel_smem_bytes > max_smem && join_kernel_tb_size > device_warp_size) {
+                join_kernel_tb_size /= 2;
+                join_kernel_smem_bytes = compute_smem_bytes(join_kernel_tb_size);
             }
         }
         
@@ -176,10 +189,12 @@ namespace {
         const int block = blockIdx.x;
         const int pwidth = gridDim.x;
         const auto buckets_cnt = *n_work_units;
-        const int lid = tid % 32;
-        const int wid = tid / 32;
-        const int nwarps = blockDim.x/32;
-        const int threadmask = (lid < 31)? ~((1 << (lid+1)) - 1) : 0;
+        constexpr int warp_size = gamax::warp_size();
+        const int lid = tid % warp_size;
+        const int wid = tid / warp_size;
+        const int nwarps = blockDim.x / warp_size;
+        using ballot_t = decltype(__activemask());
+        const ballot_t threadmask = gamax::warp::upper_lane_mask<ballot_t>(lid, warp_size);
 
         extern __shared__ int16_t temp[];
 
@@ -276,11 +291,11 @@ namespace {
                         }
 
                         /*find out who had a match in this execution step*/
-                        int mask = __ballot_sync(__activemask(), wr_intention);
+                        ballot_t mask = __ballot_sync(__activemask(), wr_intention);
 
                         /*our software managed buffer will overflow, flush it*/
-                        int wr_offset = shuffle_ptr +  __popc(mask & threadmask);
-                        shuffle_ptr = shuffle_ptr + __popc(mask);
+                        int wr_offset = shuffle_ptr +  gamax::warp::popc_mask(mask & threadmask);
+                        shuffle_ptr = shuffle_ptr + gamax::warp::popc_mask(mask);
                         
                         /*while it overflows, flush
                         we flush 16 keys and then the 16 corresponding payloads consecutively, of course other formats might be friendlier*/

@@ -1,10 +1,10 @@
 #pragma once
 
 #include <iostream>
-#include <omp.h>
 #include <gtest/gtest.h>
 #include <vector>
 #include <cuda.h>
+#include <memory>
 
 #include "benchmarks/groupby/groupby_util.cuh"
 #include "operators/groupby/groupby.hpp"
@@ -17,28 +17,26 @@
 using namespace gamax::groupby;
 
 namespace gamax::groupby {
-template <typename KeyT, typename ValueT, typename AggT>
-void invoke_groupby_sort(KeyT* h_keys, 
-                         ValueT* h_vals, 
-                         const gamax::size_type num_items,
-                         KeyT*& h_out_keys,
-                         typename AggT::OutputType*& h_out_vals,
-                         gamax::size_type& num_groups,
-                         gamax::groupby::groupby_hint& hint,
-                         cudaStream_t stream) {
-    auto d_keys = gamax::make_column_from_host(h_keys, num_items);
-    auto d_vals = gamax::make_column_from_host(h_vals, num_items);
-    auto d_vals_2 = gamax::make_column_from_host(h_vals, num_items);
 
-    std::vector<decltype(d_keys)> keys_vec;
-    keys_vec.push_back(std::move(d_keys));
-    std::vector<decltype(d_vals)> vals_vec;
-    vals_vec.push_back(std::move(d_vals));
-    vals_vec.push_back(std::move(d_vals_2));
-
-    gamax::table key_table(std::move(keys_vec));
-    gamax::table val_table(std::move(vals_vec));
-
+/**
+ * Invoke groupby operation using GPU-generated data.
+ * 
+ * @param key_table: Table containing the key columns (generated on GPU).
+ * @param val_table: Table containing the value columns (generated on GPU).
+ * @param h_out_keys: Output host array for result keys.
+ * @param h_out_vals: Output host array for result values.
+ * @param num_groups: Output number of groups found.
+ * @param hint: Groupby hint for algorithm selection.
+ * @param stream: CUDA stream to use.
+ */
+template <typename KeyT, typename AggT>
+void invoke_groupby_gpu(gamax::table& key_table,
+                        gamax::table& val_table,
+                        KeyT*& h_out_keys,
+                        typename AggT::OutputType*& h_out_vals,
+                        gamax::size_type& num_groups,
+                        gamax::groupby::groupby_hint& hint,
+                        cudaStream_t stream) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     requests.push_back({1, gamax::groupby::aggregation_id::SUM});
@@ -51,42 +49,73 @@ void invoke_groupby_sort(KeyT* h_keys,
     h_out_keys = new KeyT[d_out_keys.size()];
     h_out_vals = new typename AggT::OutputType[d_out_vals.size()];
 
-    gamax::copy_column_to_host(d_out_keys, h_out_keys);
-    gamax::copy_column_to_host(d_out_vals, h_out_vals);
+    gamax::copy_column_to_host(d_out_keys, h_out_keys, stream);
+    gamax::copy_column_to_host(d_out_vals, h_out_vals, stream);
+    cudaStreamSynchronize(stream);
     num_groups = d_out_keys.size();
 }
 
+/**
+ * Check groupby result for uniform distribution case (no skew).
+ * For uniform distribution with all-ones values:
+ * - Each group should have exactly (num_items / num_groups) items
+ * - Sum of all keys should equal sum of 0..(num_groups-1)
+ */
 template <typename KeyT>
-void check_groupby_result(KeyT* h_keys, KeyT* ret_keys, int* ret_vals, gamax::size_type num_groups, const groupby_params& params) {
+void check_groupby_result_uniform(KeyT* ret_keys, int* ret_vals, gamax::size_type num_groups, const groupby_params& params) {
     ASSERT_EQ(num_groups, params.actual_num_groups);
     unsigned long long sum = 0;
 
-    if(params.zipf_factor == 0.0) {
-        for(gamax::size_type i = 0; i < num_groups; i++) {
-            sum += ret_keys[i];
-            ASSERT_EQ(ret_vals[i], params.num_items / params.num_groups);
-        }
-        EXPECT_EQ(sum, ((unsigned long long)params.num_groups - 1) * (unsigned long long)params.num_groups / 2);
-    } else {
-        std::vector<gamax::size_type> group_sizes(params.num_groups, 0);
-        for(gamax::size_type i = 0; i < params.num_items; i++) {
-            group_sizes[h_keys[i]]++;
-        }
-        for(gamax::size_type i = 0; i < num_groups; i++) {
-            ASSERT_EQ(ret_vals[i], group_sizes[ret_keys[i]]);
-        }
+    for(gamax::size_type i = 0; i < num_groups; i++) {
+        sum += ret_keys[i];
+        ASSERT_EQ(ret_vals[i], params.num_items / params.num_groups);
+    }
+    EXPECT_EQ(sum, ((unsigned long long)params.num_groups - 1) * (unsigned long long)params.num_groups / 2);
+}
+
+/**
+ * Check groupby result for zipf distribution case (skewed).
+ * For zipf distribution with all-ones values:
+ * - Each group's sum should equal the count of that key in input
+ */
+template <typename KeyT>
+void check_groupby_result_zipf(KeyT* h_keys, KeyT* ret_keys, int* ret_vals, gamax::size_type num_groups, const groupby_params& params) {
+    ASSERT_EQ(num_groups, params.actual_num_groups);
+    
+    std::vector<gamax::size_type> group_sizes(params.num_groups, 0);
+    for(gamax::size_type i = 0; i < params.num_items; i++) {
+        group_sizes[h_keys[i]]++;
+    }
+    for(gamax::size_type i = 0; i < num_groups; i++) {
+        ASSERT_EQ(ret_vals[i], group_sizes[ret_keys[i]]);
     }
 }
 
+/**
+ * Test groupby with GPU-based data generation.
+ * 
+ * Data generation semantics:
+ * - Uniform (zipf_factor == 0): Keys are [0, num_groups) repeated and shuffled,
+ *   values are all 1s. Each group has exactly (num_items / num_groups) items.
+ * - Zipf (zipf_factor > 0): Keys follow zipf distribution over [0, num_groups),
+ *   values are all 1s. Some groups may have no items due to skew.
+ */
 template <typename KeyT, typename AggT>
 void test_groupby_sort(groupby_params& params, cudaStream_t stream = cudaStreamDefault) {
-    KeyT*  h_keys = (KeyT*)malloc(params.num_items * sizeof(KeyT));
-    int* h_vals = (int*)malloc(params.num_items * sizeof(int));
-
-    generate_groupby_data(h_keys, h_vals, params);
-
-    // check the actual number of groups generated if zipf factor is not zero
+    // Set value option to ALL_ONES to match original test semantics
+    params.val_opt = val_option::ALL_ONES;
+    
+    // Generate data on GPU using the GPU-based generator
+    gamax::table key_table;
+    gamax::table val_table;
+    generate_groupby_data<KeyT, int>(key_table, val_table, params);
+    
+    // For zipf distribution, we need to copy keys to host to count actual groups
+    std::unique_ptr<KeyT[]> h_keys;
     if(params.zipf_factor > 0.0) {
+        h_keys = gamax::copy_column_to_host<KeyT>(key_table.get_column(0).view(), stream);
+        cudaStreamSynchronize(stream);
+        
         std::vector<gamax::size_type> group_sizes(params.num_groups, 0);
         for(gamax::size_type i = 0; i < params.num_items; i++) {
             group_sizes[h_keys[i]]++;
@@ -109,7 +138,6 @@ void test_groupby_sort(groupby_params& params, cudaStream_t stream = cudaStreamD
         params.actual_num_groups = params.num_groups;
     }
 
-
     gamax::groupby::groupby_hint hint;
     hint.groups_upper_bound = params.num_groups;
     hint.groupby_algo = params.algo;
@@ -118,13 +146,16 @@ void test_groupby_sort(groupby_params& params, cudaStream_t stream = cudaStreamD
     typename AggT::OutputType* h_out_vals = nullptr;
     gamax::size_type num_groups = 0;
     
-    invoke_groupby_sort<KeyT, int, AggT>(h_keys, h_vals, params.num_items, h_out_keys, h_out_vals, num_groups, hint, stream);
-    check_groupby_result(h_keys, h_out_keys, h_out_vals, num_groups, params);
+    invoke_groupby_gpu<KeyT, AggT>(key_table, val_table, h_out_keys, h_out_vals, num_groups, hint, stream);
     
-    free(h_keys);
-    free(h_vals);
-    free(h_out_keys);
-    free(h_out_vals);
+    if(params.zipf_factor == 0.0) {
+        check_groupby_result_uniform(h_out_keys, h_out_vals, num_groups, params);
+    } else {
+        check_groupby_result_zipf(h_keys.get(), h_out_keys, h_out_vals, num_groups, params);
+    }
+    
+    delete[] h_out_keys;
+    delete[] h_out_vals;
 }
 
 #define GROUPBY_TEST_CASE(K, AGG, N, G, ALGO, Z) \
@@ -134,7 +165,7 @@ void test_groupby_sort(groupby_params& params, cudaStream_t stream = cudaStreamD
         params.num_groups = (G); \
         params.zipf_factor = (Z); \
         params.algo = (ALGO); \
-        params.num_aggs = 1; \
+        params.num_aggs = 2; \
         cudaStream_t stream; \
         cudaStreamCreate(&stream); \
         test_groupby_sort<K, AGG<int>>(params, stream); \

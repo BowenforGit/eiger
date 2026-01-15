@@ -3,6 +3,7 @@
 #include <variant>
 #include <unordered_map>
 #include <type_traits>
+#include <cuda/std/utility>
 #include <thrust/iterator/constant_iterator.h>
 
 #include "memory/column.hpp"
@@ -120,7 +121,7 @@ __global__ void kernel_unary_op(
     Op op)
 {
     using T1 = typename std::iterator_traits<InputItr>::value_type;
-    using ResType = std::remove_cv_t<std::remove_reference_t<decltype(op(std::declval<T1>()))>>;
+    using ResType = std::remove_cv_t<std::remove_reference_t<decltype(op(cuda::std::declval<T1>()))>>;
     
     const size_type idx = blockIdx.x * blockDim.x + threadIdx.x;
     const size_type stride = blockDim.x * gridDim.x;
@@ -140,7 +141,7 @@ __global__ void kernel_unary_op_vec(
     Op op)
 {
     using T1 = typename std::iterator_traits<InputItr>::value_type;
-    using ResType = std::remove_cv_t<std::remove_reference_t<decltype(op(std::declval<T1>()))>>;
+    using ResType = std::remove_cv_t<std::remove_reference_t<decltype(op(cuda::std::declval<T1>()))>>;
     
     const size_type idx = blockIdx.x * blockDim.x + threadIdx.x;
     const size_type stride = blockDim.x * gridDim.x;
@@ -184,7 +185,7 @@ __global__ void kernel_binary_op(
     
     using T1 = typename std::iterator_traits<Input1Itr>::value_type;
     using T2 = typename std::iterator_traits<Input2Itr>::value_type;
-    using ResType = std::remove_cv_t<std::remove_reference_t<decltype(op(std::declval<T1>(), std::declval<T2>()))>>;
+    using ResType = std::remove_cv_t<std::remove_reference_t<decltype(op(cuda::std::declval<T1>(), cuda::std::declval<T2>()))>>;
     
     const size_type idx = blockIdx.x * blockDim.x + threadIdx.x;
     const size_type stride = blockDim.x * gridDim.x;
@@ -206,7 +207,7 @@ __global__ void kernel_binary_op_vec(
 {
     using T1 = typename std::iterator_traits<Input1Itr>::value_type;
     using T2 = typename std::iterator_traits<Input2Itr>::value_type;
-    using ResType = std::remove_cv_t<std::remove_reference_t<decltype(op(std::declval<T1>(), std::declval<T2>()))>>;
+    using ResType = std::remove_cv_t<std::remove_reference_t<decltype(op(cuda::std::declval<T1>(), cuda::std::declval<T2>()))>>;
     
     const size_type idx = blockIdx.x * blockDim.x + threadIdx.x;
     const size_type stride = blockDim.x * gridDim.x;
@@ -357,7 +358,7 @@ struct unary_op_launch_helper {
         Op op,
         cudaStream_t stream)
     {
-        using ResType = decltype(op(std::declval<T1>()));
+        using ResType = decltype(op(cuda::std::declval<T1>()));
         auto output = gamax::make_column(data_type{type_to_id<ResType>()}, input.size());
         const int blockSize = 256;
         const int numBlocks = (input.size() + blockSize - 1) / blockSize;
@@ -491,7 +492,7 @@ struct binary_op_launch_helper {
         Op op,
         cudaStream_t stream)
     {
-        using ResType = decltype(op(std::declval<T1>(), std::declval<T2>()));
+        using ResType = decltype(op(cuda::std::declval<T1>(), cuda::std::declval<T2>()));
 
         const auto output_size = get_output_size(input1, input2);
 

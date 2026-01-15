@@ -87,13 +87,13 @@ void test_dictionary_encode(const gamax::size_type num_items, const gamax::size_
         test_dictionary_encode<KEY_TYPE, ENCODE_TYPE>(NUM_ITEMS, DICT_SIZE); \
     }
 
-TEST_DICTIONARY_ENCODE(int32_t, int16_t, 4096, 1)
-TEST_DICTIONARY_ENCODE(int32_t, int16_t, 4096, 16)
-TEST_DICTIONARY_ENCODE(int32_t, int16_t, 4096, 4096)
-TEST_DICTIONARY_ENCODE(int32_t, int16_t, 268435356, 1024) // 2^28
-TEST_DICTIONARY_ENCODE(int32_t, int16_t, 268435356, 2048) // 2^28
-TEST_DICTIONARY_ENCODE(int32_t, int16_t, 268435356, 4096) // 2^28
-TEST_DICTIONARY_ENCODE(int32_t, int16_t, 536870712, 1024) // 2^29
+TEST_DICTIONARY_ENCODE(int32_t, int32_t, 4096, 1)
+TEST_DICTIONARY_ENCODE(int32_t, int32_t, 4096, 16)
+TEST_DICTIONARY_ENCODE(int32_t, int32_t, 4096, 4096)
+TEST_DICTIONARY_ENCODE(int32_t, int32_t, 268435356, 1024) // 2^28
+TEST_DICTIONARY_ENCODE(int32_t, int32_t, 268435356, 2048) // 2^28
+TEST_DICTIONARY_ENCODE(int32_t, int32_t, 268435356, 4096) // 2^28
+TEST_DICTIONARY_ENCODE(int32_t, int32_t, 536870712, 1024) // 2^29
 
 int main(int argc, char **argv) {
   testing::InitGoogleTest(&argc, argv);

@@ -8,9 +8,7 @@
 #include <exception>
 #include <fstream>
 
-#ifdef __NVCC__
-#include <nvtx3/nvtx3.hpp>
-#endif
+#include "../common/nvtx_stub.hpp"
 
 #include "operators/groupby/groupby.hpp"
 #include "operators/groupby/aggregation.hpp"

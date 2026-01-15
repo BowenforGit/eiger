@@ -2,7 +2,7 @@
 #include <thrust/transform.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/execution_policy.h>
-#include <nvtx3/nvToolsExt.h>
+#include "../common/nvtx_stub.hpp"
 
 #include <string>
 #include <iostream>

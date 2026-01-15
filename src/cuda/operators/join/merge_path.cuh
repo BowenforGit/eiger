@@ -16,6 +16,8 @@
 
 #include "utils/utils.cuh"
 #include "atomics/atomics.cuh"
+#include "utils/warp_utils.cuh"
+#include "utils/device_info.hpp"
 
 template<typename idx_t, typename cnt_t>
 struct merge_range {
@@ -98,6 +100,8 @@ __global__ void merge_keys_mp_improv(key_t* l_sorted_keys, key_t* r_sorted_keys,
                               const gamax::size_type nl, const gamax::size_type nr, const gamax::size_type* partitions,
                               key_t* keys_out, ROutIt l_out, SOutIt r_out, 
                               gamax::size_type* g_counter, gamax::size_type circular_buffer_size, bool agg_only = false) {
+    constexpr int HW_WARP = gamax::warp_size(); // 32 on CUDA, 64 on HIP
+
     auto cta = blockIdx.x;
     constexpr int NV = NT*VT;
 
@@ -181,14 +185,15 @@ __global__ void merge_keys_mp_improv(key_t* l_sorted_keys, key_t* r_sorted_keys,
     
     int i = 0, j = 0;
     int shuffle_ptr = 0;
-    const int wid = threadIdx.x / 32;
-    const int lid = threadIdx.x % 32; 
-    const int threadmask = (lid < 31)? ~((1 << (lid+1)) - 1) : 0;
+    const int wid = threadIdx.x / HW_WARP;
+    const int lid = threadIdx.x % HW_WARP; 
+    using ballot_t = decltype(__activemask());
+    const ballot_t threadmask = gamax::warp::upper_lane_mask<ballot_t>(lid, HW_WARP);
     
-    constexpr int SHUFFLE_SIZE = 32;
-    __shared__ key_t keys_shfl[NT/32][SHUFFLE_SIZE];
-    __shared__ std::remove_pointer_t<ROutIt> r_shfl[NT/32][SHUFFLE_SIZE];
-    __shared__ std::remove_pointer_t<SOutIt> l_shfl[NT/32][SHUFFLE_SIZE];
+    constexpr int SHUFFLE_SIZE = HW_WARP;
+    __shared__ key_t keys_shfl[NT/HW_WARP][SHUFFLE_SIZE];
+    __shared__ std::remove_pointer_t<ROutIt> r_shfl[NT/HW_WARP][SHUFFLE_SIZE];
+    __shared__ std::remove_pointer_t<SOutIt> l_shfl[NT/HW_WARP][SHUFFLE_SIZE];
     
     const bool valid_range = (mp0[0] < mr_global.a_count());
     int wr_intention;
@@ -202,11 +207,11 @@ __global__ void merge_keys_mp_improv(key_t* l_sorted_keys, key_t* r_sorted_keys,
         }     
         wr_intention = (valid_range && i < VT);
         
-        int mask = __ballot_sync(__activemask(), wr_intention);
+        ballot_t mask = __ballot_sync(__activemask(), wr_intention);
         if(mask == 0) break; // no one has the write intention anymore, exit
         
-        int wr_offset = shuffle_ptr +  __popc(mask & threadmask);
-        shuffle_ptr = shuffle_ptr + __popc(mask);
+        int wr_offset = shuffle_ptr +  gamax::warp::popc_mask(mask & threadmask);
+        shuffle_ptr = shuffle_ptr + gamax::warp::popc_mask(mask);
 
         // the buffer will be full if the current batch is written
         while (shuffle_ptr >= SHUFFLE_SIZE) {

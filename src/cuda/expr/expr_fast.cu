@@ -1,6 +1,7 @@
 #include <memory>
 #include <vector>
 #include <variant>
+#include <utility>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/transform.h>
 #include <thrust/execution_policy.h>

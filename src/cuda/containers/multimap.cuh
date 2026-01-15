@@ -3,6 +3,7 @@
 #include <cuda.h>
 #include <memory>
 #include <cmath>
+#include <cuda/std/tuple>
 
 #include "memory/column.hpp"
 #include "memory/table.hpp"
@@ -45,7 +46,7 @@ namespace gamax::containers {
         {
             auto keys_ptr = keys.data<Key>();
             auto tids = thrust::make_counting_iterator(static_cast<Value>(0));
-            auto kv_pairs = thrust::make_zip_iterator(thrust::make_tuple(keys_ptr, tids));
+            auto kv_pairs = thrust::make_zip_iterator(cuda::std::make_tuple(keys_ptr, tids));
             auto num_keys = keys.size();
             _multimap.insert(kv_pairs, kv_pairs+num_keys, stream);
             cudaStreamSynchronize(stream);
@@ -61,15 +62,15 @@ namespace gamax::containers {
             cudaStream_t stream = cudaStreamDefault) 
         {
             auto probe_tids_in = thrust::make_counting_iterator(static_cast<Value>(0));
-            auto probe_kv_pairs_in = thrust::make_zip_iterator(thrust::make_tuple(probe_keys.data<Key>(), probe_tids_in));
+            auto probe_kv_pairs_in = thrust::make_zip_iterator(cuda::std::make_tuple(probe_keys.data<Key>(), probe_tids_in));
             
             auto probe_keys_out = gamax::make_column<Key>(output_size);
             auto probe_tids_out = gamax::make_column<Value>(output_size);
-            auto probe_kv_pairs_out = thrust::make_zip_iterator(thrust::make_tuple(probe_keys_out->template data<Key>(), probe_tids_out->template data<Value>()));
+            auto probe_kv_pairs_out = thrust::make_zip_iterator(cuda::std::make_tuple(probe_keys_out->template data<Key>(), probe_tids_out->template data<Value>()));
 
             auto build_keys_out = gamax::make_column<Key>(output_size);
             auto build_tids_out = gamax::make_column<Value>(output_size);
-            auto build_kv_pairs_out = thrust::make_zip_iterator(thrust::make_tuple(build_keys_out->template data<Key>(), build_tids_out->template data<Value>()));
+            auto build_kv_pairs_out = thrust::make_zip_iterator(cuda::std::make_tuple(build_keys_out->template data<Key>(), build_tids_out->template data<Value>()));
 
             auto pair_equal = [] __device__ (auto const& a, auto const& b) {
                 return a.first == b.first;
@@ -100,7 +101,7 @@ namespace gamax::containers {
             cudaStream_t stream = cudaStreamDefault) 
         {
             auto probe_tids_in = thrust::make_counting_iterator(static_cast<Value>(0));
-            auto probe_kv_pairs_in = thrust::make_zip_iterator(thrust::make_tuple(probe_keys.data<Key>(), probe_tids_in));
+            auto probe_kv_pairs_in = thrust::make_zip_iterator(cuda::std::make_tuple(probe_keys.data<Key>(), probe_tids_in));
 
             auto pair_equal = [] __device__ (auto const& a, auto const& b) {
                 return a.first == b.first;

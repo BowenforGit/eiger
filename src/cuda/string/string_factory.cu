@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <thrust/execution_policy.h>
 #include <thrust/transform.h>
+#include <thrust/iterator/counting_iterator.h>
 
 #include "string/string_column.hpp"
 #include "string/string_impl.cuh"

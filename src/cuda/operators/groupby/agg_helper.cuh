@@ -284,6 +284,67 @@ __device__ __forceinline__ void copy_agg_from_smem_to_global(
 
     cooperative_groups::wait(group);
 }
+#else
+template<typename TyGroup>
+struct copy_agg_from_smem_to_global_helper {
+    template<typename T>
+    __device__ __forceinline__ void operator()(
+        const TyGroup& group,
+        gamax::mutable_column_view agg,
+        const gamax::size_type offset,
+        void* block_agg,
+        const gamax::size_type num_items)
+    {
+        auto src = reinterpret_cast<T*>(block_agg);
+        for(gamax::size_type idx = group.thread_rank(); idx < num_items; idx += group.size()) {
+            agg.data<T>()[offset + idx] = src[idx];
+        }
+        group.sync();
+    }
+};
+
+template<typename TyGroup>
+__device__ __forceinline__ void copy_agg_from_smem_to_global(
+    const TyGroup& group,
+    gamax::mutable_column_view agg,
+    const gamax::size_type offset,
+    void* block_agg, 
+    const gamax::size_type num_items)
+{
+    type_dispatcher(
+        agg.type(),
+        copy_agg_from_smem_to_global_helper<TyGroup>{},
+        group,
+        agg,
+        offset,
+        block_agg,
+        num_items);
+}
+
+template<typename TyGroup>
+__device__ __forceinline__ void copy_agg_from_smem_to_global(
+    const TyGroup& group,
+    gamax::experimental::mutable_table_device_view res,
+    const gamax::size_type offset,
+    void* block_agg, 
+    const gamax::size_type num_groups,
+    const gamax::size_type num_aggs)
+{
+    auto cur_agg_buffer = block_agg;
+
+    #pragma unroll
+    for(gamax::size_type k = 0; k < num_aggs; k++) {
+        copy_agg_from_smem_to_global(
+            group,
+            res.get_column(k+1), 
+            offset, 
+            cur_agg_buffer, 
+            num_groups);
+        cur_agg_buffer = reinterpret_cast<void*>(reinterpret_cast<char*>(cur_agg_buffer) + (num_groups)*gamax::size_of(res.get_column(k+1).type()));
+    }
+
+    group.sync();
+}
 #endif
 
 __device__ __forceinline__ void init_agg(

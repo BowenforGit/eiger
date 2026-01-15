@@ -59,7 +59,7 @@ MESSAGE(STATUS "OpenMP_CXX_FLAGS: ${OpenMP_CXX_FLAGS}")
 if(USE_ROCM)
     set(HIP_COMPILER_FLAGS "")
     list(APPEND HIP_COMPILER_FLAGS -O3)
-    list(APPEND HIP_COMPILER_FLAGS -Wno-unused-result -Wno-non-c-typedef-for-linkage)
+    list(APPEND HIP_COMPILER_FLAGS -Wno-unused-result -Wno-non-c-typedef-for-linkage -Wno-pass-failed)
     target_include_directories(
         common
         INTERFACE

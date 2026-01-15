@@ -6,12 +6,17 @@ if(USE_ROCM)
         OPTIONS
             "NVBench_ENABLE_TESTING OFF"
     )
+    set(GAMAX_BENCHMARK_MAIN_TARGET nvbench::main)
+    if(TARGET hipbench::main)
+        set(GAMAX_BENCHMARK_MAIN_TARGET hipbench::main)
+    endif()
 else(USE_NVIDIA)
     CPMAddPackage(
         NAME nvbench
         GITHUB_REPOSITORY NVIDIA/nvbench
         GIT_TAG main
     )
+    set(GAMAX_BENCHMARK_MAIN_TARGET nvbench::main)
 endif()
 
 set(benchmarkSources 
@@ -37,7 +42,10 @@ foreach(source IN LISTS benchmarkSources)
     message(STATUS "Adding benchmark target: ${target} with source: ${source}")
     add_executable(${target} ${source})
     target_link_libraries(${target} PRIVATE common)
-    target_link_libraries(${target} PRIVATE nvbench::main)
+    target_link_libraries(${target} PRIVATE ${GAMAX_BENCHMARK_MAIN_TARGET})
+    if(USE_ROCM)
+        target_compile_definitions(${target} PRIVATE GAMAX_DISABLE_NVTX)
+    endif()
     target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
     target_link_libraries(${target} PRIVATE gamax)
 endforeach()

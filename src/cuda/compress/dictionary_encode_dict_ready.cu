@@ -42,10 +42,9 @@ namespace {
                                         cuco::empty_value{empty_value_sentinel},
                                         thrust::equal_to<Key>{},
                                         cuco::linear_probing<1, cuco::default_hash_function<Key>>{},
-#ifdef __NVCC__
                                         {}, {}, 
-#endif
-                                        cuco_allocator};
+                                        cuco_allocator,
+                                        stream};
             
             auto pairs_begin = thrust::make_zip_iterator(thrust::make_tuple(dict.data<Key>(), thrust::make_counting_iterator<Encode>(0)));
 #ifdef __NVCC__

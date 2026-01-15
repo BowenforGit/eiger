@@ -232,7 +232,7 @@ public:
     }
 
     __host__ __device__ __forceinline__ char& charAt(typename Header::header_entry_type& header, str_idx_type rel_index) noexcept {
-        if constexpr (header.max_inlined_len() == 0) {
+        if constexpr (Header::header_entry_type::max_inlined_len() == 0) {
             return charAt(header.offset() + rel_index);
         } else {
             if(header.length() <= header.max_inlined_len() || rel_index < header.prefix_len()) {
@@ -281,10 +281,10 @@ public:
     }
 
     __host__ __device__ __forceinline__ const char& operator[](str_idx_type index) const noexcept {
-        if constexpr (header_.max_inlined_len() == 0) {
+        if constexpr (header_entry_type::max_inlined_len() == 0) {
             return buffer_.charAt(index);
         } else {
-            if(header_.length() <= header_.max_inlined_len() || index < header_.prefix_len()) {
+            if(header_.length() <= header_entry_type::max_inlined_len() || index < header_.prefix_len()) {
                 return header_.charAt(index);
             } else {
                 return buffer_.charAt(index);
@@ -349,7 +349,7 @@ public:
             return false;
         }
 
-        if constexpr (header_.max_inlined_len() == 0) { // arrow strings
+        if constexpr (header_entry_type::max_inlined_len() == 0) { // arrow strings
             const auto* this_ptr = buffer_.data() + start;
             const auto* other_ptr = other.data();
             return compare(this_ptr, other_ptr, other_size);

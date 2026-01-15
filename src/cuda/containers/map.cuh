@@ -50,7 +50,7 @@ namespace gamax::containers {
         {
             auto keys_ptr = keys.data<Key>();
             auto tids = thrust::make_counting_iterator(static_cast<Value>(0));
-            auto kv_pairs = thrust::make_zip_iterator(thrust::make_tuple(keys_ptr, tids));
+            auto kv_pairs = thrust::make_zip_iterator(cuda::std::make_tuple(keys_ptr, tids));
             auto num_keys = keys.size();
             _map.insert(kv_pairs, kv_pairs+num_keys, stream);
             cudaStreamSynchronize(stream);

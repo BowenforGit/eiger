@@ -13,9 +13,7 @@
 #include <thrust/transform.h>
 #include <thrust/execution_policy.h>
 
-#ifdef __NVCC__
-#include <nvtx3/nvtx3.hpp>
-#endif
+#include "../common/nvtx_stub.hpp"
 
 #include "operators/sort/sort.hpp"
 #include "data_gen/table_gen.hpp"
