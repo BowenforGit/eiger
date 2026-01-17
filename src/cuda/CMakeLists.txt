@@ -52,6 +52,7 @@ set(srcs
     data_gen/table_gen.cu
     data_gen/string_generator.cu
     utils/transform.cu
+    stats/stats_compute.cu
     string/string_factory.cu
     string/string_fast.cu
     string/string_sort.cu

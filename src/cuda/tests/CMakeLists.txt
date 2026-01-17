@@ -35,6 +35,7 @@ if(USE_NVIDIA)
         string/string_sort_test.cu
         sort/sort_table_test.cu
         sort/topk_table_test.cu
+        stats/stats_compute_test.cu
     )
 endif()
 
