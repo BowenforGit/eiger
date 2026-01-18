@@ -284,12 +284,9 @@ namespace {
         const double zipf_factor,
         const int seed)
     {   
-        gamax::size_type* h_idx = nullptr;
-        create_integral_relation_nonunique(&h_idx, card, false, zipf_factor, seq.size(), seed);
-        auto d_idx = gamax::make_column_from_host(h_idx, card);
+        // Generate Zipfian-distributed indices directly on GPU
+        auto d_idx = generate_zipf<gamax::size_type>(card, zipf_factor, seq.size(), seed);
         auto src = gamax::util::device::gather(d_idx->view(), seq);
-
-        delete[] h_idx;
 
         return generate_table(src->view(), card, ncols, seed);
     }

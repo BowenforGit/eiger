@@ -329,4 +329,199 @@ std::unique_ptr<gamax::column> generate(
 
     return ret;
 }
+
+/**
+ * @brief GPU-based Zipfian distribution generator functor.
+ * 
+ * This functor generates Zipfian-distributed indices using inverse transform sampling.
+ * It uses the CDF (Cumulative Distribution Function) and binary search (upper_bound)
+ * to map uniform random numbers to Zipfian-distributed values.
+ * 
+ * The semantic matches std::discrete_distribution: given weights w_i, the probability
+ * of selecting index i is w_i / sum(w_j).
+ * 
+ * @tparam T The integral type of the generated indices.
+ */
+template<typename T>
+struct zipf_gen
+{
+    static_assert(std::is_integral_v<T>, "zipf_gen requires an integral type");
+    using result_type = T;
+
+    const double* cdf;           // Device pointer to CDF array
+    gamax::size_type alphabet_size;  // Number of categories (size of CDF)
+    int seed;
+
+    __host__ __device__
+    zipf_gen(const double* _cdf, gamax::size_type _alphabet_size, int _seed = 42) 
+        : cdf(_cdf), alphabet_size(_alphabet_size), seed(_seed) {}
+
+    __host__ __device__
+    T operator()(const gamax::size_type idx) const
+    {
+        // Generate uniform random number in [0, 1)
+        thrust::default_random_engine rng(seed);
+        rng.discard(idx);
+        thrust::uniform_real_distribution<double> dist(0.0, 1.0);
+        double u = dist(rng);
+
+        // Binary search (upper_bound) to find the category
+        // The CDF is normalized such that cdf[alphabet_size-1] = 1.0
+        gamax::size_type lo = 0;
+        gamax::size_type hi = alphabet_size;
+        while (lo < hi) {
+            gamax::size_type mid = lo + (hi - lo) / 2;
+            if (cdf[mid] <= u) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        // lo is now the smallest index where cdf[lo] > u
+        // Clamp to valid range [0, alphabet_size-1]
+        return static_cast<T>(lo < alphabet_size ? lo : alphabet_size - 1);
+    }
+};
+
+/**
+ * @brief Functor to compute Zipfian PMF weights on GPU.
+ * 
+ * Computes w[i] = 1/(i+1)^zipf_factor for use in GPU-based CDF generation.
+ */
+struct zipf_pmf_functor {
+    double zipf_factor;
+    
+    __host__ __device__
+    zipf_pmf_functor(double _zipf_factor) : zipf_factor(_zipf_factor) {}
+    
+    __host__ __device__
+    double operator()(const gamax::size_type i) const {
+        return 1.0 / pow(static_cast<double>(i + 1), zipf_factor);
+    }
+};
+
+/**
+ * @brief Functor to normalize CDF values by dividing by total sum.
+ */
+struct normalize_cdf_functor {
+    double total_sum;
+    
+    __host__ __device__
+    normalize_cdf_functor(double _total_sum) : total_sum(_total_sum) {}
+    
+    __host__ __device__
+    double operator()(const double val) const {
+        return val / total_sum;
+    }
+};
+
+/**
+ * @brief Compute the CDF for Zipfian distribution entirely on GPU.
+ * 
+ * Given a zipf_factor and alphabet_size, this function computes the probability
+ * mass function (PMF) and then the CDF using GPU-accelerated operations:
+ * 1. Compute PMF weights: w[i] = 1/(i+1)^zipf_factor using thrust::transform
+ * 2. Compute inclusive prefix sum to get unnormalized CDF
+ * 3. Get total sum from last element
+ * 4. Normalize by dividing all values by total sum
+ * 
+ * The PMF is defined as:
+ *   P(i) = (1 / (i+1)^zipf_factor) / sum_j(1 / (j+1)^zipf_factor)
+ * 
+ * @param zipf_factor The Zipfian skew parameter (s). Higher values = more skew.
+ * @param alphabet_size The number of distinct values (categories).
+ * @param stream CUDA stream for async execution.
+ * @return std::unique_ptr<gamax::column> Device column containing CDF where cdf[i] = P(X <= i).
+ */
+inline std::unique_ptr<gamax::column> gen_zipf_cdf_device(
+    double zipf_factor, 
+    gamax::size_type alphabet_size,
+    cudaStream_t stream = cudaStreamDefault) 
+{
+    // Allocate device memory for CDF
+    auto d_cdf = gamax::make_column<double>(alphabet_size, false, stream);
+    
+    // Step 1: Compute PMF weights w[i] = 1/(i+1)^zipf_factor
+    auto count_iter = thrust::make_counting_iterator<gamax::size_type>(0);
+    thrust::transform(
+        thrust::cuda::par(*get_thrust_allocator()).on(stream),
+        count_iter,
+        count_iter + alphabet_size,
+        d_cdf->data<double>(),
+        zipf_pmf_functor(zipf_factor)
+    );
+    
+    // Step 2: Compute inclusive prefix sum (unnormalized CDF)
+    thrust::inclusive_scan(
+        thrust::cuda::par(*get_thrust_allocator()).on(stream),
+        d_cdf->data<double>(),
+        d_cdf->data<double>() + alphabet_size,
+        d_cdf->data<double>()
+    );
+    
+    // Step 3: Get total sum (last element of prefix sum)
+    double total_sum;
+    cudaMemcpyAsync(&total_sum, d_cdf->data<double>() + alphabet_size - 1, 
+                    sizeof(double), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    
+    // Step 4: Normalize CDF by dividing by total sum
+    thrust::transform(
+        thrust::cuda::par(*get_thrust_allocator()).on(stream),
+        d_cdf->data<double>(),
+        d_cdf->data<double>() + alphabet_size,
+        d_cdf->data<double>(),
+        normalize_cdf_functor(total_sum)
+    );
+    
+    // Ensure the last value is exactly 1.0 to avoid floating-point issues
+    double one = 1.0;
+    cudaMemcpyAsync(d_cdf->data<double>() + alphabet_size - 1, &one, 
+                    sizeof(double), cudaMemcpyHostToDevice, stream);
+    cudaStreamSynchronize(stream);
+    
+    return d_cdf;
+}
+
+/**
+ * @brief Generate a column with Zipfian-distributed indices on the GPU.
+ * 
+ * This function generates n random indices following a Zipfian distribution
+ * with the given zipf_factor and alphabet_size. The generated values are
+ * in the range [0, alphabet_size-1].
+ * 
+ * The implementation is fully GPU-based:
+ * 1. Computes the CDF on the GPU using gen_zipf_cdf_device()
+ * 2. Uses thrust::transform with the zipf_gen functor to generate values
+ * 
+ * The semantic is equivalent to the host-based create_integral_relation_nonunique
+ * with zipf distribution: each element is independently sampled from the
+ * Zipfian distribution.
+ * 
+ * @tparam T The integral type of the generated indices (default: gamax::size_type).
+ * @param n Number of elements to generate.
+ * @param zipf_factor The Zipfian skew parameter (s).
+ * @param alphabet_size The number of distinct values.
+ * @param seed Random seed for reproducibility.
+ * @param stream CUDA stream for async execution.
+ * @return std::unique_ptr<gamax::column> Column containing n Zipfian-distributed indices.
+ */
+template<typename T = gamax::size_type>
+std::unique_ptr<gamax::column> generate_zipf(
+    const gamax::size_type n,
+    const double zipf_factor,
+    const gamax::size_type alphabet_size,
+    const int seed = 42,
+    cudaStream_t stream = cudaStreamDefault)
+{
+    static_assert(std::is_integral_v<T>, "generate_zipf requires an integral type");
+    
+    // Compute CDF entirely on GPU
+    auto d_cdf = gen_zipf_cdf_device(zipf_factor, alphabet_size, stream);
+    
+    // Generate Zipfian-distributed indices using the functor
+    auto gen = zipf_gen<T>(d_cdf->data<double>(), alphabet_size, seed);
+    return generate(gen, n, stream);
+}
+
 } // namespace gamax::datagen::device
