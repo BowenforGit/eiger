@@ -379,14 +379,14 @@ __inline__ __global__ void initialize_aggregation(
     gamax::groupby::aggregation_request* aggs)
 {
     auto num_groups = res.num_rows();
-    auto num_aggs = res.num_columns() - 1;
+    auto num_aggs = res.num_columns();
 
     for(gamax::size_type i = get_cuda_tid(); i < num_groups; i += nthreads()) {
         for(gamax::size_type j = 0; j < num_aggs; j++) {
             init_agg(
                 aggs[j].agg_kind, 
-                src.get_column(j).type(), 
-                res.get_column(j+1), 
+                src.get_column(aggs[j].column_index).type(), 
+                res.get_column(j), 
                 i);
         }
     }

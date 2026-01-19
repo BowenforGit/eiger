@@ -61,8 +61,8 @@ void invoke_groupby_gpu(gamax::table& key_table,
  * - Each group should have exactly (num_items / num_groups) items
  * - Sum of all keys should equal sum of 0..(num_groups-1)
  */
-template <typename KeyT>
-void check_groupby_result_uniform(KeyT* ret_keys, int* ret_vals, gamax::size_type num_groups, const groupby_params& params) {
+template <typename KeyT, typename RetType>
+void check_groupby_result_uniform(KeyT* ret_keys, RetType* ret_vals, gamax::size_type num_groups, const groupby_params& params) {
     ASSERT_EQ(num_groups, params.actual_num_groups);
     unsigned long long sum = 0;
 
@@ -78,8 +78,8 @@ void check_groupby_result_uniform(KeyT* ret_keys, int* ret_vals, gamax::size_typ
  * For zipf distribution with all-ones values:
  * - Each group's sum should equal the count of that key in input
  */
-template <typename KeyT>
-void check_groupby_result_zipf(KeyT* h_keys, KeyT* ret_keys, int* ret_vals, gamax::size_type num_groups, const groupby_params& params) {
+template <typename KeyT, typename RetType>
+void check_groupby_result_zipf(KeyT* h_keys, KeyT* ret_keys, RetType* ret_vals, gamax::size_type num_groups, const groupby_params& params) {
     ASSERT_EQ(num_groups, params.actual_num_groups);
     
     std::vector<gamax::size_type> group_sizes(params.num_groups, 0);

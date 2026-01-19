@@ -242,7 +242,15 @@ std::unique_ptr<gamax::table> compute_aggregate(
                 estimated_num_groups));
     }
     auto res = std::make_unique<gamax::table>(std::move(final_columns));
-    // auto res_view = table_device_view::create(*res, stream);
+    
+    // Create a view of only the aggregation result columns (after key column)
+    std::vector<gamax::mutable_column_view> agg_result_col_views;
+    for(gamax::size_type i = 0; i < agg_requests.size(); i++) {
+        agg_result_col_views.push_back(res->get_column(1 + i).mutable_view());
+    }
+    gamax::mutable_table_view agg_results_view(agg_result_col_views);
+    auto agg_res_device_view = agg_results_view.device_view(stream);
+    
     auto res_view = res->mutable_view().device_view(stream);
     
     auto d_agg_req_buf = std::make_unique<gamax::device_buffer>(sizeof(gamax::groupby::aggregation_request) * agg_requests.size(), false);
@@ -250,7 +258,7 @@ std::unique_ptr<gamax::table> compute_aggregate(
 
     // auto val_view = table_device_view::create(val, stream);
     auto val_view = val.device_view(stream);
-    initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *res_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
+    initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *agg_res_device_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
     
     std::size_t sm_bytes = numWindows * sizeof(cuco::window<cuco::pair<Key, gamax::size_type>, window_size>) + sizeof(gamax::size_type)*2;
     if(estimated_num_groups / num_partitions <= 256) {

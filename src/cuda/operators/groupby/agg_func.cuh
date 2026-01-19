@@ -8,11 +8,36 @@
 #include "types/type_dispatcher.hpp"
 #include "memory/column.hpp"
 
+// The output data type of the aggregation function follows the rules from
+// https://www.postgresql.org/docs/current/functions-aggregate.html#FUNCTIONS-AGGREGATE-TABLE
+// except that 
+// (1) SUM(bigint) still returns bigint instead of numeric for simplicity
+// (2) Single precision still returns single precision for simplicity
 namespace gamax::groupby {
+
+namespace {
+    template<typename T>
+    struct sum_output_type {
+        using type = T;
+    };
+#define SPECIALIZE_SUM_OUTPUT_TYPE(src_type, dst_type) \
+    template<> \
+    struct sum_output_type<src_type> { \
+        using type = dst_type; \
+    };
+
+    SPECIALIZE_SUM_OUTPUT_TYPE(int8_t, int64_t)
+    SPECIALIZE_SUM_OUTPUT_TYPE(int16_t, int64_t)
+    SPECIALIZE_SUM_OUTPUT_TYPE(int32_t, int64_t)
+    SPECIALIZE_SUM_OUTPUT_TYPE(uint8_t, uint64_t)
+    SPECIALIZE_SUM_OUTPUT_TYPE(uint16_t, uint64_t)
+    SPECIALIZE_SUM_OUTPUT_TYPE(uint32_t, uint64_t)
+#undef SPECIALIZE_SUM_OUTPUT_TYPE
+}
 template<typename ValT>
 struct Sum {
     using InputType = ValT;
-    using OutputType = ValT; // FIXME
+    using OutputType = typename sum_output_type<ValT>::type;
     
     static constexpr bool is_monoid = true;
     static constexpr bool is_atomic_updatable = true;
@@ -22,13 +47,13 @@ struct Sum {
     __device__ __forceinline__ void global_update(IdxT idx, 
                                         ResultT* result, 
                                         ValT val) const {
-        gamax::atomic::atomic_add(&result[idx], val);
+        gamax::atomic::atomic_add(&result[idx], static_cast<ResultT>(val));
     }
 
     template <typename ResultT>
     __device__ __forceinline__ void atomic_update(ResultT* result, 
                                                     ValT val) const {
-        gamax::atomic::atomic_add(result, val);
+        gamax::atomic::atomic_add(result, static_cast<ResultT>(val));
     }
 
     template <typename ResultT>

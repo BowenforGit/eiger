@@ -46,7 +46,15 @@ public:
         return _columns[column_index];
     }
 
+    __host__ __device__ column_view_t const& get_column(gamax::size_type column_index) const {
+        return _columns[column_index];
+    }
+
     __host__ __device__ column_view_t& operator[](gamax::size_type column_index) {
+        return get_column(column_index);
+    }
+
+    __host__ __device__ column_view_t const& operator[](gamax::size_type column_index) const {
         return get_column(column_index);
     }
 
