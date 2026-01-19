@@ -25,6 +25,8 @@ struct agg_output_data_type_helper {
                 return gamax::data_type{gamax::type_to_id<typename gamax::groupby::Sum<T>::OutputType>()};
             case gamax::groupby::aggregation_id::MAX:
                 return gamax::data_type{gamax::type_to_id<typename gamax::groupby::Max<T>::OutputType>()};
+            case gamax::groupby::aggregation_id::AVG:
+                return gamax::data_type{gamax::type_id::FLOAT64}; // AVG always returns double
             default:
                 throw std::runtime_error("Unsupported aggregation function");
         }

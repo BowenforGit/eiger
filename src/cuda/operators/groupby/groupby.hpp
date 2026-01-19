@@ -28,6 +28,7 @@ struct groupby_hint {
     bool zero_based_ids {false}; 
     bool optimize_sort {false}; // optimize sort for sort-based groupby
     gamax::groupby::groupby_algo groupby_algo {gamax::groupby::AUTO_ALGO};
+    bool agg_count {false};
 };
 
 std::unique_ptr<gamax::table> groupby(

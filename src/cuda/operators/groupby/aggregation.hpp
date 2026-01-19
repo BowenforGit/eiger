@@ -9,6 +9,7 @@ namespace groupby {
 enum class aggregation_id {
     SUM,
     MAX,
+    AVG,
     NOT_SUPPORTED_AGGREGATION
 };
 

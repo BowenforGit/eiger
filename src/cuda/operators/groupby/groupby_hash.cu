@@ -242,8 +242,6 @@ namespace {
             cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
             cudaStreamSynchronize(stream);
 
-            std::cout << "Number of groups: " << num_groups << std::endl;
-
             // Create a view of only the aggregation result columns (after key columns)
             std::vector<gamax::mutable_column_view> agg_result_col_views;
             for(gamax::size_type i = 0; i < agg_requests.size(); i++) {
