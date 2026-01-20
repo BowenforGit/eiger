@@ -101,11 +101,8 @@ void generate_groupby_keys(gamax::table& key_table, const groupby_params& params
         thrust::shuffle(thrust::cuda::par(*get_thrust_allocator()), raw_key_ptr, raw_key_ptr + params.num_items, g);
         key_vec.push_back(std::move(keys));
     } else {
-        auto  h_keys = new Key[params.num_items];
-        generate_zipf_keys_host(h_keys, params);
-        auto d_keys = gamax::make_column_from_host(h_keys, params.num_items);
+        auto d_keys = gamax::datagen::device::generate_zipf<Key>(params.num_items, params.zipf_factor, params.num_groups);
         key_vec.push_back(std::move(d_keys));
-        delete [] h_keys;
     }
     gamax::table kt{std::move(key_vec)};
     key_table = std::move(kt);
