@@ -8,6 +8,7 @@
 #include <exception>
 #include <fstream>
 #include <type_traits>
+#include <sstream>
 
 #include "expr/expr_fast.hpp"
 #include "data_gen/table_gen.hpp"
@@ -26,6 +27,14 @@ struct expr_params {
         num_items = state.get_int64("num_items");
         std::string impl = state.get_string("impl");
         use_fuse = (impl == "fuse");
+    }
+
+    std::string to_string() const {
+        std::ostringstream oss;
+        oss << "expr_type: " << expr_type << ", "
+            << "num_items: " << num_items << ", "
+            << "use_fuse: " << (use_fuse ? "true" : "false");
+        return oss.str();
     }
 };
 
@@ -133,6 +142,7 @@ void bench_expr(nvbench::state& state, nvbench::type_list<KeyT>) {
         std::cerr << "Error in expr benchmark: " << e.what() << '\n';
         std::ofstream out("expr_error.txt", std::ios::app);
         out << "Expression: " << expr_builder->to_string() << "\n";
+        out << "Params: " << params.to_string() << "\n";
         out << "Error: " << e.what() << "\n\n";
     }
 }

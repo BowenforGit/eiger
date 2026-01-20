@@ -9,6 +9,7 @@
 #include <string_view>
 #include <stdexcept>
 #include <functional>
+#include <sstream>
 
 #include "data_gen/string_generator.hpp"
 #include "string/string.hpp"
@@ -56,6 +57,19 @@ struct bm_params {
           cg_size(state.get_int64("cg_size")),
           use_kmp(state.get_int64_or_default("use_kmp", 0)),
           access_width(state.get_int64("access_width")) {}
+
+    std::string to_string() const {
+        std::ostringstream oss;
+        oss << "num_strings: " << num_strings << ", "
+            << "fixed_length: " << fixed_length << ", "
+            << "pattern_length: " << pattern_length << ", "
+            << "op: " << op << ", "
+            << "cg_size: " << cg_size << ", "
+            << "use_kmp: " << use_kmp << ", "
+            << "access_width: " << access_width << ", "
+            << "selectivity: " << selectivity;
+        return oss.str();
+    }
           
     bool should_skip(nvbench::state& state) {
         if (length_dist != string_length_distribution::FIXED) {
@@ -154,7 +168,8 @@ void bench_string_ops(nvbench::state& state) {
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         std::ofstream out("error.txt", std::ios::app);
-        out << e.what() << "\n";
+        out << "Error: " << e.what() << "\n";
+        out << "Params: " << params.to_string() << "\n\n";
     }
 
     auto out = fn(strings->view_s(), pattern_scalar->view(), stream, op_options);

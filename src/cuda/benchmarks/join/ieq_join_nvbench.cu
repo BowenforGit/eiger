@@ -8,6 +8,7 @@
 #include <exception>
 #include <fstream>
 #include <type_traits>
+#include <sstream>
 
 #include "../common/nvtx_stub.hpp"
 
@@ -45,6 +46,19 @@ struct join_params {
         right_ncols = state.get_int64("right_ncols");
     }
 
+    std::string to_string() const {
+        std::ostringstream oss;
+        oss << "join_algo: " << join_algo << ", "
+            << "mat_algo: " << mat_algo << ", "
+            << "left_num_items: " << left_num_items << ", "
+            << "right_num_items: " << right_num_items << ", "
+            << "left_ncols: " << left_ncols << ", "
+            << "right_ncols: " << right_ncols << ", "
+            << "match_ratio: " << match_ratio << ", "
+            << "zipf_factor: " << zipf_factor;
+        return oss.str();
+    }
+
     gamax::join::join_hint hint() {
         gamax::join::join_hint hint;
         hint.max_out = right_num_items;
@@ -62,6 +76,10 @@ struct join_params {
 template<typename KeyT>
 bool check_skip(join_params const& params) {
     if(params.join_algo == "hash" && params.mat_algo != "gfur") {
+        return true;
+    }
+
+    if(params.left_num_items > params.right_num_items) {
         return true;
     }
 
@@ -105,7 +123,8 @@ void bench_inner_eq_join(nvbench::state& state, nvbench::type_list<KeyT>) {
     {
         std::cerr << e.what() << '\n';
         std::ofstream out("error.txt", std::ios::app);
-        out << e.what() << "\n";
+        out << "Error: " << e.what() << "\n";
+        out << "Params: " << params.to_string() << "\n\n";
     }
 }
 
@@ -118,6 +137,7 @@ std::vector<double> DEFAULT_MATCH_RATIO = {1.0};
 auto MATCH_RATIO_RANGE = nvbench::range(0.1, 1.0, 0.1);
 std::vector<double> DEFAULT_ZIPF_FACTOR = {0.0};
 auto ZIPF_FACTOR_RANGE = nvbench::range(0.5, 2.0, 0.5);
+std::vector<int64_t> DEFAULT_RIGHT_NUM_ITEMS = {28};
 
 NVBENCH_BENCH_TYPES(bench_inner_eq_join,
     NVBENCH_TYPE_AXES(nvbench::type_list<int32_t, int64_t>))
@@ -126,7 +146,20 @@ NVBENCH_BENCH_TYPES(bench_inner_eq_join,
 .add_string_axis("join_algo", JOIN_ALGO_RANGE)
 .add_string_axis("mat_algo", MAT_ALGO_RANGE)
 .add_int64_power_of_two_axis("left_num_items", nvbench::range(10, 28, 1))
-.add_int64_power_of_two_axis("right_num_items", {29})
+.add_int64_power_of_two_axis("right_num_items", DEFAULT_RIGHT_NUM_ITEMS)
+.add_int64_axis("left_ncols", NCOLS_RANGE)
+.add_int64_axis("right_ncols", NCOLS_RANGE)
+.add_float64_axis("match_ratio", DEFAULT_MATCH_RATIO)
+.add_float64_axis("zipf_factor", DEFAULT_ZIPF_FACTOR);
+
+NVBENCH_BENCH_TYPES(bench_inner_eq_join,
+    NVBENCH_TYPE_AXES(nvbench::type_list<int32_t, int64_t>))
+.set_name("vary_right_table_size")
+.set_type_axes_names({"Key"})
+.add_string_axis("join_algo", JOIN_ALGO_RANGE)
+.add_string_axis("mat_algo", MAT_ALGO_RANGE)
+.add_int64_power_of_two_axis("left_num_items", nvbench::range(12, 24, 4))
+.add_int64_power_of_two_axis("right_num_items", nvbench::range(12, 28, 1))
 .add_int64_axis("left_ncols", NCOLS_RANGE)
 .add_int64_axis("right_ncols", NCOLS_RANGE)
 .add_float64_axis("match_ratio", DEFAULT_MATCH_RATIO)
@@ -139,20 +172,20 @@ NVBENCH_BENCH_TYPES(bench_inner_eq_join,
 .add_string_axis("join_algo", JOIN_ALGO_RANGE)
 .add_string_axis("mat_algo", MAT_ALGO_RANGE)
 .add_int64_power_of_two_axis("left_num_items", nvbench::range(12, 28, 4))
-.add_int64_power_of_two_axis("right_num_items", {29})
+.add_int64_power_of_two_axis("right_num_items", DEFAULT_RIGHT_NUM_ITEMS)
 .add_int64_axis("left_ncols", DEFAULT_NCOLS)
 .add_int64_axis("right_ncols", DEFAULT_NCOLS)
 .add_float64_axis("match_ratio", MATCH_RATIO_RANGE)
 .add_float64_axis("zipf_factor", DEFAULT_ZIPF_FACTOR);
 
 NVBENCH_BENCH_TYPES(bench_inner_eq_join,
-    NVBENCH_TYPE_AXES(nvbench::type_list<int32_t>))
+    NVBENCH_TYPE_AXES(nvbench::type_list<int32_t, int64_t>))
 .set_name("vary_zipfian_factor")
 .set_type_axes_names({"Key"})
 .add_string_axis("join_algo", JOIN_ALGO_RANGE)
 .add_string_axis("mat_algo", MAT_ALGO_RANGE)
 .add_int64_power_of_two_axis("left_num_items", nvbench::range(12, 28, 4))
-.add_int64_power_of_two_axis("right_num_items", {29})
+.add_int64_power_of_two_axis("right_num_items", DEFAULT_RIGHT_NUM_ITEMS)
 .add_int64_axis("left_ncols", DEFAULT_NCOLS)
 .add_int64_axis("right_ncols", DEFAULT_NCOLS)
 .add_float64_axis("match_ratio", DEFAULT_MATCH_RATIO)

@@ -7,6 +7,7 @@
 #include <iostream>
 #include <string>
 #include <stdexcept>
+#include <sstream>
 
 #include "data_gen/string_generator.hpp"
 #include "string/string.hpp"
@@ -27,6 +28,15 @@ struct bm_params {
           impl(gamax::string_impl_id::ARROW_STRING),
           use_prefix_sort(state.get_int64("use_prefix_sort") != 0),
           op(state.get_string("op")) {}
+
+    std::string to_string() const {
+        std::ostringstream oss;
+        oss << "num_strings: " << num_strings << ", "
+            << "string_length: " << string_length << ", "
+            << "use_prefix_sort: " << (use_prefix_sort ? "true" : "false") << ", "
+            << "op: " << op;
+        return oss.str();
+    }
           
     bool should_skip(nvbench::state& state) {
         // Add any skip conditions here if needed
@@ -92,7 +102,8 @@ void bench_string_sort(nvbench::state& state) {
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         std::ofstream out("error.txt", std::ios::app);
-        out << e.what() << "\n";
+        out << "Error: " << e.what() << "\n";
+        out << "Params: " << params.to_string() << "\n\n";
     }
 }
 

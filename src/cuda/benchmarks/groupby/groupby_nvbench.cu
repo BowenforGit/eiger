@@ -99,8 +99,8 @@ void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
     {
         std::cerr << e.what() << '\n';
         std::ofstream out("error.txt", std::ios::app);
-        out << e.what() << "\n";
-        params.print(out);
+        out << "Error: " << e.what() << "\n";
+        out << "Params: " << params.to_string() << "\n\n";
     }
 }
 

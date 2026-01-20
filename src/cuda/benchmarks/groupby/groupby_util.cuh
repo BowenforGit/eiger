@@ -3,6 +3,7 @@
 #include <iostream>
 #include <omp.h>
 #include <cassert>
+#include <sstream>
 #include <thrust/transform.h>
 #include <thrust/execution_policy.h>
 #include <thrust/shuffle.h>
@@ -36,13 +37,19 @@ struct groupby_params {
     gamax::size_type actual_num_groups {0};
     gamax::size_type num_aggs {1};
 
+    std::string to_string() const {
+        std::ostringstream oss;
+        oss << "num_items: " << num_items << ", "
+            << "num_groups: " << num_groups << ", "
+            << "zipf_factor: " << zipf_factor << ", "
+            << "actual_num_groups: " << actual_num_groups << ", "
+            << "num_aggs: " << num_aggs;
+        return oss.str();
+    }
+
     template<typename Stream>
     void print(Stream& out) const {
-        out << "num_items: " << num_items << ", ";
-        out << "num_groups: " << num_groups << ", ";
-        out << "zipf_factor: " << zipf_factor << ", ";
-        out << "actual_num_groups: " << actual_num_groups << ", ";
-        out << "num_aggs: " << num_aggs << std::endl;
+        out << to_string() << std::endl;
     }
 };
 
