@@ -265,11 +265,12 @@ std::unique_ptr<gamax::table> groupby(
         auto agg_kind = req.agg_kind;
         std::unique_ptr<column> sorted_val = nullptr;
         auto val_type = val.get_column(i).type();
+        auto agg_output_type = gamax::groupby::agg_output_data_type(agg_kind, val_type);
         
         if(!grouped) {
             sorted_val = std::move(sorted_val_0);
             auto unique_keys = gamax::make_column(key_type, estimated_num_groups);
-            auto agg_val = gamax::make_column(val_type, estimated_num_groups);
+            auto agg_val = gamax::make_column(agg_output_type, estimated_num_groups);
             
             aggregate(agg_kind, sorted_key->view(), sorted_val->view(), unique_keys->mutable_view(), agg_val->mutable_view(), num_groups, nullptr, stream);
 
@@ -306,7 +307,7 @@ std::unique_ptr<gamax::table> groupby(
                 std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(key.get_column(0), val.get_column(i), begin_bit, end_bit, gamax::sort_order::ASCENDING, nullptr, 0, stream);
             }
 
-            auto agg_val = gamax::make_column(val_type, num_groups);
+            auto agg_val = gamax::make_column(agg_output_type, num_groups);
             aggregate(agg_kind, sorted_key->view(), sorted_val->view(), num_groups, agg_val->mutable_view(), nullptr, stream);
             final_columns.push_back(std::move(agg_val));
         }
@@ -345,9 +346,10 @@ std::unique_ptr<gamax::table> groupby_gfur(
         auto agg_kind = req.agg_kind;
 
         auto val_type = val.get_column(i).type();
+        auto agg_output_type = gamax::groupby::agg_output_data_type(agg_kind, val_type);
         
         if(!grouped) {
-            auto agg_val = gamax::make_column(val_type, estimated_num_groups);
+            auto agg_val = gamax::make_column(agg_output_type, estimated_num_groups);
             auto unique_keys = gamax::make_column(key_type, estimated_num_groups);
             aggregate(agg_kind, sorted_key->view(), val.get_column(i), unique_keys->mutable_view(), agg_val->mutable_view(), num_groups, idx_col->data<gamax::size_type>(), stream);
             unique_keys->set_size(num_groups);
@@ -357,7 +359,7 @@ std::unique_ptr<gamax::table> groupby_gfur(
 
             grouped = true;
         } else {
-            auto agg_val = gamax::make_column(val_type, num_groups);
+            auto agg_val = gamax::make_column(agg_output_type, num_groups);
             aggregate(agg_kind, sorted_key->view(), val.get_column(i), num_groups, agg_val->mutable_view(), idx_col->data<gamax::size_type>(), stream);
             final_columns.push_back(std::move(agg_val));
         }
