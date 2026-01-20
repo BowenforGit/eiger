@@ -162,4 +162,4 @@ NVBENCH_BENCH_TYPES(bench_expr,
     "two_col_and",
     "two_col_and_or",
 })
-.add_int64_power_of_two_axis("num_items", nvbench::range(20, 27, 1));
+.add_int64_power_of_two_axis("num_items", nvbench::range(20, 29, 1));

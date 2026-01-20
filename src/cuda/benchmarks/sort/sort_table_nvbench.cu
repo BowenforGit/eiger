@@ -222,7 +222,7 @@ NVBENCH_BENCH_TYPES(bench_sort_table_numeric,
     .set_name("sort_table_numeric")
     .set_type_axes_names({"KeyType"})
     .add_int64_power_of_two_axis("num_rows", nvbench::range(16, 28, 2))
-    .add_int64_axis("num_key_cols", {1, 2})
+    .add_int64_axis("num_key_cols", {1, 2, 4})
     .add_int64_axis("num_nonkey_cols", {1, 4, 8});
 
 // =============================================================================
