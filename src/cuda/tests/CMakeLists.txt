@@ -28,7 +28,7 @@ if(USE_NVIDIA)
         join/semi_join_test.cu
         select/select_fast_test.cu
         expr/expr_fast_test.cu
-            expr/expr_parser_test.cu
+        expr/expr_parser_test.cu
         types/floating_point_test.cu
         string/string_factory_test.cu
         string/string_test.cu
@@ -52,5 +52,5 @@ foreach(source IN LISTS testSources)
     target_link_libraries(${target} PRIVATE GTest::gtest_main)
     target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
     target_link_libraries(${target} PRIVATE gamax)
-    gtest_discover_tests(${target})
+    gtest_discover_tests(${target} PROPERTIES DISCOVERY_TIMEOUT 180)
 endforeach()
