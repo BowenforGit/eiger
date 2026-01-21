@@ -353,7 +353,7 @@ def main():
         row_counts_numeric = [2**i for i in range(16, 29, 2)]
         # String benchmarks: 2^16 to 2^26, step 2
         row_counts_string = [2**i for i in range(16, 27, 2)]
-        num_key_cols_list = [1, 2]
+        num_key_cols_list = [1, 2, 4]
         num_nonkey_cols_list = [1, 4, 8]
         string_lengths = [8, 16, 32, 64, 128]
     
