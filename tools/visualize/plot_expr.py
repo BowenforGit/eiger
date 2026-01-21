@@ -37,7 +37,6 @@ def plot_time_vs_expr(df_in, **params):
     df = filter_df(
         df, 
         **params, 
-        strict=True, 
         must_have_attr=["num_items", "KeyType"])
     
     fig, ax = create_plot((5,5))
@@ -51,17 +50,22 @@ def plot_time_vs_expr(df_in, **params):
         xlabel = {"label": ""},
         ylabel = {"label": "Time (ms)", "rotation": 0, "x":0.1, "y":1.02})
 
-    save_fig(fig, f"expr_time_vs_expr_{dict_to_str(params)}", subdir="expr", suffix="pdf")
+    save_fig(fig, f"expr_time_vs_expr_{dict_to_str(params)}", subdir=f"expr/{params.get('machine', '')}", suffix="pdf")
 
 if __name__ == "__main__":
-    resdir = pathlib.Path(__file__).parent.absolute() / ".."  / ".." / "exp_results" / "expr"
-    ours = read_eiger_results(resdir / "eiger_expr_gpu05_20251222.csv")
-    cudf = read_cudf_results(resdir / "cudf_expr_sgs-gpu05_20251222.csv", impl="cudf")
-    df = pd.concat([ours, cudf], ignore_index=True)
-    
-    for num_items in [2**29]:
-        for KeyType in ['I32', 'I64']:
-            plot_time_vs_expr(
-                df, 
-                num_items=num_items,
-                KeyType=KeyType)
+    workload = "expr"
+    machines = ['cscs']
+    resdir = pathlib.Path(__file__).parent.absolute() / ".."  / ".." / "exp_results"
+
+    for machine in machines:
+        ours = read_eiger_results(latest_result_file(resdir / machine / workload / f"expr_{machine}"))
+        cudf = read_cudf_results(resdir / workload / "cudf_expr_sgs-gpu05_20251222.csv", impl="cudf") # TODO: update path
+        df = pd.concat([ours, cudf], ignore_index=True)
+        
+        for num_items in [2**29]:
+            for KeyType in ['I32', 'I64']:
+                plot_time_vs_expr(
+                    df, 
+                    machine=machine,
+                    num_items=num_items,
+                    KeyType=KeyType)

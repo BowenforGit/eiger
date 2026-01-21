@@ -4,8 +4,6 @@ import seaborn as sns
 import os
 import pathlib
 
-machine = "gpu06"
-
 def read_eiger_results(path):
     df = pd.read_csv(path)
     df = df[df['Elem/s (elem/sec)'].notna()]
@@ -34,7 +32,7 @@ def read_cudf_results(path, **constants):
     df['thpt'] = df['thpt'] / 1e9
     return df
     
-def plot_thpt_vs_strlen(df_in, **params):
+def plot_thpt_vs_strlen(df_in, machine, **params):
     df = df_in.copy()
     df = filter_df(
         df, 
@@ -65,7 +63,7 @@ def plot_thpt_vs_strlen(df_in, **params):
     ax.set_axisbelow(True)
     save_fig(fig, f"string_thpt_vs_strlen_{dict_to_str(params)}", subdir=f"string/{machine}", suffix="pdf")
 
-def plot_thpt_vs_strlen_arrow_best(df_in, **params):
+def plot_thpt_vs_strlen_arrow_best(df_in, machine, **params):
     df = df_in.copy()
     df = filter_df(
         df, 
@@ -113,7 +111,7 @@ def plot_thpt_vs_strlen_arrow_best(df_in, **params):
     ax.set_axisbelow(True)
     save_fig(fig, f"string_thpt_vs_strlen_{dict_to_str(params)}", subdir=f"string/{machine}", suffix="pdf")
 
-def plot_equal_cg_size_vs_access_width_heatmap(df_in, **params):
+def plot_equal_cg_size_vs_access_width_heatmap(df_in, machine, **params):
     df = df_in.copy()
     df = filter_df(
         df, 
@@ -152,52 +150,65 @@ def plot_equal_cg_size_vs_access_width_heatmap(df_in, **params):
     save_fig(fig, f"string_equal_cg_size_vs_access_width_heatmap_{dict_to_str(params)}", subdir=f"string/{machine}", suffix="pdf")
 
 if __name__ == "__main__":
-    resdir = pathlib.Path(__file__).parent.absolute() / ".."  / ".." / "exp_results" / "string"
-    ours_partial = read_eiger_results(resdir / f"eiger_stringops_partial_match_{machine}_20251225.csv")
-    ours_full = read_eiger_results(resdir / f"eiger_stringops_full_match_{machine}_20251225.csv")
-    ours_full['pattern_length'] = ours_full['fixed_length']
-    cudf = read_cudf_results(resdir / f"cudf_stringops_sgs-{machine}_20251225.csv", algo="cuDF", impl="cuDF", cg_size=1, selectivity=1, access_width=1)
-    df = pd.concat([ours_partial, ours_full, cudf], ignore_index=True)
-    
-    for op in ["startswith", "endswith"]:
+    workload = "string"
+    machines = ["cscs"]
+    resdir = pathlib.Path(__file__).parent.absolute() / ".."  / ".." / "exp_results"
+
+    for machine in machines:
+        ours_partial = read_eiger_results(
+            latest_result_file(resdir / machine / workload / f"stringops_partial_match_{machine}")
+        )
+        ours_full = read_eiger_results(
+            latest_result_file(resdir / machine / workload / f"stringops_full_match_{machine}")
+        )
+        ours_full['pattern_length'] = ours_full['fixed_length']
+        # TODO: update cudf path
+        cudf = read_cudf_results(resdir / workload / f"cudf_stringops_sgs-gpu06_20251225.csv", algo="cuDF", impl="cuDF", cg_size=1, selectivity=1, access_width=1)
+        df = pd.concat([ours_partial, ours_full, cudf], ignore_index=True)
+        
+        for op in ["startswith", "endswith"]:
+            for num_strings in [2**28]:
+                for selectivity in [1]:
+                    for pattern_length in df['pattern_length'].unique():
+                        plot_thpt_vs_strlen_arrow_best(
+                            df,
+                            machine,
+                            op=op,
+                            impl=["Ours","cuDF"],
+                            num_strings=num_strings,
+                            selectivity=selectivity,
+                            pattern_length=pattern_length)
+        
+        for op in ["contains"]:
+            for num_strings in [2**28]:
+                for selectivity in [1]:
+                    for pattern_length in df['pattern_length'].unique():
+                        plot_thpt_vs_strlen(
+                            df,
+                            machine,
+                            op=op,
+                            impl=["Ours","cuDF"],
+                            num_strings=num_strings,
+                            selectivity=selectivity,
+                            pattern_length=pattern_length,
+                            cg_aw = ["1,1"])
+        
         for num_strings in [2**28]:
             for selectivity in [1]:
-                for pattern_length in df['pattern_length'].unique():
-                    plot_thpt_vs_strlen_arrow_best(
-                        df,
-                        op=op,
-                        impl=["Ours","cuDF"],
-                        num_strings=num_strings,
-                        selectivity=selectivity,
-                        pattern_length=pattern_length)
-    
-    for op in ["contains"]:
-        for num_strings in [2**28]:
-            for selectivity in [1]:
-                for pattern_length in df['pattern_length'].unique():
-                    plot_thpt_vs_strlen(
-                        df,
-                        op=op,
-                        impl=["Ours","cuDF"],
-                        num_strings=num_strings,
-                        selectivity=selectivity,
-                        pattern_length=pattern_length,
-                        cg_aw = ["1,1"])
-    
-    for num_strings in [2**28]:
-        for selectivity in [1]:
-            plot_thpt_vs_strlen_arrow_best(
+                plot_thpt_vs_strlen_arrow_best(
+                    df,
+                    machine,
+                    op="equal",
+                    impl=["Ours","cuDF"],
+                    num_strings=num_strings,
+                    selectivity=selectivity)
+        
+        for pattern_length in df['pattern_length'].unique():
+            plot_equal_cg_size_vs_access_width_heatmap(
                 df,
+                machine,
                 op="equal",
-                impl=["Ours","cuDF"],
-                num_strings=num_strings,
-                selectivity=selectivity)
-    
-    for pattern_length in df['pattern_length'].unique():
-        plot_equal_cg_size_vs_access_width_heatmap(
-            df,
-            op="equal",
-            impl=["Ours"],
-            num_strings=2**28,
-            selectivity=1,
-            pattern_length=pattern_length)
+                impl=["Ours"],
+                num_strings=2**28,
+                selectivity=1,
+                pattern_length=pattern_length)

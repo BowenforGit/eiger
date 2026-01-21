@@ -72,6 +72,26 @@ def dict_to_str(d):
 def create_plot(figsize, dim=(1, 1)):
     return plt.subplots(dim[0], dim[1], figsize=figsize)
 
+def latest_result_file(prefix_path):
+    dir_path = os.path.dirname(prefix_path)
+    base_name = os.path.basename(prefix_path)
+    print(dir_path, base_name)
+    candidates = []
+    for file in os.listdir(dir_path):
+        print(file)
+        if file.startswith(base_name):
+            candidates.append(file)
+    
+    if not candidates:
+        raise FileNotFoundError(f"No files found with prefix {prefix_path}")
+    
+    candidates = sorted(candidates)
+    latest_file = candidates[-1]
+
+    print(f"Using latest result file: {latest_file}")
+    
+    return os.path.join(dir_path, latest_file)
+
 def adjust_ax(ax, **params):
     if "fontsize" in params:
         fontsize = params["fontsize"]

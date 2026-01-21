@@ -4,8 +4,6 @@ import seaborn as sns
 import os
 import pathlib
 
-machine = "gpu06"
-
 def read_eiger_results(path):
     df = pd.read_csv(path)
     df = df[df['Elem/s (elem/sec)'].notna()]
@@ -22,14 +20,12 @@ def plot_string_sort_time_vs_strlen_barplot(df_in, **params):
     df = filter_df(
         df, 
         **params, 
-        strict=True, 
         must_have_attr=["op", "num_strings"])
     
     if df.empty:
         print(f"Warning: no data for params {params}")
         return
     
-    print(df)
     df['string_length'] = df['string_length'].astype(str)
     
     # Create plot
@@ -47,16 +43,21 @@ def plot_string_sort_time_vs_strlen_barplot(df_in, **params):
     ax.grid(axis='y', alpha=0.75, linestyle=':', zorder=0)
     ax.set_axisbelow(True)
     
-    save_fig(fig, f"string_sort_time_vs_strlen_barplot_{dict_to_str(params)}", subdir=f"string/{machine}", suffix="pdf")
+    save_fig(fig, f"string_sort_time_vs_strlen_barplot_{dict_to_str(params)}", subdir=f"string/{params.get('machine', '')}", suffix="pdf")
 
 if __name__ == "__main__":
-    resdir = pathlib.Path(__file__).parent.absolute() / ".."  / ".." / "exp_results" / "string"
-    df = read_eiger_results(
-        resdir / f"eiger_string_sort_{machine}_20251229.csv"
-    )
-    
-    for num_strings in [2**26]:
-        plot_string_sort_time_vs_strlen_barplot(
-            df,
-            op="argsort",
-            num_strings=num_strings)
+    workload = "string"
+    machines = ["cscs"]
+    resdir = pathlib.Path(__file__).parent.absolute() / ".."  / ".." / "exp_results"
+
+    for machine in machines:
+        df = read_eiger_results(
+            latest_result_file(resdir / machine / workload / f"string_sort_{machine}")
+        )
+        
+        for num_strings in sorted(df['num_strings'].unique()):
+            plot_string_sort_time_vs_strlen_barplot(
+                df,
+                machine=machine,
+                op="argsort",
+                num_strings=num_strings)
