@@ -10,7 +10,7 @@
 #include "memory/column.hpp"
 #include "memory/table.hpp"
 #include "memory/mem_manager.hpp"
-#include "containers/multimap.cuh"
+#include "containers/multiset.cuh"
 #include "types/sentinel.hpp"
 
 namespace gamax::join {
@@ -29,21 +29,25 @@ namespace {
         {
             auto max_output_size = get_ieq_join_output_alloc_size(left, right, hint);
 
-            auto map = gamax::containers::multimap(
-                left.num_rows(), 
-                0.5, // use a default load factor of 0.5
-                gamax::sentinel<Key>(),
+            // Build multiset with left (build) side keys
+            auto set = gamax::containers::multiset<Key, tid_type>(
+                left[0],
+                0.25, // use a default load factor of 0.25
                 gamax::sentinel<tid_type>(),
                 *get_thrust_allocator<char>(stream),
                 stream);
             
-            map.insert_with_tids(left[0], stream);
+            set.insert_with_tids(stream);
 
-            auto [res_keys, res_left_tids, res_right_tids] = map.probe(right[0], max_output_size, stream);
+            // Probe with right (probe) side keys, returns (build_tids, probe_tids) = (left_tids, right_tids)
+            auto [res_left_tids, res_right_tids] = set.probe(right[0], max_output_size, stream);
 
             // materialize
             auto res_table = std::make_unique<gamax::table>();
-            res_table->add_column(std::move(res_keys));
+            
+            // Materialize join key from left side using left_tids
+            res_table->add_column(simple_materialize(left[0], res_left_tids->view(), stream));
+            
             for(auto i = 1; i < left.num_columns(); i++) {
                 res_table->add_column(simple_materialize(left[i], res_left_tids->view(), stream));
             }
