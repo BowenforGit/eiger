@@ -200,3 +200,27 @@ NVBENCH_BENCH(bench_string_ops)
     .add_int64_power_of_two_axis("num_strings", {26, 28})
     .add_int64_axis("cg_size", {1, 2, 4})
     .add_int64_axis("access_width", {1, 2, 4, 8});
+
+NVBENCH_BENCH(bench_string_ops)
+    .set_name("string_partial_match_bad_align")
+    .add_string_axis("op", {"startswith", "endswith", "contains"})
+    .add_string_axis("length_dist", {"fixed"})
+    .add_string_axis("impl", {"arrow"})
+    .add_float64_axis("selectivity", {1.0})
+    .add_int64_axis("fixed_length", {17, 34, 51, 68, 85, 102, 119, 136})
+    .add_int64_axis("pattern_length", {5, 50})
+    .add_int64_power_of_two_axis("num_strings", {26, 28})
+    .add_int64_axis("cg_size", {1, 2, 4})
+    .add_int64_axis("access_width", {1, 2, 4, 8})
+    .add_int64_axis("use_kmp", {0, 1});
+
+NVBENCH_BENCH(bench_string_ops)
+    .set_name("string_full_match_bad_align")
+    .add_string_axis("op", {"equal"})
+    .add_string_axis("length_dist", {"fixed"})
+    .add_string_axis("impl", {"arrow"})
+    .add_float64_axis("selectivity", {1.0})
+    .add_int64_axis("fixed_length", {17, 34, 51, 68, 85, 102, 119, 136})
+    .add_int64_power_of_two_axis("num_strings", {26, 28})
+    .add_int64_axis("cg_size", {1, 2, 4})
+    .add_int64_axis("access_width", {1, 2, 4, 8});
