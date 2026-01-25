@@ -107,7 +107,7 @@ if __name__ == "__main__":
         pattern, plc_pattern = generate_pattern(plen)
         for op in ["startswith", "endswith", "contains"]:
             for num_strings in [2**26, 2**28]:
-                for strlen in [30, 45, 60, 75, 90, 105, 120, 135]:
+                for strlen in [30, 45, 60, 75, 90, 105, 120, 135] + [17, 34, 51, 68, 85, 102, 119, 136]:
                     print(f"Benchmarking {op} with strlen={strlen}, plen={plen}, num_strings={num_strings}")
                     if plen > strlen:
                         print("[Skip]")
@@ -119,7 +119,7 @@ if __name__ == "__main__":
     
     for op in ["equal"]:
         for num_strings in [2**26, 2**28]:
-            for strlen in [30, 45, 60, 75, 90, 105, 120, 135]:
+            for strlen in [30, 45, 60, 75, 90, 105, 120, 135] + [17, 34, 51, 68, 85, 102, 119, 136]:
                 pattern, plc_pattern = generate_pattern(strlen)
                 print(f"Benchmarking {op} with strlen={strlen}, plen={strlen}, num_strings={num_strings}")
                 plc_col = generate_strings(op, num_strings, strlen, pattern)

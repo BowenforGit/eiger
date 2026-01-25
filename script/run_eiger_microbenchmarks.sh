@@ -24,6 +24,8 @@ mkdir -p exp_results/${machine}/string
 ./${BUILDDIR}/src/cuda/benchmarks/benchmark_string -d $GPUID $PROFILE -b string_partial_match --csv exp_results/${machine}/string/stringops_partial_match_${machine}_${TODAY}.csv --timeout 30
 ./${BUILDDIR}/src/cuda/benchmarks/benchmark_string -d $GPUID $PROFILE -b string_full_match --csv exp_results/${machine}/string/stringops_full_match_${machine}_${TODAY}.csv --timeout 30
 ./${BUILDDIR}/src/cuda/benchmarks/benchmark_string_sort -d $GPUID $PROFILE --csv exp_results/${machine}/string/string_sort_${machine}_${TODAY}.csv --timeout 30
+./${BUILDDIR}/src/cuda/benchmarks/benchmark_string -d $GPUID $PROFILE -b string_partial_match_bad_align --csv exp_results/${machine}/string/stringops_partial_match_bad_align_${machine}_${TODAY}.csv --timeout 30
+./${BUILDDIR}/src/cuda/benchmarks/benchmark_string -d $GPUID $PROFILE -b string_full_match_bad_align --csv exp_results/${machine}/string/stringops_full_match_bad_align_${machine}_${TODAY}.csv --timeout 30
 
 # Run all Eiger groupby micro-benchmarks
 mkdir -p exp_results/${machine}/groupby
