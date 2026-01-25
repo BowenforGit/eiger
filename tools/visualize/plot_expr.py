@@ -54,15 +54,17 @@ def plot_time_vs_expr(df_in, **params):
 
 if __name__ == "__main__":
     workload = "expr"
-    machines = ['cscs']
+    machines = ['a100', 'cscs']
     resdir = pathlib.Path(__file__).parent.absolute() / ".."  / ".." / "exp_results"
 
     for machine in machines:
         ours = read_eiger_results(latest_result_file(resdir / machine / workload / f"expr_{machine}"))
-        cudf = read_cudf_results(resdir / workload / "cudf_expr_sgs-gpu05_20251222.csv", impl="cudf") # TODO: update path
+        cudf = read_cudf_results(
+            latest_result_file(resdir / machine / workload / "cudf_expr"), impl="cudf")
         df = pd.concat([ours, cudf], ignore_index=True)
         
-        for num_items in [2**29]:
+        max_num_items = ours['num_items'].max()
+        for num_items in [max_num_items]:
             for KeyType in ['I32', 'I64']:
                 plot_time_vs_expr(
                     df, 

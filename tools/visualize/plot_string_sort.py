@@ -47,7 +47,7 @@ def plot_string_sort_time_vs_strlen_barplot(df_in, **params):
 
 if __name__ == "__main__":
     workload = "string"
-    machines = ["cscs"]
+    machines = ["a100", "cscs"]
     resdir = pathlib.Path(__file__).parent.absolute() / ".."  / ".." / "exp_results"
 
     for machine in machines:

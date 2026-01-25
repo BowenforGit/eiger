@@ -13,12 +13,12 @@ def read_eiger_results(path):
     df['cg_aw'] = df['cg_size'].astype(str) + "," + df['access_width'].astype(str)
     # df.loc[df['op'] != 'contains', 'algo'] = df.loc[df['op'] != 'contains', 'algo'].astype(str) + " (CG = " + df.loc[df['op'] != 'contains', 'cg_size'].astype(str) + ")"
     
-    df['algo'] = df['algo'].astype(str) + " [" + df['cg_aw'].astype(str) + "]"
+    # df['algo'] = df['algo'].astype(str) + " [" + df['cg_aw'].astype(str) + "]"
     df = df[(df['op'] != 'contains') | (df['cg_size'] == 1)]
 
     if 'use_kmp' in df.columns:
-        df.loc[(df['op'] == 'contains') & (df['use_kmp'] == 1), 'algo'] = (
-            df.loc[(df['op'] == 'contains') & (df['use_kmp'] == 1), 'algo'].astype(str) + 
+        df.loc[(df['op'] == 'contains') & (df['use_kmp'] == 1), 'impl'] = (
+            df.loc[(df['op'] == 'contains') & (df['use_kmp'] == 1), 'impl'].astype(str) + 
             " (KMP)"
         )
     print(df)
@@ -32,13 +32,18 @@ def read_cudf_results(path, **constants):
     df['thpt'] = df['thpt'] / 1e9
     return df
     
-def plot_thpt_vs_strlen(df_in, machine, **params):
+def plot_thpt_vs_strlen(df_in, machine, aligned, **params):
     df = df_in.copy()
     df = filter_df(
         df, 
         **params, 
         strict=True, 
         must_have_attr=["op", "num_strings", "selectivity"])
+
+    if aligned:
+        df = df[df['fixed_length'] % 15 == 0]
+    else:
+        df = df[df['fixed_length'] % 15 != 0]
     
     if df.empty:
         print(f"Warning: no data for params {params}")
@@ -61,15 +66,20 @@ def plot_thpt_vs_strlen(df_in, machine, **params):
         ylim = [0, df['thpt'].max() * 1.25])
     ax.grid(axis='y', alpha=0.75, linestyle=':', zorder=0)
     ax.set_axisbelow(True)
-    save_fig(fig, f"string_thpt_vs_strlen_{dict_to_str(params)}", subdir=f"string/{machine}", suffix="pdf")
+    save_fig(fig, f"string_thpt_vs_strlen_{'aligned' if aligned else 'unaligned'}_{dict_to_str(params)}", subdir=f"string/{machine}", suffix="pdf")
 
-def plot_thpt_vs_strlen_arrow_best(df_in, machine, **params):
+def plot_thpt_vs_strlen_arrow_best(df_in, machine, aligned, **params):
     df = df_in.copy()
     df = filter_df(
         df, 
         **params, 
         strict=True, 
         must_have_attr=["op", "num_strings", "selectivity"])
+    
+    if aligned:
+        df = df[df['fixed_length'] % 15 == 0]
+    else:
+        df = df[df['fixed_length'] % 15 != 0]
     
     if df.empty:
         print(f"Warning: no data for params {params}")
@@ -109,7 +119,7 @@ def plot_thpt_vs_strlen_arrow_best(df_in, machine, **params):
         ylim = [0, df['thpt'].max() * 1.25])
     ax.grid(axis='y', alpha=0.75, linestyle=':', zorder=0)
     ax.set_axisbelow(True)
-    save_fig(fig, f"string_thpt_vs_strlen_{dict_to_str(params)}", subdir=f"string/{machine}", suffix="pdf")
+    save_fig(fig, f"string_thpt_vs_strlen_{'aligned' if aligned else 'unaligned'}_{dict_to_str(params)}", subdir=f"string/{machine}", suffix="pdf")
 
 def plot_equal_cg_size_vs_access_width_heatmap(df_in, machine, **params):
     df = df_in.copy()
@@ -151,57 +161,73 @@ def plot_equal_cg_size_vs_access_width_heatmap(df_in, machine, **params):
 
 if __name__ == "__main__":
     workload = "string"
-    machines = ["cscs"]
+    machines = ["a100", "cscs"]
     resdir = pathlib.Path(__file__).parent.absolute() / ".."  / ".." / "exp_results"
 
     for machine in machines:
         ours_partial = read_eiger_results(
             latest_result_file(resdir / machine / workload / f"stringops_partial_match_{machine}")
         )
+        ours_partial_bad_align = read_eiger_results(
+            latest_result_file(resdir / machine / workload / f"stringops_partial_match_bad_align_{machine}")
+        )
         ours_full = read_eiger_results(
             latest_result_file(resdir / machine / workload / f"stringops_full_match_{machine}")
         )
+        our_full_bad_align = read_eiger_results(
+            latest_result_file(resdir / machine / workload / f"stringops_full_match_bad_align_{machine}")
+        )
         ours_full['pattern_length'] = ours_full['fixed_length']
-        # TODO: update cudf path
-        cudf = read_cudf_results(resdir / workload / f"cudf_stringops_sgs-gpu06_20251225.csv", algo="cuDF", impl="cuDF", cg_size=1, selectivity=1, access_width=1)
-        df = pd.concat([ours_partial, ours_full, cudf], ignore_index=True)
+        our_full_bad_align['pattern_length'] = our_full_bad_align['fixed_length']
+
+        cudf = read_cudf_results(
+            latest_result_file(resdir / machine / workload / f"cudf_stringops"), 
+            algo="cuDF", impl="cuDF", cg_size=1, selectivity=1, access_width=1)
+        df = pd.concat([ours_partial, ours_partial_bad_align, ours_full, our_full_bad_align, cudf], ignore_index=True)
         
+        max_num_strings = df['num_strings'].max()
+
         for op in ["startswith", "endswith"]:
-            for num_strings in [2**28]:
+            for num_strings in [max_num_strings]:
                 for selectivity in [1]:
                     for pattern_length in df['pattern_length'].unique():
-                        plot_thpt_vs_strlen_arrow_best(
-                            df,
-                            machine,
-                            op=op,
-                            impl=["Ours","cuDF"],
-                            num_strings=num_strings,
-                            selectivity=selectivity,
-                            pattern_length=pattern_length)
+                        for aligned in [True, False]:
+                            plot_thpt_vs_strlen_arrow_best(
+                                df,
+                                machine,
+                                aligned,
+                                op=op,
+                                impl=["Ours","cuDF"],
+                                num_strings=num_strings,
+                                selectivity=selectivity,
+                                pattern_length=pattern_length)
         
         for op in ["contains"]:
-            for num_strings in [2**28]:
+            for num_strings in [max_num_strings]:
                 for selectivity in [1]:
                     for pattern_length in df['pattern_length'].unique():
-                        plot_thpt_vs_strlen(
-                            df,
-                            machine,
-                            op=op,
-                            impl=["Ours","cuDF"],
-                            num_strings=num_strings,
-                            selectivity=selectivity,
-                            pattern_length=pattern_length,
-                            cg_aw = ["1,1"])
+                        for aligned in [True, False]:
+                            plot_thpt_vs_strlen_arrow_best(
+                                df,
+                                machine,
+                                aligned,
+                                op=op,
+                                impl=["Ours", "Ours (KMP)", "cuDF"],
+                                num_strings=num_strings,
+                                selectivity=selectivity,
+                                pattern_length=pattern_length)
         
-        for num_strings in [2**28]:
+        for num_strings in [max_num_strings]:
             for selectivity in [1]:
-                plot_thpt_vs_strlen_arrow_best(
-                    df,
-                    machine,
-                    op="equal",
-                    impl=["Ours","cuDF"],
-                    num_strings=num_strings,
-                    selectivity=selectivity)
+                for aligned in [True, False]:
+                    plot_thpt_vs_strlen_arrow_best(
+                        df,
+                        machine,
+                        aligned,
+                        op="equal",
+                        impl=["Ours","cuDF"],
+                        num_strings=num_strings,
+                        selectivity=selectivity)
         
         for pattern_length in df['pattern_length'].unique():
             plot_equal_cg_size_vs_access_width_heatmap(
@@ -209,6 +235,6 @@ if __name__ == "__main__":
                 machine,
                 op="equal",
                 impl=["Ours"],
-                num_strings=2**28,
+                num_strings=max_num_strings,
                 selectivity=1,
                 pattern_length=pattern_length)

@@ -139,7 +139,7 @@ def plot_vary_zipf_factor(path_to_csv, **params):
     save_fig(fig, f"ieq_join_zipf_factor_{dict_to_str(params)}", subdir=f"join/{params.get('machine', '')}", suffix="pdf")
 
 if __name__ == "__main__":
-    machines = ["cscs"]
+    machines = ["a100", "cscs"]
     workload = "join"
     resdir = pathlib.Path(__file__).parent.absolute() / ".."  / ".." / "exp_results"
     
