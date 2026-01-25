@@ -3,14 +3,18 @@ Benchmark for cuDF string sorting operations.
 Mirrors the string_sort_nvbench.cu benchmark for comparison.
 """
 
+import sys
 import pylibcudf as plc
+print([k for k in sys.modules.keys() if "rmm" in k])
 import pyarrow as pa
 import cupy as cp
 import timeit
-from bench_cudf_utils import write_results_to_csv
+from bench_cudf_utils import *
+import gc
 
-WARMUP_RUNS = 5
-BENCHMARK_RUNS = 10
+bench_cudf_init()
+
+WARMUP_RUNS, BENCHMARK_RUNS = get_bench_params()
 
 
 def generate_random_strings_column(num_strings: int, string_length: int, seed: int = 42) -> tuple[plc.Column, plc.Table]:
@@ -97,7 +101,7 @@ op_to_bench_func = {
     "argsort": bench_argsort,
 }
 
-def run_benchmark(plc_table: plc.Table, op: str) -> tuple[float, float]:
+def run_benchmark(plc_table: plc.Table, op: str) -> tuple[float, float, float, float, list[float]]:
     """
     Run benchmark for a given operation.
     
@@ -106,7 +110,7 @@ def run_benchmark(plc_table: plc.Table, op: str) -> tuple[float, float]:
         op: Operation to benchmark ("sort" or "argsort")
     
     Returns:
-        Tuple of (average_time, throughput)
+        Tuple of (average_time, min_time, max_time, throughput, list of individual run times)
     """
     bench_func = op_to_bench_func[op]
     results = []
@@ -121,13 +125,16 @@ def run_benchmark(plc_table: plc.Table, op: str) -> tuple[float, float]:
         results.append(elapsed_time)
     
     avg_time = sum(results) / len(results)
+    min_time = min(results)
+    max_time = max(results)
     num_strings = plc_table.num_rows()
     throughput = num_strings / avg_time
     
-    return avg_time, throughput
+    return avg_time, min_time, max_time, throughput, results
 
 def main():
     all_results = []
+    json_results = []
     
     # Match parameters from string_sort_nvbench.cu
     # string_length: {16, 32, 64, 128, 256}
@@ -145,23 +152,38 @@ def main():
                 
                 # Generate random strings using CuPy (GPU-accelerated)
                 print("  Generating random strings...")
-                _, plc_table = generate_random_strings_column(num_strings, string_length)
+                col_ref, plc_table = generate_random_strings_column(num_strings, string_length)
                 print(f"  Generated {num_strings} strings of length {string_length}")
                 
                 # Run benchmark
-                avg_time, throughput = run_benchmark(plc_table, op)
+                avg_time, min_time, max_time, throughput, measurements = run_benchmark(plc_table, op)
                 
-                print(f"  Avg Time: {avg_time*1000:.3f} ms, Throughput: {throughput/1e6:.3f} MStrings/s")
+                print(f"Min Time: {min_time*1000:.3f} ms, Max Time: {max_time*1000:.3f} ms, Avg Time: {avg_time*1000:.3f} ms, Throughput: {throughput/1e6:.3f} MStrings/s")
                 
                 # Record results: impl, op, num_strings, string_length, avg_time, throughput
-                all_results.append(f"cudf,{op},{num_strings},{string_length},{avg_time},{throughput}")
+                all_results.append(f"cudf,{op},{num_strings},{string_length},{avg_time},{min_time},{max_time},{throughput}")
+                json_results.append({
+                    "impl": "cudf",
+                    "op": op,
+                    "num_strings": num_strings,
+                    "string_length": string_length,
+                    "avg_time": avg_time,
+                    "min_time": min_time,
+                    "max_time": max_time,
+                    "throughput": throughput,
+                    "measurements": measurements
+                })
+                del col_ref
+                del plc_table
+                gc.collect()
     
     # Write results to CSV
     write_results_to_csv(
         all_results,
         "cudf_string_sort",
-        "impl,op,num_strings,string_length,avg_time,thpt"
+        "impl,op,num_strings,string_length,avg_time,min_time,max_time,thpt"
     )
+    write_results_to_json(json_results, "cudf_string_sort")
     
     print("\nBenchmark complete. Results written to CSV.")
 

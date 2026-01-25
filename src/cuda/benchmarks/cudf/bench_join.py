@@ -22,10 +22,11 @@ import cupy as cp
 import numpy as np
 import timeit
 import argparse
-from bench_cudf_utils import write_results_to_csv
+from bench_cudf_utils import *
 
-WARMUP_RUNS = 3
-BENCHMARK_RUNS = 10
+bench_cudf_init()
+
+WARMUP_RUNS, BENCHMARK_RUNS = get_bench_params()
 
 
 def generate_pk_table(
@@ -169,7 +170,7 @@ def bench_inner_join(left_table: plc.Table, right_table: plc.Table,
 
 
 def run_benchmark(left_table: plc.Table, right_table: plc.Table,
-                  left_keys: plc.Table, right_keys: plc.Table) -> tuple[float, float, float]:
+                  left_keys: plc.Table, right_keys: plc.Table) -> tuple[float, float, float, list[float]]:
     """
     Run benchmark for inner join with materialization.
     
@@ -180,7 +181,7 @@ def run_benchmark(left_table: plc.Table, right_table: plc.Table,
         right_keys: Right key table
     
     Returns:
-        Tuple of (average_time, min_time, max_time)
+        Tuple of (average_time, min_time, max_time, list of individual run times)
     """
     results = []
     
@@ -197,7 +198,7 @@ def run_benchmark(left_table: plc.Table, right_table: plc.Table,
     min_time = min(results)
     max_time = max(results)
     
-    return avg_time, min_time, max_time
+    return avg_time, min_time, max_time, results
 
 
 def run_single_config(
@@ -206,7 +207,7 @@ def run_single_config(
     right_num_items: int,
     left_ncols: int,
     right_ncols: int
-) -> dict:
+) -> dict | None:
     """
     Run a single benchmark configuration and return results.
     
@@ -238,7 +239,7 @@ def run_single_config(
         right_keys = plc.Table([right_table.columns()[0]])
         
         # Run benchmark
-        avg_time, min_time, max_time = run_benchmark(
+        avg_time, min_time, max_time, measurements = run_benchmark(
             left_table, right_table, left_keys, right_keys
         )
         
@@ -255,7 +256,8 @@ def run_single_config(
             "avg_time": avg_time,
             "min_time": min_time,
             "max_time": max_time,
-            "throughput": throughput
+            "throughput": throughput,
+            "measurements": measurements
         }
     except Exception as e:
         print(f"    ERROR: {e}")
@@ -278,7 +280,7 @@ def benchmark_vary_left_table_size(
     left_num_items_list: list[int],
     right_num_items: int,
     ncols_list: list[int]
-) -> list[str]:
+) -> tuple[list[str], list[dict]]:
     """
     Benchmark suite: vary_left_table_size
     Varies left table size with fixed right table size.
@@ -290,7 +292,8 @@ def benchmark_vary_left_table_size(
     - left_ncols, right_ncols: [2, 4]
     """
     print("\n=== Benchmark Suite: vary_left_table_size ===")
-    results = []
+    csv_results = []
+    json_results = []
     
     for key_type in key_types:
         for left_num_items in left_num_items_list:
@@ -308,9 +311,10 @@ def benchmark_vary_left_table_size(
                     if result:
                         print(f"    Avg: {result['avg_time']*1000:.3f} ms, "
                               f"Throughput: {result['throughput']/1e6:.3f} MElements/s")
-                        results.append(format_result(result))
+                        csv_results.append(format_result(result))
+                        json_results.append(result)
     
-    return results
+    return csv_results, json_results
 
 
 def benchmark_vary_right_table_size(
@@ -318,7 +322,7 @@ def benchmark_vary_right_table_size(
     left_num_items_list: list[int],
     right_num_items_list: list[int],
     ncols_list: list[int]
-) -> list[str]:
+) -> tuple[list[str], list[dict]]:
     """
     Benchmark suite: vary_right_table_size
     Varies right table size across different left table sizes.
@@ -330,7 +334,8 @@ def benchmark_vary_right_table_size(
     - left_ncols, right_ncols: [2, 4]
     """
     print("\n=== Benchmark Suite: vary_right_table_size ===")
-    results = []
+    csv_results = []
+    json_results = []
     
     for key_type in key_types:
         for left_num_items in left_num_items_list:
@@ -349,9 +354,10 @@ def benchmark_vary_right_table_size(
                         if result:
                             print(f"    Avg: {result['avg_time']*1000:.3f} ms, "
                                   f"Throughput: {result['throughput']/1e6:.3f} MElements/s")
-                            results.append(format_result(result))
+                            csv_results.append(format_result(result))
+                            json_results.append(result)
     
-    return results
+    return csv_results, json_results
 
 
 def main():
@@ -390,22 +396,24 @@ def main():
         left_items_vary_right = [2**i for i in range(12, 25, 4)]
         right_items_list = [2**i for i in range(12, 29, 1)]
         # ncols: 2 and 4
-        ncols_list = [2]
+        ncols_list = [2, 4]
     
     # Run selected benchmark suites
     if args.suite in ["all", "vary_left"]:
-        results = benchmark_vary_left_table_size(
+        csv_results, json_results = benchmark_vary_left_table_size(
             key_types, left_items_vary_left, right_items_fixed, ncols_list
         )
-        write_results_to_csv(results, "cudf_join_vary_left_table_size", header)
-        print(f"  Suite 'vary_left_table_size': {len(results)} configurations")
+        write_results_to_csv(csv_results, "cudf_join_vary_left_table_size", header)
+        write_results_to_json(json_results, "cudf_join_vary_left_table_size")
+        print(f"  Suite 'vary_left_table_size': {len(csv_results)} configurations")
     
     if args.suite in ["all", "vary_right"]:
-        results = benchmark_vary_right_table_size(
+        csv_results, json_results = benchmark_vary_right_table_size(
             key_types, left_items_vary_right, right_items_list, ncols_list
         )
-        write_results_to_csv(results, "cudf_join_vary_right_table_size", header)
-        print(f"  Suite 'vary_right_table_size': {len(results)} configurations")
+        write_results_to_csv(csv_results, "cudf_join_vary_right_table_size", header)
+        write_results_to_json(json_results, "cudf_join_vary_right_table_size")
+        print(f"  Suite 'vary_right_table_size': {len(csv_results)} configurations")
     
     print("\nBenchmark complete. Results written to CSV files.")
 

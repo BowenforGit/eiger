@@ -19,11 +19,11 @@ import cupy as cp
 import numpy as np
 import timeit
 import argparse
-from bench_cudf_utils import write_results_to_csv
+from bench_cudf_utils import *
 
-WARMUP_RUNS = 3
-BENCHMARK_RUNS = 10
+WARMUP_RUNS, BENCHMARK_RUNS = get_bench_params()
 
+bench_cudf_init()
 
 def generate_groupby_keys(
     num_items: int,
@@ -62,7 +62,6 @@ def generate_groupby_keys(
     
     # Convert to PyArrow via CPU
     keys_cpu = cp.asnumpy(keys)
-    print(keys_cpu)
     pa_array = pa.array(keys_cpu, type=pa_type)
     
     return plc.Column.from_arrow(pa_array)
@@ -147,7 +146,7 @@ def bench_groupby_max(
 def run_benchmark(
     key_table: plc.Table, 
     value_columns: list[plc.Column]
-) -> tuple[float, float, float]:
+) -> tuple[float, float, float, list[float]]:
     """
     Run benchmark for groupby aggregation.
     
@@ -156,7 +155,7 @@ def run_benchmark(
         value_columns: List of columns to aggregate
     
     Returns:
-        Tuple of (average_time, min_time, max_time)
+        Tuple of (average_time, min_time, max_time, list of individual run times)
     """
     results = []
     
@@ -172,12 +171,14 @@ def run_benchmark(
     avg_time = sum(results) / len(results)
     min_time = min(results)
     max_time = max(results)
+    print(f"Min Time: {min_time*1000} ms, Max Time: {max_time*1000} ms, Avg Time: {avg_time*1000} ms")
     
-    return avg_time, min_time, max_time
+    return avg_time, min_time, max_time, results
 
 
 def benchmark_groupby_max(
     results: list, 
+    json_results: list,
     key_types: list[str], 
     num_items_list: list[int],
     num_groups_list: list[int], 
@@ -211,7 +212,7 @@ def benchmark_groupby_max(
                         value_columns = generate_groupby_values(num_items, num_aggs, dtype, seed=42)
                         
                         # Run benchmark
-                        avg_time, min_time, max_time = run_benchmark(key_table, value_columns)
+                        avg_time, min_time, max_time, measurements = run_benchmark(key_table, value_columns)
                         
                         # Throughput: elements per second
                         throughput = num_items / avg_time
@@ -223,6 +224,19 @@ def benchmark_groupby_max(
                             f"cudf,groupby_max,{key_type},{num_items},"
                             f"{num_groups},{num_aggs},{avg_time},{min_time},{max_time},{throughput}"
                         )
+                        json_results.append({
+                            "impl": "cudf",
+                            "benchmark": "groupby_max",
+                            "key_type": key_type,
+                            "num_items": num_items,
+                            "num_groups": num_groups,
+                            "num_aggs": num_aggs,
+                            "avg_time": avg_time,
+                            "min_time": min_time,
+                            "max_time": max_time,
+                            "throughput": throughput,
+                            "measurements": measurements
+                        })
                     except Exception as e:
                         print(f"    ERROR: {e}")
 
@@ -234,33 +248,35 @@ def main():
     args = parser.parse_args()
     
     all_results = []
+    json_results = []
     
     # Parameter configurations matching C++ benchmark
     if args.quick:
         # Quick mode: fewer configurations for testing
         key_types = ["int32"]
         # num_items: 2^24, 2^26
-        num_items_list = [2**24, 2**26]
+        num_items_list = [2**28]
         # num_groups: 2^4, 2^12, 2^20
-        num_groups_list = [2**4, 2**12, 2**20]
-        num_aggs_list = [1, 2]
+        num_groups_list = [2**2, 2**4, 2**6]
+        num_aggs_list = [2]
     else:
         # Full mode: match C++ benchmark parameters
         key_types = ["int32", "int64"]
         # num_items: 2^28, 2^29 (from C++ benchmark)
-        num_items_list = [2**28, 2**29]
+        num_items_list = [2**28]
         # num_groups: 2^2 to 2^26, step 2
         num_groups_list = [2**i for i in range(2, 27, 2)]
         # num_aggs: 1, 2, 4
         num_aggs_list = [1, 2, 4]
     
     # Run benchmark
-    benchmark_groupby_max(all_results, key_types, num_items_list, 
+    benchmark_groupby_max(all_results, json_results, key_types, num_items_list, 
                           num_groups_list, num_aggs_list)
     
     # Write results to CSV
     header = "impl,benchmark,key_type,num_items,num_groups,num_aggs,avg_time,min_time,max_time,throughput"
-    write_results_to_csv(all_results, "cudf_groupby", header)
+    write_results_to_csv(all_results, "cudf_groupby_max", header)
+    write_results_to_json(json_results, "cudf_groupby_max")
     
     print(f"\nBenchmark complete. {len(all_results)} configurations tested.")
     print("Results written to CSV.")

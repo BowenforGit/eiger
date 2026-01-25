@@ -4,8 +4,9 @@ import timeit
 from bench_cudf_utils import *
 import argparse
 
-WARMUP_RUNS = 5
-BENCHMARK_RUNS = 10
+bench_cudf_init()
+
+WARMUP_RUNS, BENCHMARK_RUNS = get_bench_params()
 
 def expr_factory(expr_name: str, type: pa.DataType):
     if expr_name == "one_col_mult":
@@ -175,9 +176,12 @@ def bench(plc_table: plc.Table, expr):
         results.append(elapsed_time)
     
     avg_time = sum(results) / len(results)
+    min_time = min(results)
+    max_time = max(results)
+    print(f"Min Time: {min_time*1000} ms, Max Time: {max_time*1000} ms, Avg Time: {avg_time*1000} ms")
     num_rows = plc_table.num_rows()
     thpt = num_rows / avg_time
-    return avg_time, thpt
+    return avg_time, min_time, max_time, thpt, results
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Benchmark cudf expression evaluation")
@@ -195,6 +199,7 @@ if __name__ == "__main__":
         BENCHMARK_RUNS = 1
 
     all_results = []
+    json_results = []
     
     expressions = [
         ("one_col_mult", "col0 * 3", 1),
@@ -209,16 +214,29 @@ if __name__ == "__main__":
     
     for type in ['I32', 'I64']:
         pa_type = pa.int32() if type == 'I32' else pa.int64()
-        for num_rows in [2**29]:
+        for num_rows in [2**28, 2**29]:
             for name, expr_str, num_cols in expressions:
                 if len(args.expr) > 0 and name not in args.expr:
                     continue
                 plc_table = generate_expr_table(num_rows, num_cols, pa_type)
                 expr = expr_factory(name, pa_type)
-                avg_time, thpt = bench(plc_table, expr)
-                result_line = f"{type},cudf,{name},{num_rows},{num_cols},{avg_time},{thpt}"
+                avg_time, min_time, max_time, thpt, measurements = bench(plc_table, expr)
+                result_line = f"{type},cudf,{name},{num_rows},{num_cols},{avg_time},{min_time},{max_time},{thpt}"
                 all_results.append(result_line)
+                json_results.append({
+                    "KeyType": type,
+                    "impl": "cudf",
+                    "expr_type": name,
+                    "num_items": num_rows,
+                    "num_cols": num_cols,
+                    "avg_time_s": avg_time,
+                    "min_time_s": min_time,
+                    "max_time_s": max_time,
+                    "throughput_rows_per_s": thpt,
+                    "measurements": measurements
+                })
                 print(f"Type: {type}, Expr: {expr_str}, Rows: {num_rows}, Cols: {num_cols}, Avg Time: {avg_time*1000:.6f} ms, Throughput: {thpt/1_000_000_000:.2f} billion rows/s")
     
-    header = "KeyType,impl,expr_type,num_items,num_cols,avg_time_s,throughput_rows_per_s"
+    header = "KeyType,impl,expr_type,num_items,num_cols,avg_time_s,min_time_s,max_time_s,throughput_rows_per_s"
     write_results_to_csv(all_results, "cudf_expr", header)
+    write_results_to_json(json_results, "cudf_expr")

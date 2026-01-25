@@ -15,10 +15,11 @@ import numpy as np
 import timeit
 import argparse
 from typing import Optional
-from bench_cudf_utils import write_results_to_csv
+from bench_cudf_utils import *
 
-WARMUP_RUNS = 3
-BENCHMARK_RUNS = 10
+bench_cudf_init()
+
+WARMUP_RUNS, BENCHMARK_RUNS = get_bench_params()
 
 
 def generate_random_numeric_column(
@@ -165,7 +166,7 @@ def bench_sort_table(plc_table: plc.Table) -> float:
     return end_time - start_time
 
 
-def run_benchmark(plc_table: plc.Table) -> tuple[float, float, float]:
+def run_benchmark(plc_table: plc.Table) -> tuple[float, float, float, list[float]]:
     """
     Run benchmark for table sorting.
     
@@ -173,7 +174,7 @@ def run_benchmark(plc_table: plc.Table) -> tuple[float, float, float]:
         plc_table: The pylibcudf Table to sort
     
     Returns:
-        Tuple of (average_time, min_time, max_time)
+        Tuple of (average_time, min_time, max_time, list of individual run times)
     """
     results = []
     
@@ -190,10 +191,10 @@ def run_benchmark(plc_table: plc.Table) -> tuple[float, float, float]:
     min_time = min(results)
     max_time = max(results)
     
-    return avg_time, min_time, max_time
+    return avg_time, min_time, max_time, results
 
 
-def benchmark_numeric(results: list, key_types: list[str], row_counts: list[int], 
+def benchmark_numeric(results: list, json_results: list, key_types: list[str], row_counts: list[int], 
                       num_key_cols_list: list[int], num_nonkey_cols_list: list[int]):
     """
     Benchmark: sort_table with numeric columns only.
@@ -222,7 +223,7 @@ def benchmark_numeric(results: list, key_types: list[str], row_counts: list[int]
                         )
                         
                         # Run benchmark
-                        avg_time, min_time, max_time = run_benchmark(table)
+                        avg_time, min_time, max_time, measurements = run_benchmark(table)
                         throughput = num_rows / avg_time
                         
                         print(f"    Avg: {avg_time*1000:.3f} ms, "
@@ -232,11 +233,25 @@ def benchmark_numeric(results: list, key_types: list[str], row_counts: list[int]
                             f"cudf,sort_table_numeric,{key_type},{num_rows},"
                             f"{num_key_cols},{num_nonkey_cols},0,{avg_time},{min_time},{max_time},{throughput}"
                         )
+                        json_results.append({
+                            "impl": "cudf",
+                            "benchmark": "sort_table_numeric",
+                            "key_type": key_type,
+                            "num_rows": num_rows,
+                            "num_key_cols": num_key_cols,
+                            "num_nonkey_cols": num_nonkey_cols,
+                            "string_length": 0,
+                            "avg_time": avg_time,
+                            "min_time": min_time,
+                            "max_time": max_time,
+                            "throughput": throughput,
+                            "measurements": measurements
+                        })
                     except Exception as e:
                         print(f"    ERROR: {e}")
 
 
-def benchmark_string_key(results: list, row_counts: list[int], 
+def benchmark_string_key(results: list, json_results: list, row_counts: list[int], 
                          num_key_cols_list: list[int], num_nonkey_cols_list: list[int], 
                          string_lengths: list[int]):
     """
@@ -265,7 +280,7 @@ def benchmark_string_key(results: list, row_counts: list[int],
                         )
                         
                         # Run benchmark
-                        avg_time, min_time, max_time = run_benchmark(table)
+                        avg_time, min_time, max_time, measurements = run_benchmark(table)
                         throughput = num_rows / avg_time
                         
                         print(f"    Avg: {avg_time*1000:.3f} ms, "
@@ -275,11 +290,25 @@ def benchmark_string_key(results: list, row_counts: list[int],
                             f"cudf,sort_table_string_key,int32,{num_rows},"
                             f"{num_key_cols},{num_nonkey_cols},{string_length},{avg_time},{min_time},{max_time},{throughput}"
                         )
+                        json_results.append({
+                            "impl": "cudf",
+                            "benchmark": "sort_table_string_key",
+                            "key_type": "int32",
+                            "num_rows": num_rows,
+                            "num_key_cols": num_key_cols,
+                            "num_nonkey_cols": num_nonkey_cols,
+                            "string_length": string_length,
+                            "avg_time": avg_time,
+                            "min_time": min_time,
+                            "max_time": max_time,
+                            "throughput": throughput,
+                            "measurements": measurements
+                        })
                     except Exception as e:
                         print(f"    ERROR: {e}")
 
 
-def benchmark_string_payload(results: list, key_types: list[str], row_counts: list[int],
+def benchmark_string_payload(results: list, json_results: list, key_types: list[str], row_counts: list[int],
                              num_key_cols_list: list[int], num_nonkey_cols_list: list[int], 
                              string_lengths: list[int]):
     """
@@ -312,7 +341,7 @@ def benchmark_string_payload(results: list, key_types: list[str], row_counts: li
                             )
                             
                             # Run benchmark
-                            avg_time, min_time, max_time = run_benchmark(table)
+                            avg_time, min_time, max_time, measurements = run_benchmark(table)
                             throughput = num_rows / avg_time
                             
                             print(f"    Avg: {avg_time*1000:.3f} ms, "
@@ -322,13 +351,27 @@ def benchmark_string_payload(results: list, key_types: list[str], row_counts: li
                                 f"cudf,sort_table_string_payload,{key_type},{num_rows},"
                                 f"{num_key_cols},{num_nonkey_cols},{string_length},{avg_time},{min_time},{max_time},{throughput}"
                             )
+                            json_results.append({
+                                "impl": "cudf",
+                                "benchmark": "sort_table_string_payload",
+                                "key_type": key_type,
+                                "num_rows": num_rows,
+                                "num_key_cols": num_key_cols,
+                                "num_nonkey_cols": num_nonkey_cols,
+                                "string_length": string_length,
+                                "avg_time": avg_time,
+                                "min_time": min_time,
+                                "max_time": max_time,
+                                "throughput": throughput,
+                                "measurements": measurements
+                            })
                         except Exception as e:
                             print(f"    ERROR: {e}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark cuDF table sorting")
-    parser.add_argument("--benchmark", type=str, default="all",
+    parser.add_argument("--benchmark", type=str, default="numeric",
                         choices=["all", "numeric", "string_key", "string_payload"],
                         help="Which benchmark to run")
     parser.add_argument("--quick", action="store_true",
@@ -336,6 +379,7 @@ def main():
     args = parser.parse_args()
     
     all_results = []
+    json_results = []
     
     # Parameter configurations matching C++ benchmark
     if args.quick:
@@ -350,22 +394,22 @@ def main():
         # Full mode: match C++ benchmark parameters
         key_types = ["int32", "int64"]
         # num_rows: 2^16 to 2^28, step 2
-        row_counts_numeric = [2**i for i in range(16, 29, 2)]
+        row_counts_numeric = [2**i for i in range(26, 29, 1)]
         # String benchmarks: 2^16 to 2^26, step 2
         row_counts_string = [2**i for i in range(16, 27, 2)]
         num_key_cols_list = [1, 2, 4]
-        num_nonkey_cols_list = [1, 4, 8]
+        num_nonkey_cols_list = [1, 2, 4]
         string_lengths = [8, 16, 32, 64, 128]
     
     # Run selected benchmarks
     if args.benchmark in ["all", "numeric"]:
-        benchmark_numeric(all_results, key_types, row_counts_numeric, 
+        benchmark_numeric(all_results, json_results, key_types, row_counts_numeric, 
                           num_key_cols_list, num_nonkey_cols_list)
     
     if args.benchmark in ["all", "string_key"]:
         # String key uses only int32 for payload type (matches C++)
         benchmark_string_key(
-            all_results, 
+            all_results, json_results,
             row_counts_string,
             num_key_cols_list,
             [1, 4],  # num_nonkey_cols for string key
@@ -374,7 +418,7 @@ def main():
     
     if args.benchmark in ["all", "string_payload"]:
         benchmark_string_payload(
-            all_results, 
+            all_results, json_results,
             key_types, 
             row_counts_string,
             num_key_cols_list,
@@ -385,6 +429,7 @@ def main():
     # Write results to CSV
     header = "impl,benchmark,key_type,num_rows,num_key_cols,num_nonkey_cols,string_length,avg_time,min_time,max_time,throughput"
     write_results_to_csv(all_results, "cudf_sort_table", header)
+    write_results_to_json(json_results, "cudf_sort_table")
     
     print(f"\nBenchmark complete. {len(all_results)} configurations tested.")
     print("Results written to CSV.")

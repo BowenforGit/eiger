@@ -5,8 +5,9 @@ import string
 from cudf.core.column.column import ColumnBase
 from bench_cudf_utils import *
 
-WARMUP_RUNS = 5
-BENCHMARK_RUNS = 10
+bench_cudf_init()
+
+WARMUP_RUNS, BENCHMARK_RUNS = get_bench_params()
 
 def bench_startswith(col, pattern):
     start_time = timeit.default_timer()
@@ -43,6 +44,10 @@ def generate_plc_col(str, num_strings):
         plc.DataType.from_arrow(pa.int32()), 
         num_strings, 
         plc.types.MaskState.UNALLOCATED)
+    plc.filling.fill_in_place(
+        gather_map, 
+        0, num_strings, 
+        plc.Scalar.from_arrow(pa.scalar(0, pa.int32())))
     result = plc.copying.gather(plc_table, gather_map, plc.copying.OutOfBoundsPolicy.DONT_CHECK)
     return result.columns()[0]
 
@@ -97,37 +102,67 @@ def bench(plc_col, plc_pattern, op):
         results.append(elapsed_time)
     
     avg_time = sum(results) / len(results)
+    min_time = min(results)
+    max_time = max(results)
+    print(f"Min Time: {min_time*1000} ms, Max Time: {max_time*1000} ms, Avg Time: {avg_time*1000} ms")
     num_strings = plc_col.size()
     thpt = num_strings / avg_time
-    return avg_time, thpt
+    return avg_time, min_time, max_time, thpt, results
 
 if __name__ == "__main__":
     all_results = []
+    json_results = []
+    
     for plen in [5, 50]:
         pattern, plc_pattern = generate_pattern(plen)
         for op in ["startswith", "endswith", "contains"]:
-            for num_strings in [2**26, 2**28]:
+            for num_strings in [2**27]:
                 for strlen in [30, 45, 60, 75, 90, 105, 120, 135] + [17, 34, 51, 68, 85, 102, 119, 136]:
                     print(f"Benchmarking {op} with strlen={strlen}, plen={plen}, num_strings={num_strings}")
                     if plen > strlen:
                         print("[Skip]")
                         continue
                     plc_col = generate_strings(op, num_strings, strlen, pattern)
-                    avg_time, thpt = bench(plc_col, plc_pattern, op)
+                    avg_time, min_time, max_time, thpt, measurements = bench(plc_col, plc_pattern, op)
                     print(f"Avg Time: {avg_time*1000}, Throughput: {thpt/1e9} GStrings/s")
-                    all_results.append(f"cudf,{op},{num_strings},{strlen},{plen},{avg_time},{thpt}")
+                    all_results.append(f"cudf,{op},{num_strings},{strlen},{plen},{avg_time},{min_time},{max_time},{thpt}")
+                    json_results.append({
+                        "impl": "cudf",
+                        "op": op,
+                        "num_strings": num_strings,
+                        "fixed_length": strlen,
+                        "pattern_length": plen,
+                        "avg_time": avg_time,
+                        "min_time": min_time,
+                        "max_time": max_time,
+                        "thpt": thpt,
+                        "measurements": measurements
+                    })
     
     for op in ["equal"]:
-        for num_strings in [2**26, 2**28]:
+        for num_strings in [2**27]:
             for strlen in [30, 45, 60, 75, 90, 105, 120, 135] + [17, 34, 51, 68, 85, 102, 119, 136]:
                 pattern, plc_pattern = generate_pattern(strlen)
                 print(f"Benchmarking {op} with strlen={strlen}, plen={strlen}, num_strings={num_strings}")
                 plc_col = generate_strings(op, num_strings, strlen, pattern)
-                avg_time, thpt = bench(plc_col, plc_pattern, op)
+                avg_time, min_time, max_time, thpt, measurements = bench(plc_col, plc_pattern, op)
                 print(f"Avg Time: {avg_time*1000}, Throughput: {thpt/1e9} GStrings/s")
-                all_results.append(f"cudf,{op},{num_strings},{strlen},{strlen},{avg_time},{thpt}")
+                all_results.append(f"cudf,{op},{num_strings},{strlen},{strlen},{avg_time},{min_time},{max_time},{thpt}")
+                json_results.append({
+                    "impl": "cudf",
+                    "op": op,
+                    "num_strings": num_strings,
+                    "fixed_length": strlen,
+                    "pattern_length": strlen,
+                    "avg_time": avg_time,
+                    "min_time": min_time,
+                    "max_time": max_time,
+                    "thpt": thpt,
+                    "measurements": measurements
+                })
     
     write_results_to_csv(
         all_results, 
         "cudf_stringops", 
-        "impl,op,num_strings,fixed_length,pattern_length,avg_time,thpt")
+        "impl,op,num_strings,fixed_length,pattern_length,avg_time,min_time,max_time,thpt")
+    write_results_to_json(json_results, "cudf_stringops")
