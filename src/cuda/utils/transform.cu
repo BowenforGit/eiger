@@ -10,6 +10,7 @@
 #include <cub/device/device_select.cuh>
 #include <memory>
 #include <stdexcept>
+#include <type_traits>
 
 #include "memory/column.hpp"
 #include "memory/mem_manager.hpp"
@@ -22,7 +23,8 @@ namespace util {
 namespace device {
 namespace {
     struct gather_impl {
-        template <typename T>
+        template <typename T, typename GatherMapT,
+                  typename std::enable_if<std::is_integral<GatherMapT>::value, int>::type = 0>
         void operator()(
             gamax::column_view const& gather_map, 
             gamax::column_view const& input, 
@@ -31,11 +33,22 @@ namespace {
         {
             const auto N = gather_map.size();
 
-            thrust::device_ptr<const gamax::size_type> gather_map_ptr(gather_map.data<gamax::size_type>());
+            thrust::device_ptr<const GatherMapT> gather_map_ptr(gather_map.data<GatherMapT>());
             thrust::device_ptr<const T> input_ptr(input.data<T>());
             thrust::device_ptr<T> output_ptr(output.data<T>());
 
             thrust::gather(thrust::device.on(stream), gather_map_ptr, gather_map_ptr + N, input_ptr, output_ptr);
+        }
+
+        template <typename T, typename GatherMapT,
+                  typename std::enable_if<!std::is_integral<GatherMapT>::value, int>::type = 0>
+        void operator()(
+            gamax::column_view const& gather_map, 
+            gamax::column_view const& input, 
+            gamax::mutable_column_view output, 
+            cudaStream_t stream)
+        {
+            throw std::runtime_error("gather_impl: gather_map type must be an integral type");
         }
     };
 
@@ -137,7 +150,7 @@ namespace {
         cudaStream_t stream)
     {
         auto output = std::make_unique<gamax::column>(input.type(), gather_map.size());
-        type_dispatcher(input.type(), gather_impl{}, gather_map, input, output->mutable_view(), stream);
+        double_type_dispatcher(input.type(), gather_map.type(), gather_impl{}, gather_map, input, output->mutable_view(), stream);
         return output;
     }
 

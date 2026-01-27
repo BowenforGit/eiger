@@ -2,10 +2,13 @@
 #include <utility>
 #include <vector>
 #include <stdexcept>
+#include <limits>
 
 #include <cuda.h>
 #include <cub/cub.cuh>
 #include <cub/device/device_merge_sort.cuh>
+#include <thrust/transform.h>
+#include <thrust/execution_policy.h>
 
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
@@ -17,9 +20,18 @@
 #include "string/string_column.hpp"
 #include "string/string_impl.cuh"
 #include "utils/cub_wrapper.cuh"
+#include "utils/transform.hpp"
 
 namespace gamax::sort {
 namespace {
+
+    // =========================================================================
+    // Helper: Check if we can use int32 for row IDs (more efficient sorting)
+    // =========================================================================
+    __host__ __forceinline__
+    constexpr bool can_use_int32_rid(gamax::size_type num_rows) {
+        return num_rows <= static_cast<gamax::size_type>(std::numeric_limits<int32_t>::max());
+    }
 
     // =========================================================================
     // Helper: Create empty table with same schema
@@ -152,8 +164,9 @@ namespace {
     // =========================================================================
     // Single-key sorting: String key column
     // =========================================================================
+    template <typename RidType>
     std::unique_ptr<gamax::table>
-    sort_string_column_table(
+    sort_string_column_table_impl(
         gamax::table_view const& table,
         int sort_key_index,
         gamax::sort_order sort_order,
@@ -169,11 +182,11 @@ namespace {
         auto sort_key_col_view = table.get_column(sort_key_index);
         gamax::string_column_view sort_key_str_view(sort_key_col_view, gamax::ARROW_STRING, stream);
         
-        // Step 1: argsort_strings to get sorted indices A
+        // Step 1: argsort_strings to get sorted indices A (returns size_type)
         auto sorted_indices_A = gamax::argsort_strings(sort_key_str_view, sort_order, stream);
         
-        // Step 2: Create index column B (0 to N-1) and sort with A
-        auto indices_B = gamax::make_sequence<gamax::size_type>(num_rows, 0, 1, stream);
+        // Step 2: Create index column B (0 to N-1) using RidType and sort with A
+        auto indices_B = gamax::make_sequence<RidType>(num_rows, 0, 1, stream);
         auto [sorted_A, sorted_B] = sort_column_pair(
             sorted_indices_A->view(), indices_B->view(), 0, -1, 
             gamax::sort_order::ASCENDING, nullptr, 0, stream);
@@ -207,6 +220,21 @@ namespace {
         return gamax::make_table(std::move(sorted_columns));
     }
 
+    // Dispatch function that chooses int32 or size_type based on table size
+    std::unique_ptr<gamax::table>
+    sort_string_column_table(
+        gamax::table_view const& table,
+        int sort_key_index,
+        gamax::sort_order sort_order,
+        cudaStream_t stream)
+    {
+        if (can_use_int32_rid(table.num_rows())) {
+            return sort_string_column_table_impl<int32_t>(table, sort_key_index, sort_order, stream);
+        } else {
+            return sort_string_column_table_impl<gamax::size_type>(table, sort_key_index, sort_order, stream);
+        }
+    }
+
     // =========================================================================
     // Multi-key sorting: Row comparator
     // =========================================================================
@@ -214,22 +242,13 @@ namespace {
     // Maximum number of sort keys supported (for fixed-size device arrays)
     constexpr int MAX_SORT_KEYS = 16;
     
-    // Device-side key column info
-    struct KeyColumnInfo {
-        gamax::type_id type;
-        const void* data;           // For numeric columns: pointer to data
-        const void* meta;           // For string columns: pointer to offsets
-        bool is_ascending;
-    };
-    
-    // String implementation for ARROW format
-    using arrow_string_impl = gamax::detail::id_to_string_impl<gamax::ARROW_STRING>::string_col_impl;
-    
     // Device function to compare two strings
+    // Note: We use gamax::size_type for indexing offsets array since offsets are always size_type
+    template <typename RidType>
     __device__ __forceinline__
     int compare_strings(
         const char* data, const gamax::size_type* offsets,
-        gamax::size_type lhs_idx, gamax::size_type rhs_idx)
+        RidType lhs_idx, RidType rhs_idx)
     {
         gamax::size_type lhs_start = offsets[lhs_idx];
         gamax::size_type lhs_end = offsets[lhs_idx + 1];
@@ -255,25 +274,24 @@ namespace {
     
     // Functor to compare two elements of a column by their indices
     // Uses type_dispatcher_all for automatic type dispatching including STRING
+    // RidType is the row ID type (int32 or size_type)
+    template <typename RidType>
     struct CompareElementsFunctor {
-        const void* data;
-        const void* meta;  // For strings: offsets pointer
-        gamax::size_type lhs_idx;
-        gamax::size_type rhs_idx;
-        
         template<typename T>
         __device__ __forceinline__
-        int operator()() const
+        int operator()(gamax::column_view const& col, RidType lhs_idx, RidType rhs_idx) const
         {
             if constexpr (cuda::std::is_same_v<T, gamax::string_type_tag>) {
                 // String comparison using ARROW format
-                return compare_strings(
-                    static_cast<const char*>(data),
-                    static_cast<const gamax::size_type*>(meta),
-                    lhs_idx, rhs_idx);
+                // For string columns, data pointer points to a helper buffer containing [char_data_ptr, offsets_ptr]
+                // Must use reinterpret_cast to access the pointers correctly (see string_column_view device constructor)
+                void** ptrs = reinterpret_cast<void**>(const_cast<void*>(col.data<void>()));
+                const char* char_data = static_cast<const char*>(ptrs[0]);
+                const gamax::size_type* offsets = static_cast<const gamax::size_type*>(ptrs[1]);
+                return compare_strings<RidType>(char_data, offsets, lhs_idx, rhs_idx);
             } else {
-                // Numeric comparison
-                const T* typed_data = static_cast<const T*>(data);
+                // Numeric comparison - array indexing works with any integer type
+                const T* typed_data = col.data<T>();
                 T lhs = typed_data[lhs_idx];
                 T rhs = typed_data[rhs_idx];
                 if (lhs < rhs) return -1;
@@ -283,37 +301,43 @@ namespace {
         }
     };
     
-    // Multi-key row comparator using type_dispatcher_all
+    // Multi-key row comparator using table_device_view
+    // RidType is the row ID type used for indices (int32 for smaller tables, size_type for large)
+    template <typename RidType>
     struct MultiKeyRowComparator {
-        KeyColumnInfo keys[MAX_SORT_KEYS];
+        gamax::experimental::table_device_view keys_view;
+        bool sort_orders[MAX_SORT_KEYS];  // true = ascending
         int num_keys;
         
         __host__ __device__
-        MultiKeyRowComparator(const KeyColumnInfo* key_infos, int n_keys)
-            : num_keys(n_keys)
+        MultiKeyRowComparator(
+            gamax::experimental::table_device_view keys,
+            const bool* orders,
+            int n_keys)
+            : keys_view(keys), num_keys(n_keys)
         {
             for (int i = 0; i < n_keys && i < MAX_SORT_KEYS; ++i) {
-                keys[i] = key_infos[i];
+                sort_orders[i] = orders[i];
             }
         }
         
         __device__
-        bool operator()(gamax::size_type lhs_idx, gamax::size_type rhs_idx) const
+        bool operator()(RidType lhs_idx, RidType rhs_idx) const
         {
             for (int k = 0; k < num_keys; ++k) {
-                CompareElementsFunctor cmp_func{
-                    keys[k].data, 
-                    keys[k].meta, 
-                    lhs_idx, 
+                auto const& col = keys_view.get_column(k);
+                int cmp = gamax::type_dispatcher_all(
+                    col.type().id(), 
+                    CompareElementsFunctor<RidType>{},
+                    col,
+                    lhs_idx,
                     rhs_idx
-                };
-                
-                int cmp = gamax::type_dispatcher_all(keys[k].type, cmp_func);
+                );
                 
                 if (cmp != 0) {
                     // Apply sort order: ascending means lhs < rhs returns true
                     // descending means lhs > rhs returns true (flip the comparison)
-                    return keys[k].is_ascending ? (cmp < 0) : (cmp > 0);
+                    return sort_orders[k] ? (cmp < 0) : (cmp > 0);
                 }
             }
             
@@ -325,8 +349,9 @@ namespace {
     // =========================================================================
     // Multi-key sorting implementation
     // =========================================================================
+    template <typename RidType>
     std::unique_ptr<gamax::table>
-    sort_multi_key_table(
+    sort_multi_key_table_impl(
         gamax::table_view const& table,
         std::vector<int> const& sort_keys,
         std::vector<gamax::sort_order> const& sort_orders,
@@ -344,42 +369,30 @@ namespace {
             throw std::invalid_argument("Too many sort keys (max " + std::to_string(MAX_SORT_KEYS) + ")");
         }
         
-        // Build key column info on host
-        std::vector<KeyColumnInfo> host_key_infos(num_keys);
-        
-        // We need to extract string column data/meta pointers
-        // For string columns in a table_view, we need to copy the helper buffer to get the pointers
-        std::vector<void*> string_ptrs_storage(num_keys * 2);
-        
+        // Build key columns table view and create device view
+        std::vector<gamax::size_type> key_indices(num_keys);
         for (int k = 0; k < num_keys; ++k) {
-            auto col_view = table.get_column(sort_keys[k]);
-            host_key_infos[k].type = col_view.type().id();
-            host_key_infos[k].is_ascending = (sort_orders[k] == gamax::sort_order::ASCENDING);
-            
-            if (col_view.type().id() == gamax::type_id::STRING) {
-                // For string columns, extract data and meta pointers from helper buffer
-                void* ptrs[2];
-                cudaMemcpyAsync(ptrs, col_view.data<void>(), 2 * sizeof(void*), 
-                               cudaMemcpyDeviceToHost, stream);
-                cudaStreamSynchronize(stream);
-                host_key_infos[k].data = ptrs[0];
-                host_key_infos[k].meta = ptrs[1];
-            } else {
-                host_key_infos[k].data = col_view.data<void>();
-                host_key_infos[k].meta = nullptr;
-            }
+            key_indices[k] = sort_keys[k];
+        }
+        auto keys_table_view = table.select_columns(key_indices);
+        auto keys_device_view = keys_table_view.device_view(stream);
+        
+        // Build sort orders array on host
+        bool host_sort_orders[MAX_SORT_KEYS];
+        for (int k = 0; k < num_keys; ++k) {
+            host_sort_orders[k] = (sort_orders[k] == gamax::sort_order::ASCENDING);
         }
         
-        // Create comparator
-        MultiKeyRowComparator comparator(host_key_infos.data(), num_keys);
+        // Create comparator with device view and sort orders
+        MultiKeyRowComparator<RidType> comparator(*keys_device_view, host_sort_orders, num_keys);
         
-        // Initialize indices (0 to N-1)
-        auto indices = gamax::make_sequence<gamax::size_type>(num_rows, 0, 1, stream);
+        // Initialize indices (0 to N-1) using RidType for efficiency
+        auto indices = gamax::make_sequence<RidType>(num_rows, 0, 1, stream);
         
         // Sort indices using multi-key comparator
         CALL_CUB_FUNC(
             cub::DeviceMergeSort::SortKeys,
-            indices->template data<gamax::size_type>(),
+            indices->template data<RidType>(),
             num_rows,
             comparator,
             stream);
@@ -387,11 +400,11 @@ namespace {
         cudaStreamSynchronize(stream);
         
         // Now we have sorted indices. Apply them to all columns.
-        // Create inverse permutation for efficient numeric column sorting
-        auto indices_B = gamax::make_sequence<gamax::size_type>(num_rows, 0, 1, stream);
-        auto [sorted_indices, inverse_perm] = sort_column_pair(
-            indices->view(), indices_B->view(), 0, -1,
-            gamax::sort_order::ASCENDING, nullptr, 0, stream);
+        // Create inverse permutation for efficient numeric column sorting using RidType
+        // auto indices_B = gamax::make_sequence<RidType>(num_rows, 0, 1, stream);
+        // auto [sorted_indices, inverse_perm] = sort_column_pair(
+        //     indices->view(), indices_B->view(), 0, -1,
+        //     gamax::sort_order::ASCENDING, nullptr, 0, stream);
         
         // Classify all columns
         std::vector<gamax::size_type> numeric_col_indices;
@@ -409,21 +422,59 @@ namespace {
         
         // For numeric columns: use inverse_perm with sort_column_pair
         for (auto col_idx : numeric_col_indices) {
-            auto [_, sorted_col] = sort_column_pair(
-                inverse_perm->view(),
-                table.get_column(col_idx),
-                0, -1, gamax::sort_order::ASCENDING, nullptr, 0, stream);
+            // auto [_, sorted_col] = sort_column_pair(
+            //     inverse_perm->view(),
+            //     table.get_column(col_idx),
+            //     0, -1, gamax::sort_order::ASCENDING, nullptr, 0, stream);
+            auto sorted_col = gamax::util::device::gather(
+                indices->view(), table.get_column(col_idx), stream
+            );
             sorted_columns[col_idx] = std::move(sorted_col);
         }
         
         // For string columns: gather using original sorted indices
-        for (auto col_idx : string_col_indices) {
-            auto col_view = table.get_column(col_idx);
-            gamax::string_column_view str_view(col_view, gamax::ARROW_STRING, stream);
-            sorted_columns[col_idx] = gamax::gather_strings(str_view, indices->view(), stream);
+        // Note: gather_strings expects size_type indices, so we need to convert if RidType is different
+        if (!string_col_indices.empty()) {
+            gamax::column_view indices_for_gather = indices->view();
+            std::unique_ptr<gamax::column> size_type_indices;
+            
+            if constexpr (!std::is_same_v<RidType, gamax::size_type>) {
+                // Convert indices from RidType to size_type for gather_strings
+                size_type_indices = gamax::make_column<gamax::size_type>(num_rows, false, stream);
+                auto* src = indices->template data<RidType>();
+                auto* dst = size_type_indices->template data<gamax::size_type>();
+                thrust::transform(
+                    thrust::cuda::par.on(stream),
+                    src, src + num_rows,
+                    dst,
+                    [] __device__ (RidType val) { return static_cast<gamax::size_type>(val); }
+                );
+                indices_for_gather = size_type_indices->view();
+            }
+            
+            for (auto col_idx : string_col_indices) {
+                auto col_view = table.get_column(col_idx);
+                gamax::string_column_view str_view(col_view, gamax::ARROW_STRING, stream);
+                sorted_columns[col_idx] = gamax::gather_strings(str_view, indices_for_gather, stream);
+            }
         }
         
         return gamax::make_table(std::move(sorted_columns));
+    }
+
+    // Dispatch function that chooses int32 or size_type based on table size
+    std::unique_ptr<gamax::table>
+    sort_multi_key_table(
+        gamax::table_view const& table,
+        std::vector<int> const& sort_keys,
+        std::vector<gamax::sort_order> const& sort_orders,
+        cudaStream_t stream)
+    {
+        if (can_use_int32_rid(table.num_rows())) {
+            return sort_multi_key_table_impl<int32_t>(table, sort_keys, sort_orders, stream);
+        } else {
+            return sort_multi_key_table_impl<gamax::size_type>(table, sort_keys, sort_orders, stream);
+        }
     }
 
 } // namespace

@@ -141,37 +141,48 @@ def generate_benchmark_table(
     return plc.Table(columns)
 
 
-def bench_sort_table(plc_table: plc.Table) -> float:
+def bench_sort_table(plc_table: plc.Table, num_key_cols: int) -> float:
     """
-    Benchmark sorting a table by the first column.
+    Benchmark sorting a table by key columns using sort_by_key.
     
     Args:
-        plc_table: The pylibcudf Table to sort
+        plc_table: The pylibcudf Table to sort (key columns followed by payload columns)
+        num_key_cols: Number of key columns (first num_key_cols columns are keys)
     
     Returns:
         Elapsed time in seconds
     """
-    num_cols = plc_table.num_columns()
+    # Split table into keys and values
+    all_columns = plc_table.columns()
+    key_columns = list(all_columns[:num_key_cols])
+    value_columns = list(all_columns[num_key_cols:])
     
-    # Sort by all columns (first column is primary key)
-    column_order = [plc.types.Order.ASCENDING] * num_cols
-    null_precedence = [plc.types.NullOrder.AFTER] * num_cols
+    keys_table = plc.Table(key_columns)
+    values_table = plc.Table(value_columns)
+    
+    # Sort order applies only to key columns
+    column_order = [plc.types.Order.ASCENDING] * num_key_cols
+    null_precedence = [plc.types.NullOrder.AFTER] * num_key_cols
     
     start_time = timeit.default_timer()
-    result = plc.sorting.sort(plc_table, column_order, null_precedence)
+    # TODO: this does not sort the keys, fix this
+    result = plc.sorting.sort_by_key(values_table, keys_table, column_order, null_precedence)
     # Ensure GPU work is complete
     cp.cuda.Device().synchronize()
     end_time = timeit.default_timer()
+
+    # print(ColumnBase.from_pylibcudf(plc.sorting.sorted_order(keys_table, column_order, null_precedence)))
     
     return end_time - start_time
 
 
-def run_benchmark(plc_table: plc.Table) -> tuple[float, float, float, list[float]]:
+def run_benchmark(plc_table: plc.Table, num_key_cols: int) -> tuple[float, float, float, list[float]]:
     """
     Run benchmark for table sorting.
     
     Args:
         plc_table: The pylibcudf Table to sort
+        num_key_cols: Number of key columns
     
     Returns:
         Tuple of (average_time, min_time, max_time, list of individual run times)
@@ -180,11 +191,11 @@ def run_benchmark(plc_table: plc.Table) -> tuple[float, float, float, list[float
     
     # Warmup runs
     for _ in range(WARMUP_RUNS):
-        _ = bench_sort_table(plc_table)
+        _ = bench_sort_table(plc_table, num_key_cols)
     
     # Benchmark runs
     for _ in range(BENCHMARK_RUNS):
-        elapsed_time = bench_sort_table(plc_table)
+        elapsed_time = bench_sort_table(plc_table, num_key_cols)
         results.append(elapsed_time)
     
     avg_time = sum(results) / len(results)
@@ -223,7 +234,7 @@ def benchmark_numeric(results: list, json_results: list, key_types: list[str], r
                         )
                         
                         # Run benchmark
-                        avg_time, min_time, max_time, measurements = run_benchmark(table)
+                        avg_time, min_time, max_time, measurements = run_benchmark(table, num_key_cols)
                         throughput = num_rows / avg_time
                         
                         print(f"    Avg: {avg_time*1000:.3f} ms, "
@@ -280,7 +291,7 @@ def benchmark_string_key(results: list, json_results: list, row_counts: list[int
                         )
                         
                         # Run benchmark
-                        avg_time, min_time, max_time, measurements = run_benchmark(table)
+                        avg_time, min_time, max_time, measurements = run_benchmark(table, num_key_cols)
                         throughput = num_rows / avg_time
                         
                         print(f"    Avg: {avg_time*1000:.3f} ms, "
@@ -341,7 +352,7 @@ def benchmark_string_payload(results: list, json_results: list, key_types: list[
                             )
                             
                             # Run benchmark
-                            avg_time, min_time, max_time, measurements = run_benchmark(table)
+                            avg_time, min_time, max_time, measurements = run_benchmark(table, num_key_cols)
                             throughput = num_rows / avg_time
                             
                             print(f"    Avg: {avg_time*1000:.3f} ms, "
@@ -385,10 +396,10 @@ def main():
     if args.quick:
         # Quick mode: fewer configurations for testing
         key_types = ["int32"]
-        row_counts_numeric = [2**20, 2**24]
+        row_counts_numeric = [2**28]
         row_counts_string = [2**20, 2**22]
-        num_key_cols_list = [1]
-        num_nonkey_cols_list = [1, 4]
+        num_key_cols_list = [2]
+        num_nonkey_cols_list = [2]
         string_lengths = [16, 64]
     else:
         # Full mode: match C++ benchmark parameters

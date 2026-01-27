@@ -123,11 +123,18 @@ void bench_sort_table_numeric(nvbench::state& state, nvbench::type_list<KeyT>) {
         params.num_rows * (params.num_key_cols + params.num_nonkey_cols),
         "InputElements");
 
+    std::vector<int> key_col_indices;
+    for (int64_t i = 0; i < params.num_key_cols; ++i) {
+        key_col_indices.push_back(static_cast<int>(i));
+    }
+
+    std::vector<gamax::sort_order> sort_orders(params.num_key_cols, gamax::sort_order::ASCENDING);
+
     try {
         state.exec(nvbench::exec_tag::sync,
             [&](nvbench::launch& launch) {
                 auto sorted = gamax::sort::sort_table(
-                    table->view(), 0, gamax::sort_order::ASCENDING, launch.get_stream());
+                    table->view(), key_col_indices, sort_orders, launch.get_stream());
                 cudaStreamSynchronize(launch.get_stream());
             });
     } catch (const std::exception& e) {
@@ -221,7 +228,7 @@ NVBENCH_BENCH_TYPES(bench_sort_table_numeric,
     NVBENCH_TYPE_AXES(nvbench::type_list<int32_t, int64_t>))
     .set_name("sort_table_numeric")
     .set_type_axes_names({"KeyType"})
-    .add_int64_power_of_two_axis("num_rows", nvbench::range(16, 28, 2))
+    .add_int64_power_of_two_axis("num_rows", nvbench::range(26, 28, 1))
     .add_int64_axis("num_key_cols", {1, 2, 4})
     .add_int64_axis("num_nonkey_cols", {1, 4, 8});
 
