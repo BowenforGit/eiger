@@ -35,6 +35,7 @@ set(benchmarkSources
     misc/hash_fn_nvbench.cu
     misc/gather_nvbench.cu
     misc/read_write_nvbench.cu
+    stats/stats_nvbench.cu
 )
 
 foreach(source IN LISTS benchmarkSources)
