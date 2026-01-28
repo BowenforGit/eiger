@@ -97,7 +97,7 @@ struct compute_key_fusion_info_functor {
     
     template<typename T, typename std::enable_if_t<std::is_integral_v<T>, int> = 0>
     void operator()() const {
-        constexpr int kDictEncodeBitSavingsThreshold = sizeof(T) * 8 / 2;  // Half the bits of original type
+        constexpr int kDictEncodeBitSavingsThreshold = sizeof(T) * 8 * 2 / 3; 
 
         // Compute min and max
         gamax::scalar min_scalar = gamax::stats::compute_min(column, stream);

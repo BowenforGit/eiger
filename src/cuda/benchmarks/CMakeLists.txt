@@ -27,6 +27,7 @@ set(benchmarkSources
     containers/map_nvbench.cu
     sort/sort_nvbench.cu
     sort/sort_table_nvbench.cu
+    sort/sort_table_fused_key_nvbench.cu
     select/select_fast_nvbench.cu
     select/select_handwritten_nvbench.cu
     string/string_nvbench.cu
