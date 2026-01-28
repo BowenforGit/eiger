@@ -22,7 +22,7 @@ set(testSources
 
 if(USE_NVIDIA)
     list(APPEND testSources
-        # groupby/groupby_partition_test.cu
+        groupby/groupby_partition_test.cu
         compress/dictionary_encode_test.cu
         join/ieq_join_test.cu
         join/semi_join_test.cu

@@ -4,7 +4,8 @@
 #include <cuda.h>
 #include <type_traits>
 #include <thrust/iterator/permutation_iterator.h>
-#include <cuco/static_map.cuh>
+#include <cuco/static_set.cuh>
+#include <cuco/bucket_storage.cuh>
 
 #include "utils/utils.cuh"
 #include "memory/column.hpp"
@@ -23,17 +24,35 @@ namespace gamax::groupby::partition {
 namespace {
 
 constexpr auto cg_size = 1;
-constexpr auto window_size = 1;
-constexpr auto numWindows = 4096;
-auto constexpr num_windows = cuco::make_window_extent<cg_size, window_size>(cuco::extent<gamax::size_type, numWindows>{});
+constexpr auto bucket_size = 1;
+constexpr std::size_t num_slots = 4096;
 
 using namespace gamax::groupby::details;
 
+// Custom hash functor that hashes only the first element of a pair
+template <typename Key>
+struct key_first_hash {
+    using slot_type = cuco::pair<Key, gamax::size_type>;
+    __host__ __device__ auto operator()(slot_type const& p) const noexcept {
+        return cuco::default_hash_function<Key>{}(p.first);
+    }
+};
+
+// Custom equality functor that compares only the first element of a pair
+template <typename Key>
+struct key_first_equal {
+    using slot_type = cuco::pair<Key, gamax::size_type>;
+    template <typename LHS, typename RHS>
+    __host__ __device__ bool operator()(LHS const& lhs, RHS const& rhs) const noexcept {
+        return lhs.first == rhs.first;
+    }
+};
+
 template<typename Key, 
-         std::size_t NumWindows, 
+         std::size_t NumSlots, 
          typename IdxIt,
-         int cg_size = 1,
-         int window_size = 1>
+         int CgSize = 1,
+         int BucketSize = 1>
 __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
                                             gamax::experimental::table_device_view values, 
                                             IdxIt val_idx,
@@ -51,15 +70,15 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
 
     using Value     = gamax::size_type; // tuple id
     using slot_type = cuco::pair<Key, Value>;
-    using extent_type      = cuco::extent<std::size_t, NumWindows>;
-    using storage_ref_type = cuco::aow_storage_ref<slot_type, window_size, extent_type>;
+    using extent_type      = cuco::extent<std::size_t, NumSlots>;
+    using storage_ref_type = cuco::bucket_storage_ref<slot_type, BucketSize, extent_type>;
 
     extern __shared__ int16_t temp[];
-    auto map = reinterpret_cast<cuco::window<slot_type, window_size>*>(temp);
+    auto shared_slots = reinterpret_cast<slot_type*>(temp);
     struct {
         gamax::size_type num_groups_local;
         gamax::size_type block_offset;
-    } *u = reinterpret_cast<decltype(u)>(map+NumWindows);
+    } *u = reinterpret_cast<decltype(u)>(shared_slots + NumSlots);
     
     auto group_loc = group_id;
 
@@ -72,16 +91,18 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
         const auto ustart = units_start[i];
         const auto uend = units_end[i];
 
+        // Create empty sentinel pair - both key and value use sentinel values
+        constexpr slot_type empty_sentinel{gamax::sentinel<Key>(), gamax::sentinel<Value>()};
+        
         auto raw_ref =
-            cuco::static_map_ref{cuco::empty_key<Key>{gamax::sentinel<Key>()}, // TODO: reconsider the sentinel value
-                                cuco::empty_value<Value>{gamax::sentinel<Value>()},
-                                thrust::equal_to<Key>{},
-                                cuco::linear_probing<cg_size, cuco::default_hash_function<Key>>{}, // the hash computation is actually not a bottleneck here
-                                cuco::thread_scope_block,
-                                storage_ref_type{extent_type{}, map}};
+            cuco::static_set_ref{cuco::empty_key<slot_type>{empty_sentinel},
+                                key_first_equal<Key>{},
+                                cuco::linear_probing<CgSize, key_first_hash<Key>>{},
+                                cuco::cuda_thread_scope<cuda::thread_scope_block>{},
+                                storage_ref_type{extent_type{}, shared_slots}};
         raw_ref.initialize(block);
 
-        auto insert_and_find_ref = std::move(raw_ref).with(cuco::op::insert_and_find);
+        auto insert_and_find_ref = raw_ref.rebind_operators(cuco::op::insert_and_find);
 
         #pragma unroll
         for(gamax::size_type t = block.thread_rank(); t < uend - ustart; t += block.size()) {
@@ -197,7 +218,7 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
     }
 }
 
-template<typename Key, int window_size, int numWindows, typename Itr>
+template<typename Key, int BucketSize, std::size_t NumSlots, typename Itr>
 std::unique_ptr<gamax::table> compute_aggregate(
     gamax::column_view partitioned_key,
     const gamax::size_type estimated_num_groups,
@@ -260,7 +281,7 @@ std::unique_ptr<gamax::table> compute_aggregate(
     auto val_view = val.device_view(stream);
     initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *agg_res_device_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
     
-    std::size_t sm_bytes = numWindows * sizeof(cuco::window<cuco::pair<Key, gamax::size_type>, window_size>) + sizeof(gamax::size_type)*2;
+    std::size_t sm_bytes = num_slots * sizeof(cuco::pair<Key, gamax::size_type>) + sizeof(gamax::size_type)*2;
     if(estimated_num_groups / num_partitions <= 256) {
         std::size_t agg_bytes = 0;
         for(gamax::size_type i = 1; i < res->num_columns(); i++) {
@@ -269,7 +290,7 @@ std::unique_ptr<gamax::table> compute_aggregate(
         sm_bytes = std::max(agg_bytes * 256, sm_bytes);
     }
     // std::cout << "sm_bytes: " << sm_bytes << std::endl; 
-    auto agg_fn = partition_groupby_aggregate_kernel<Key, numWindows, decltype(itr)>;
+    auto agg_fn = partition_groupby_aggregate_kernel<Key, NumSlots, decltype(itr)>;
     if(sm_bytes > 48*1024) {
         CHECK_CUDA_ERROR(cudaFuncSetAttribute(agg_fn, cudaFuncAttributeMaxDynamicSharedMemorySize, sm_bytes));
     }
@@ -300,7 +321,7 @@ std::unique_ptr<gamax::table> compute_aggregate(
     return res;
 }
 
-template<int window_size, int numWindows, bool kUseGFUR = false>
+template<int BucketSize, std::size_t NumSlots, bool kUseGFUR = false>
 struct partition_groupby_impl {
     template<typename Key, typename std::enable_if_t<!std::is_integral<Key>::value, int> = 0>
     std::unique_ptr<gamax::table> operator()(
@@ -323,13 +344,13 @@ struct partition_groupby_impl {
     {
         gamax::size_type estimated_num_groups = std::min(key.num_rows(), hint.groups_upper_bound);
         
-        // int log_num_partitions = (estimated_num_groups * 8 / (1 << 8) > numWindows) ? 16 : 8;
+        // int log_num_partitions = (estimated_num_groups * 8 / (1 << 8) > NumSlots) ? 16 : 8;
         int log_num_partitions = 16;
 
         if constexpr (kUseGFUR) {
             auto [partitioned_key, permutation_idx] = gamax::partition::arg_partition(key.get_column(0), 0, log_num_partitions, nullptr, 0, stream);
 
-            return compute_aggregate<Key, window_size, numWindows>(
+            return compute_aggregate<Key, BucketSize, NumSlots>(
                 partitioned_key->view(), 
                 estimated_num_groups, 
                 log_num_partitions, 
@@ -348,7 +369,7 @@ struct partition_groupby_impl {
             }
             auto partitioned_val = std::make_unique<gamax::table>(std::move(partitioned_val_cols));
             
-            return compute_aggregate<Key, window_size, numWindows>(
+            return compute_aggregate<Key, BucketSize, NumSlots>(
                 partitioned_key->view(), 
                 estimated_num_groups, 
                 log_num_partitions, 
@@ -371,7 +392,7 @@ std::unique_ptr<gamax::table> groupby(
 {   
     return type_dispatcher(
         key.get_column(0).type(),
-        partition_groupby_impl<window_size, num_windows.value(), false>{},
+        partition_groupby_impl<bucket_size, num_slots, false>{},
         key, val, agg_requests, hint, stream);
 }
 
@@ -384,7 +405,7 @@ std::unique_ptr<gamax::table> groupby_gfur(
 {   
     return type_dispatcher(
         key.get_column(0).type(),
-        partition_groupby_impl<window_size, num_windows.value(), true>{},
+        partition_groupby_impl<bucket_size, num_slots, true>{},
         key, val, agg_requests, hint, stream);
 }
 } // namespace gamax::groupby::partition
