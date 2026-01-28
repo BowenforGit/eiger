@@ -74,11 +74,24 @@ argsort(
     size_t temp_storage_bytes = 0,
     cudaStream_t stream = 0);
 
+
+struct sort_table_options {
+    bool smart_keys_fusion {false};
+};
+
 std::unique_ptr<gamax::table>
 sort_table(
     gamax::table_view const& table,
     std::vector<int> const& sort_keys,
     std::vector<gamax::sort_order> const& sort_orders,
+    cudaStream_t stream = 0);
+
+std::unique_ptr<gamax::table>
+sort_table(
+    gamax::table_view const& table,
+    std::vector<int> const& sort_keys,
+    std::vector<gamax::sort_order> const& sort_orders,
+    sort_table_options const& options,
     cudaStream_t stream = 0);
 
 std::unique_ptr<gamax::table>

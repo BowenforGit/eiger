@@ -44,6 +44,7 @@ set(srcs
     operators/groupby/aggregate.cu
     operators/sort/sort.cu
     operators/sort/sort_table.cu
+    operators/sort/sort_table_fused_key.cu
     operators/partition/partition.cu
     compress/dictionary_encode_dict_ready.cu
     memory/column.cu

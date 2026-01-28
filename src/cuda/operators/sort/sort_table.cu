@@ -13,6 +13,7 @@
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
 #include "operators/sort/sort.hpp"
+#include "operators/sort/sort_helpers.cuh"
 #include "memory/column.hpp"
 #include "memory/mem_manager.hpp"
 #include "memory/table.hpp"
@@ -31,24 +32,6 @@ namespace {
     __host__ __forceinline__
     constexpr bool can_use_int32_rid(gamax::size_type num_rows) {
         return num_rows <= static_cast<gamax::size_type>(std::numeric_limits<int32_t>::max());
-    }
-
-    // =========================================================================
-    // Helper: Create empty table with same schema
-    // =========================================================================
-    std::unique_ptr<gamax::table>
-    make_empty_table_like(gamax::table_view const& table, cudaStream_t stream)
-    {
-        std::vector<std::unique_ptr<gamax::column>> empty_columns;
-        const auto num_cols = table.num_columns();
-        for (gamax::size_type i = 0; i < num_cols; ++i) {
-            if (table.get_column(i).type().id() == gamax::type_id::STRING) {
-                empty_columns.push_back(std::make_unique<gamax::string_column>());
-            } else {
-                empty_columns.push_back(gamax::make_column(table.get_column(i).type(), 0, false, stream));
-            }
-        }
-        return gamax::make_table(std::move(empty_columns));
     }
 
     // =========================================================================
@@ -93,7 +76,7 @@ namespace {
         const auto num_rows = table.num_rows();
         
         if (num_rows == 0) {
-            return make_empty_table_like(table, stream);
+            return detail::make_empty_table_like(table, stream);
         }
 
         auto sort_key_col = table.get_column(sort_key_index);
@@ -176,7 +159,7 @@ namespace {
         const auto num_rows = table.num_rows();
         
         if (num_rows == 0) {
-            return make_empty_table_like(table, stream);
+            return detail::make_empty_table_like(table, stream);
         }
         
         auto sort_key_col_view = table.get_column(sort_key_index);
@@ -362,7 +345,7 @@ namespace {
         const auto num_keys = static_cast<int>(sort_keys.size());
         
         if (num_rows == 0) {
-            return make_empty_table_like(table, stream);
+            return detail::make_empty_table_like(table, stream);
         }
         
         if (num_keys > MAX_SORT_KEYS) {
