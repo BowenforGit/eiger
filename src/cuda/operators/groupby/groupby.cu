@@ -16,6 +16,7 @@
 #include "operators/groupby/groupby_sort.hpp"
 #include "operators/groupby/groupby_hash.hpp"
 #include "operators/groupby/groupby_partition.hpp"
+#include "stats/stats_compute.hpp"
 
 namespace gamax::groupby {
 
@@ -59,6 +60,29 @@ void compute_avg_from_sum(
         count_col,
         avg_col,
         stream);
+}
+
+void auto_select_groupby_algo(
+    gamax::table_view key, 
+    gamax::groupby::groupby_hint& hint,
+    cudaStream_t stream)
+{
+    if(hint.groupby_algo != gamax::groupby::AUTO_ALGO || key.num_columns() != 1) {
+        // Currently, only auto-select for single-column keys
+        return;
+    }
+
+    auto est_groups = gamax::stats::compute_ndv_approx(
+        key.get_column(0),
+        stream).get<gamax::size_type>();
+    
+    est_groups = std::min(est_groups, hint.groups_upper_bound);
+    
+    if(est_groups < (static_cast<gamax::size_type>(1) << 20)) {
+        hint.groupby_algo = gamax::groupby::HASH;
+    } else {
+        hint.groupby_algo = gamax::groupby::SORT;
+    }
 }
 
 } // anonymous namespace
