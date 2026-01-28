@@ -69,8 +69,8 @@ void test_dictionary_encode(const gamax::size_type num_items, const gamax::size_
 
     auto res = 
         gamax::compress::dictionary_encode(
-            *keys, 
-            *dict, 
+            keys->view(), 
+            dict->view(), 
             gamax::data_type{gamax::type_to_id<Encode>()});
     cudaDeviceSynchronize();
 

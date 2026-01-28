@@ -72,7 +72,7 @@ void bench_dict_ready_dict_enc(nvbench::state& state, nvbench::type_list<Key, En
     state.set_cuda_stream(nvbench::make_cuda_stream_view(cudaStreamDefault));
     state.exec(nvbench::exec_tag::sync,
              [&](nvbench::launch& launch) { 
-                auto res = gamax::compress::dictionary_encode(*keys, *dict, gamax::data_type{gamax::type_to_id<Encode>()}, launch.get_stream());
+                auto res = gamax::compress::dictionary_encode(keys->view(), dict->view(), gamax::data_type{gamax::type_to_id<Encode>()}, launch.get_stream());
     });
 }
 
