@@ -4,10 +4,11 @@
 #include <cuda.h>
 #include <type_traits>
 #include <thrust/iterator/permutation_iterator.h>
-#include <cuco/static_set.cuh>
+#include <cuco/static_map.cuh>
 #include <cuco/bucket_storage.cuh>
 
 #include "utils/utils.cuh"
+#include "atomics/atomics.cuh"
 #include "memory/column.hpp"
 #include "memory/table.hpp"
 #include "memory/table_device_view.hpp"
@@ -28,25 +29,6 @@ constexpr auto bucket_size = 1;
 constexpr std::size_t num_slots = 4096;
 
 using namespace gamax::groupby::details;
-
-// Custom hash functor that hashes only the first element of a pair
-template <typename Key>
-struct key_first_hash {
-    using slot_type = cuco::pair<Key, gamax::size_type>;
-    __host__ __device__ auto operator()(slot_type const& p) const noexcept {
-        return cuco::default_hash_function<Key>{}(p.first);
-    }
-};
-
-// Custom equality functor that compares only the first element of a pair
-template <typename Key>
-struct key_first_equal {
-    using slot_type = cuco::pair<Key, gamax::size_type>;
-    template <typename LHS, typename RHS>
-    __host__ __device__ bool operator()(LHS const& lhs, RHS const& rhs) const noexcept {
-        return lhs.first == rhs.first;
-    }
-};
 
 template<typename Key, 
          std::size_t NumSlots, 
@@ -91,13 +73,13 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
         const auto ustart = units_start[i];
         const auto uend = units_end[i];
 
-        // Create empty sentinel pair - both key and value use sentinel values
-        constexpr slot_type empty_sentinel{gamax::sentinel<Key>(), gamax::sentinel<Value>()};
+        // Create empty sentinels for key and value separately
         
         auto raw_ref =
-            cuco::static_set_ref{cuco::empty_key<slot_type>{empty_sentinel},
-                                key_first_equal<Key>{},
-                                cuco::linear_probing<CgSize, key_first_hash<Key>>{},
+            cuco::static_map_ref{cuco::empty_key<Key>{gamax::sentinel<Key>()},
+                                cuco::empty_value<Value>{gamax::sentinel<Value>()},
+                                cuda::std::equal_to<Key>{},
+                                cuco::linear_probing<CgSize, cuco::default_hash_function<Key>>{},
                                 cuco::cuda_thread_scope<cuda::thread_scope_block>{},
                                 storage_ref_type{extent_type{}, shared_slots}};
         raw_ref.initialize(block);
@@ -109,7 +91,7 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
             auto idx = t+ustart;
             auto [slot, is_new_key] = insert_and_find_ref.insert_and_find(cuco::pair{key_arr[idx], idx});
             if(is_new_key) {
-                auto t_group_id = atomicAdd(&(u->num_groups_local), 1); // block-scope group id
+                auto t_group_id = gamax::atomic::atomic_add(&(u->num_groups_local), gamax::size_type{1}); // block-scope group id
                 group_id[idx] = (groupid_write_mask | t_group_id); // flag that his is a group id not a location
             } else {
                 group_loc[idx] = slot->second;
@@ -118,7 +100,7 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
         block.sync();
 
         if(block.thread_rank() == 0) {
-            u->block_offset = atomicAdd(num_groups, u->num_groups_local);
+            u->block_offset = gamax::atomic::atomic_add(num_groups, u->num_groups_local);
         }
         block.sync();
 
