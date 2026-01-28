@@ -27,7 +27,7 @@ namespace {
 
 // Minimum bit savings required before considering dictionary encoding.
 // If ceil(log2(NDV)) < original_bits - this threshold, use dictionary.
-constexpr int kDictEncodeBitSavingsThreshold = 8;
+// constexpr int kDictEncodeBitSavingsThreshold = 8;
 
 // Maximum total bits we can fuse into a single key (uint64_t)
 constexpr int kMaxFusedKeyBits = 64;
@@ -97,6 +97,8 @@ struct compute_key_fusion_info_functor {
     
     template<typename T, typename std::enable_if_t<std::is_integral_v<T>, int> = 0>
     void operator()() const {
+        constexpr int kDictEncodeBitSavingsThreshold = sizeof(T) * 8 / 2;  // Half the bits of original type
+
         // Compute min and max
         gamax::scalar min_scalar = gamax::stats::compute_min(column, stream);
         gamax::scalar max_scalar = gamax::stats::compute_max(column, stream);
@@ -269,15 +271,8 @@ sort_table_fused_keys(
         
         // Apply dictionary encoding if beneficial
         if (use_dict) {
-            // Need to get the actual column for dictionary encoding
-            // Dictionary encode expects column reference, so we create a temporary
-            auto temp_col = gamax::make_column(col.type(), col.size(), false, stream);
-            cudaMemcpyAsync(temp_col->data<void>(), col.data<void>(), 
-                          col.size() * gamax::size_of(col.type()),
-                          cudaMemcpyDeviceToDevice, stream);
-            
-            auto [encoded_col, dict_size] = gamax::compress::dictionary_encode(
-                *temp_col, gamax::data_type{gamax::type_id::INT32}, ndv, 0.25, stream);
+            auto [encoded_col, dict_size] = gamax::compress::dictionary_encode_with_order(
+                col, gamax::data_type{gamax::type_id::INT32}, ndv, 0.25, stream);
             
             // Update fusion info to use encoded column
             data_ptr = encoded_col->data<void>();
@@ -315,6 +310,19 @@ sort_table_fused_keys(
         current_shift -= host_key_infos[k].bit_width;
         host_key_infos[k].bit_shift = current_shift;
     }
+
+#ifdef DEBUG
+    // Debug: Print fusion info
+    for (int k = 0; k < num_keys; ++k) {
+        printf("Key %d: type=%d, bits=%d, shift=%d, min=%llu, desc=%d\n",
+            k, static_cast<int>(host_key_infos[k].type),
+            host_key_infos[k].bit_width,
+            host_key_infos[k].bit_shift,
+            static_cast<unsigned long long>(host_key_infos[k].min_value),
+            host_key_infos[k].is_descending);
+    }
+    printf("Total fused key bits: %d\n", total_bits);
+#endif
     
     // Step 3: Copy KeyFusionInfo array to device
     KeyFusionInfo* d_key_infos = nullptr;
