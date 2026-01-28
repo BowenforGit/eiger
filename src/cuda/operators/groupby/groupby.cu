@@ -190,6 +190,12 @@ std::unique_ptr<gamax::table> groupby(
         case gamax::groupby::SORT_GFUR:
             internal_result = gamax::groupby::sort::groupby_gfur(key, extended_val, internal_agg_requests, hint, stream);
             break;
+        case gamax::groupby::PARTITION:
+            internal_result = gamax::groupby::partition::groupby(key, extended_val, internal_agg_requests, hint, stream);
+            break;
+        case gamax::groupby::PARTITION_GFUR:
+            internal_result = gamax::groupby::partition::groupby_gfur(key, extended_val, internal_agg_requests, hint, stream);
+            break;
         case gamax::groupby::HASH:
             internal_result = gamax::groupby::hash::groupby(key, extended_val, internal_agg_requests, hint, stream);
             break;

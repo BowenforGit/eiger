@@ -6,6 +6,7 @@
 #include "utils/utils.cuh"
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
+#include "atomics/atomics.cuh"
 
 namespace gamax {
 namespace groupby {
@@ -26,7 +27,7 @@ __global__ void generate_workunits_kernel(const IdxT* membership_ps,
         for(gamax::size_type j = 0; j < num_work_units; j++) {
             IdxT unit_start = j*threshold;
             IdxT unit_end = min((j+1)*threshold, num_items);
-            gamax::size_type idx = atomicAdd(num_units, 1);
+            gamax::size_type idx = gamax::atomic::atomic_add(num_units, gamax::size_type{1});
             units_start[idx] = start+unit_start;
             units_end[idx] = start+unit_end;
             units_group[idx] = i;
