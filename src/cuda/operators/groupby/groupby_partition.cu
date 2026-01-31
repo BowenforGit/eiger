@@ -4,7 +4,7 @@
 #include <cuda.h>
 #include <type_traits>
 #include <thrust/iterator/permutation_iterator.h>
-#include <cuco/static_map.cuh>
+#include <cuco/static_set.cuh>
 #include <cuco/bucket_storage.cuh>
 
 #include "utils/utils.cuh"
@@ -30,6 +30,26 @@ constexpr std::size_t num_slots = 4096;
 
 using namespace gamax::groupby::details;
 
+// Custom hasher for index-based static_set: hashes the actual key value at the given index
+template<typename Key>
+struct partition_key_hasher {
+    const Key* keys;
+    
+    __device__ auto operator()(gamax::size_type idx) const {
+        return cuco::default_hash_function<Key>{}(keys[idx]);
+    }
+};
+
+// Custom equality for index-based static_set: compares actual key values at given indices
+template<typename Key>
+struct partition_key_equal {
+    const Key* keys;
+    
+    __device__ bool operator()(gamax::size_type lhs, gamax::size_type rhs) const {
+        return keys[lhs] == keys[rhs];
+    }
+};
+
 template<typename Key, 
          std::size_t NumSlots, 
          typename IdxIt,
@@ -50,8 +70,8 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
     constexpr gamax::size_type groupid_write_mask = 0x80000000;
     constexpr gamax::size_type groupid_read_mask = 0x7FFFFFFF;
 
-    using Value     = gamax::size_type; // tuple id
-    using slot_type = cuco::pair<Key, Value>;
+    // Now we store row indices instead of (Key, Value) pairs - halves slot memory footprint
+    using slot_type = gamax::size_type;
     using extent_type      = cuco::extent<std::size_t, NumSlots>;
     using storage_ref_type = cuco::bucket_storage_ref<slot_type, BucketSize, extent_type>;
 
@@ -60,6 +80,7 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
     struct {
         gamax::size_type num_groups_local;
         gamax::size_type block_offset;
+        const Key* key_ptr;  // Store key array pointer in shared memory for functors
     } *u = reinterpret_cast<decltype(u)>(shared_slots + NumSlots);
     
     auto group_loc = group_id;
@@ -69,17 +90,20 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
     auto const block = cooperative_groups::this_thread_block();
     
     for(gamax::size_type i = blockIdx.x; i < num_units; i += gridDim.x) {
-        if(block.thread_rank() == 0) u->num_groups_local = 0;
+        if(block.thread_rank() == 0) {
+            u->num_groups_local = 0;
+            u->key_ptr = key_arr;  // Store key pointer in shared memory
+        }
+        block.sync();  // Ensure key_ptr is visible to all threads
+        
         const auto ustart = units_start[i];
         const auto uend = units_end[i];
 
-        // Create empty sentinels for key and value separately
-        
+        // Create static_set with index-based hashing and equality using key pointer from shared memory
         auto raw_ref =
-            cuco::static_map_ref{cuco::empty_key<Key>{gamax::sentinel<Key>()},
-                                cuco::empty_value<Value>{gamax::sentinel<Value>()},
-                                cuda::std::equal_to<Key>{},
-                                cuco::linear_probing<CgSize, cuco::default_hash_function<Key>>{},
+            cuco::static_set_ref{cuco::empty_key<gamax::size_type>{gamax::sentinel<gamax::size_type>()},
+                                partition_key_equal<Key>{u->key_ptr},
+                                cuco::linear_probing<CgSize, partition_key_hasher<Key>>{partition_key_hasher<Key>{u->key_ptr}},
                                 cuco::cuda_thread_scope<cuda::thread_scope_block>{},
                                 storage_ref_type{extent_type{}, shared_slots}};
         raw_ref.initialize(block);
@@ -89,12 +113,13 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
         #pragma unroll
         for(gamax::size_type t = block.thread_rank(); t < uend - ustart; t += block.size()) {
             auto idx = t+ustart;
-            auto [slot, is_new_key] = insert_and_find_ref.insert_and_find(cuco::pair{key_arr[idx], idx});
+            // Insert the row index; the custom hasher/equal handle key comparison via indirection
+            auto [iter, is_new_key] = insert_and_find_ref.insert_and_find(idx);
             if(is_new_key) {
                 auto t_group_id = gamax::atomic::atomic_add(&(u->num_groups_local), gamax::size_type{1}); // block-scope group id
-                group_id[idx] = (groupid_write_mask | t_group_id); // flag that his is a group id not a location
+                group_id[idx] = (groupid_write_mask | t_group_id); // flag that this is a group id not a location
             } else {
-                group_loc[idx] = slot->second;
+                group_loc[idx] = *iter;  // Dereference iterator to get the representative row index
             }
         }
         block.sync();
@@ -263,7 +288,9 @@ std::unique_ptr<gamax::table> compute_aggregate(
     auto val_view = val.device_view(stream);
     initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *agg_res_device_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
     
-    std::size_t sm_bytes = num_slots * sizeof(cuco::pair<Key, gamax::size_type>) + sizeof(gamax::size_type)*2;
+    // Slot type is now just gamax::size_type (row index), not pair<Key, Value>
+    // Add space for the extended u struct (num_groups_local, block_offset, key_ptr)
+    std::size_t sm_bytes = num_slots * sizeof(gamax::size_type) + sizeof(gamax::size_type)*2 + sizeof(const Key*);
     if(estimated_num_groups / num_partitions <= 256) {
         std::size_t agg_bytes = 0;
         for(gamax::size_type i = 1; i < res->num_columns(); i++) {
@@ -277,8 +304,8 @@ std::unique_ptr<gamax::table> compute_aggregate(
         CHECK_CUDA_ERROR(cudaFuncSetAttribute(agg_fn, cudaFuncAttributeMaxDynamicSharedMemorySize, sm_bytes));
     }
 
-    auto group_id = gamax::make_idx_column(input_num_rows, false);
-    auto d_num_groups = gamax::make_idx_column(1, true);
+    auto group_id = gamax::make_idx_column(input_num_rows, false, stream);
+    auto d_num_groups = gamax::make_idx_column(1, true, stream);
     // the grid size and block size given by cudaOccupancyMaxPotentialBlockSize 
     // do not work very well for this kernel
     agg_fn<<<num_units, 768, sm_bytes, stream>>>(
@@ -296,9 +323,10 @@ std::unique_ptr<gamax::table> compute_aggregate(
     
     gamax::size_type num_groups;
     cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
-    res->set_rows(num_groups);
     
     cudaStreamSynchronize(stream);
+    
+    res->set_rows(num_groups);
 
     return res;
 }
@@ -346,7 +374,7 @@ struct partition_groupby_impl {
             std::vector<std::unique_ptr<gamax::column>> partitioned_val_cols;
             std::unique_ptr<gamax::column> pval_temp {nullptr};
             for(gamax::size_type i = 0; i < val.num_columns(); i++) {
-                std::tie(partitioned_key, pval_temp) = gamax::partition::partition_column_pair(key.get_column(0), val.get_column(i), 0, log_num_partitions, stream);
+                std::tie(partitioned_key, pval_temp) = gamax::partition::partition_column_pair(key.get_column(0), val.get_column(i), 0, log_num_partitions, nullptr, 0, stream);
                 partitioned_val_cols.push_back(std::move(pval_temp));
             }
             auto partitioned_val = std::make_unique<gamax::table>(std::move(partitioned_val_cols));
