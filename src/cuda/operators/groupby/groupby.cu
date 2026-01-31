@@ -76,12 +76,21 @@ void auto_select_groupby_algo(
         key.get_column(0),
         stream).get<gamax::size_type>();
     
-    est_groups = std::min(est_groups, hint.groups_upper_bound);
-    
-    if(est_groups < (static_cast<gamax::size_type>(1) << 20)) {
-        hint.groupby_algo = gamax::groupby::HASH;
+
+    bool is_4_byte_key = (gamax::size_of(key.get_column(0).type()) == 4);
+
+    if(is_4_byte_key) {
+        if(est_groups <= (static_cast<gamax::size_type>(1) << 14)) {
+            hint.groupby_algo = gamax::groupby::HASH;
+        } else {
+            hint.groupby_algo = gamax::groupby::PARTITION;
+        }
     } else {
-        hint.groupby_algo = gamax::groupby::SORT;
+        if(est_groups <= (static_cast<gamax::size_type>(1) << 18)) {
+            hint.groupby_algo = gamax::groupby::HASH;
+        } else {
+            hint.groupby_algo = gamax::groupby::PARTITION;
+        }
     }
 }
 
@@ -180,10 +189,11 @@ std::unique_ptr<gamax::table> groupby(
     // Create extended val table view
     gamax::table_view extended_val = needs_count ? gamax::table_view(extended_val_cols) : val;
     
+    auto_select_groupby_algo(key, hint, stream);
+
     // Execute the internal groupby
     std::unique_ptr<gamax::table> internal_result;
     switch (hint.groupby_algo) {
-        case gamax::groupby::AUTO_ALGO:
         case gamax::groupby::SORT:
             internal_result = gamax::groupby::sort::groupby(key, extended_val, internal_agg_requests, hint, stream);
             break;

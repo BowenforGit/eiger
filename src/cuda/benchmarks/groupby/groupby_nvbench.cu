@@ -83,7 +83,10 @@ void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
         hint.groupby_algo = gamax::groupby::groupby_algo::PARTITION;
     } else if(algo == "partition_gfur") {
         hint.groupby_algo = gamax::groupby::groupby_algo::PARTITION_GFUR;
-    } else {
+    } else if(algo == "auto") {
+        hint.groupby_algo = gamax::groupby::groupby_algo::AUTO_ALGO;
+    }
+    else {
         throw std::runtime_error("Unsupported groupby algo: " + algo);
     }
 
@@ -114,7 +117,7 @@ NVBENCH_BENCH_TYPES(bench_groupby_max,
                     NVBENCH_TYPE_AXES(nvbench::type_list<int32_t, int64_t>))
   .set_name("groupby_max")
   .set_type_axes_names({"Key"})
-  .add_string_axis("algo", {"sort", "sort_opt", "sort_gfur", "hash", "partition", "partition_gfur"})
+  .add_string_axis("algo", {"sort", "sort_opt", "sort_gfur", "hash", "partition", "partition_gfur", "auto"})
   .add_int64_power_of_two_axis("num_items", {28, 29})
   .add_int64_power_of_two_axis("num_groups", nvbench::range(2, 26, 2))
   .add_int64_axis("num_aggs", {1, 2, 4})
