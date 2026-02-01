@@ -3,11 +3,15 @@ import os
 import matplotlib
 from matplotlib import pyplot as plt
 import json
+from collections.abc import Callable
 
 matplotlib.rcParams['pdf.fonttype'] = 42
 matplotlib.rcParams['ps.fonttype'] = 42
 
-def json_to_df(path_to_json: str, fn: callable = None):
+which_cudf_stats = os.getenv("CUDF_RESULTS_STATS", "min")
+print(f"Using CUDF_RESULTS_STATS={which_cudf_stats} for cuDF results")
+
+def json_to_df(path_to_json: str, fn: Callable | None = None):
     if fn is None:
         fn = lambda x: x
     
@@ -72,14 +76,12 @@ def dict_to_str(d):
 def create_plot(figsize, dim=(1, 1)):
     return plt.subplots(dim[0], dim[1], figsize=figsize)
 
-def latest_result_file(prefix_path):
+def latest_result_file(prefix_path, suffix="csv"):
     dir_path = os.path.dirname(prefix_path)
     base_name = os.path.basename(prefix_path)
-    print(dir_path, base_name)
     candidates = []
     for file in os.listdir(dir_path):
-        print(file)
-        if file.startswith(base_name):
+        if file.startswith(base_name) and file.endswith(f".{suffix}"):
             candidates.append(file)
     
     if not candidates:

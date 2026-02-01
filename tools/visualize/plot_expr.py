@@ -27,7 +27,7 @@ def read_cudf_results(path, **constants):
     df = pd.read_csv(path)
     for k, v in constants.items():
         df[k] = v
-    df['time (ms)'] = df['avg_time_s'] * 1e3
+    df['time (ms)'] = df[f'{which_cudf_stats}_time_s'] * 1e3
     df['algo'] = "cuDF"
     df['expr_label'] = df['expr_type'].map(expr_label_map)
     return df
@@ -38,10 +38,22 @@ def plot_time_vs_expr(df_in, **params):
         df, 
         **params, 
         must_have_attr=["num_items", "KeyType"])
+
+    print(params)
+    pivoted_df = df.pivot_table(
+        index=['expr_label'],
+        columns='algo', 
+        values='time (ms)', 
+        aggfunc='mean').reset_index()
+    pivoted_df['PTI vs cuDF'] = pivoted_df['cuDF'] / pivoted_df['PTI']
+    pivoted_df['BB vs cuDF'] = pivoted_df['cuDF'] / pivoted_df['BB']
+    print(pivoted_df)
+
     
     fig, ax = create_plot((5,5))
     ax = sns.barplot(data=df, x='expr_label', y='time (ms)', hue="algo",  ax=ax)
-    ax.legend(title="", loc='best')
+    ax.legend(title="", loc='upper left')
+    ax.grid(True, which='both', axis='y', linestyle=':', alpha=0.75, zorder=0)
     adjust_ax(
         ax, 
         fontsize=24, 

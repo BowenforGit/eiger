@@ -16,3 +16,4 @@ tools/results
 __pycache__/
 nsight-compute-lock
 error.txt
+core_*

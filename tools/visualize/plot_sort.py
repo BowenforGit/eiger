@@ -25,9 +25,8 @@ def read_cudf_results(path, **constants):
     df = pd.read_csv(path)
     for k, v in constants.items():
         df[k] = v
-    
-    # cudf csv has avg_time (in seconds based on values)
-    df['time (ms)'] = df['avg_time'] * 1e3
+
+    df['time (ms)'] = df[f'{which_cudf_stats}_time'] * 1e3
     
     # Standardize KeyType
     # cudf has key_type: int32, int64
@@ -76,7 +75,7 @@ def plot_time_vs_cols(df_in, **params):
     )
     
     # Legend
-    ax.legend(title="", loc='best')
+    ax.legend(title="", loc='upper left')
     
     # Adjust axes
     # Similar style to plot_expr

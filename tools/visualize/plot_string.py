@@ -21,7 +21,6 @@ def read_eiger_results(path):
             df.loc[(df['op'] == 'contains') & (df['use_kmp'] == 1), 'impl'].astype(str) + 
             " (KMP)"
         )
-    print(df)
     return df
 
 def read_cudf_results(path, **constants):
@@ -29,7 +28,7 @@ def read_cudf_results(path, **constants):
     for k, v in constants.items():
         df[k] = v
     df['cg_aw'] = df['cg_size'].astype(str) + "," + df['access_width'].astype(str)
-    df['thpt'] = df['thpt'] / 1e9
+    df['thpt'] = df['num_strings'] / df[f'{which_cudf_stats}_time'] / 1e9
     return df
     
 def plot_thpt_vs_strlen(df_in, machine, aligned, **params):
@@ -64,7 +63,7 @@ def plot_thpt_vs_strlen(df_in, machine, aligned, **params):
         xlabel = {"label": "String Length (bytes)", "padding": 5},
         ylabel = {"label": "Thpt ($10^9$ strings/s)", "rotation": 0, "x":0.25, "y":1.02},
         ylim = [0, df['thpt'].max() * 1.25])
-    ax.grid(axis='y', alpha=0.75, linestyle=':', zorder=0)
+    ax.grid(axis='both', alpha=0.75, linestyle=':', zorder=0)
     ax.set_axisbelow(True)
     save_fig(fig, f"string_thpt_vs_strlen_{'aligned' if aligned else 'unaligned'}_{dict_to_str(params)}", subdir=f"string/{machine}", suffix="pdf")
 
@@ -117,7 +116,7 @@ def plot_thpt_vs_strlen_arrow_best(df_in, machine, aligned, **params):
         xlabel = {"label": "String Length (bytes)", "padding": 5},
         ylabel = {"label": "Thpt ($10^9$ strings/s)", "rotation": 0, "x":0.25, "y":1.02},
         ylim = [0, df['thpt'].max() * 1.25])
-    ax.grid(axis='y', alpha=0.75, linestyle=':', zorder=0)
+    ax.grid(axis='both', alpha=0.75, linestyle=':', zorder=0)
     ax.set_axisbelow(True)
     save_fig(fig, f"string_thpt_vs_strlen_{'aligned' if aligned else 'unaligned'}_{dict_to_str(params)}", subdir=f"string/{machine}", suffix="pdf")
 

@@ -8,7 +8,15 @@ import numpy as np
 def read_our_results(path):
     df = pd.read_csv(path)
     df = df[df['Elem/s (elem/sec)'].notna()]
-    df['algo'] = df['algo'].str.upper()
+    df['algo'] = df['algo'].map({
+        "sort" : "SORT/TR",
+        "sort_opt" : "SORT-OPT",
+        "sort_gfur" : "SORT/UR",
+        "partition": "PARTITION/TR",
+        "partition_gfur": "PARTITION/UR",
+        "hash" : "Hash",
+        "auto" : "Auto"
+    })
     df['thpt'] = df['Elem/s (elem/sec)'] / 1e9
     df['num_groups_log2'] = np.log2(df['num_groups'])
     df['zipf_factor'] = np.round(df['zipf_factor'], 1)
@@ -19,9 +27,8 @@ def read_cudf_results(path):
     type_map = {'int32': 'I32', 'int64': 'I64'}
     if 'key_type' in df.columns:
         df['Key'] = df['key_type'].map(type_map)
-    df['algo'] = 'CUDF'
-    if 'throughput' in df.columns:
-        df['thpt'] = df['throughput'] / 1e9
+    df['algo'] = 'cuDF'
+    df['thpt'] = df['num_items'] / df[f'{which_cudf_stats}_time'] / 1e9
     df['num_groups_log2'] = np.log2(df['num_groups'])
     df['zipf_factor'] = 0.0
     return df
@@ -40,7 +47,7 @@ def plot_groupby_thpt_vs_ngroups(df_in, machine, **params):
 
     # print(df.pivot_table(index=['num_groups'], values='thpt', columns = ['algo'], aggfunc='mean'))
     
-    fig, ax = create_plot((12, 5))
+    fig, ax = create_plot((8, 6))
     ax = sns.lineplot(data=df, x='num_groups_log2', y='thpt', hue="algo",  style = "algo", markers=True, markersize=8, ax=ax)
     
     ax.legend(title="", loc='best')
@@ -51,6 +58,7 @@ def plot_groupby_thpt_vs_ngroups(df_in, machine, **params):
 
     ax.set_xticks(ticks)
     ax.set_xticklabels([f"$2^{{{int(tick)}}}$" for tick in ticks])
+    ax.grid(True, which='both', axis='both', linestyle=':', alpha=0.75, zorder=0)
     
     adjust_ax(
         ax, 
@@ -74,7 +82,7 @@ def plot_groupby_thpt_vs_zipf(df_in, machine, **params):
         must_have_attr=["Key", "num_items", "num_aggs", "num_groups"])
     
     if df.empty:
-        # print(f"Warning: no data for params {params}")
+        print(f"Warning: no data for params {params}")
         return
 
     # print(df.pivot_table(index=['zipf_factor'], values='thpt', columns = ['algo'], aggfunc='mean'))
