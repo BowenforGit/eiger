@@ -17,7 +17,12 @@ mkdir -p exp_results/${machine}/expr
 
 # Run all Eiger sort_table micro-benchmarks
 mkdir -p exp_results/${machine}/sort
-./${BUILDDIR}/src/cuda/benchmarks/benchmark_sort_table -d $GPUID $PROFILE -b sort_table_numeric -a num_key_cols[pow2]=[1,2,4] --csv exp_results/${machine}/sort/sort_table_${machine}_${TODAY}.csv
+./${BUILDDIR}/src/cuda/benchmarks/benchmark_sort_table -d $GPUID $PROFILE -b sort_table_numeric -a num_key_cols=[1,2,4] -a num_nonkey_cols=[1,2,4] --csv exp_results/${machine}/sort/sort_table_${machine}_${TODAY}.csv
+
+# Run all Eiger sort_table fused-key micro-benchmarks
+mkdir -p exp_results/${machine}/sort
+./${BUILDDIR}/src/cuda/benchmarks/benchmark_sort_table_fused_key -d $GPUID $PROFILE --csv exp_results/${machine}/sort/sort_table_fused_key_${machine}_${TODAY}.csv
+
 
 # Run all Eiger string micro-benchmarks
 mkdir -p exp_results/${machine}/string

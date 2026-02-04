@@ -2,11 +2,14 @@
 
 machine=$1
 GPUID=${2:-0}
+virtual_env=${3:-base}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
 TODAY=$(date +%Y%m%d)
+
+source /users/${USER}/miniconda3/bin/activate ${virtual_env}
 
 # Check if pylibcudf is installed
 if ! pip list | grep "pylibcudf"; then
@@ -19,12 +22,12 @@ mkdir -p $OUTPUT_DIR
 
 # Run all cuDF micro-benchmarks
 benchmarks=(
-    # "join"
-    # "groupby"
-    # "expr"
+    "join"
+    "groupby"
+    "expr"
     "strings"
-    # "string_sort"
-    # "sort_table"
+    "string_sort"
+    "sort_table"
 )
 
 for b in "${benchmarks[@]}"; do

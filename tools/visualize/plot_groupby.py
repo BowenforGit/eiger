@@ -47,10 +47,9 @@ def plot_groupby_thpt_vs_ngroups(df_in, machine, **params):
 
     # print(df.pivot_table(index=['num_groups'], values='thpt', columns = ['algo'], aggfunc='mean'))
     
-    fig, ax = create_plot((8, 6))
+    fig, ax = create_plot((7, 6))
     ax = sns.lineplot(data=df, x='num_groups_log2', y='thpt', hue="algo",  style = "algo", markers=True, markersize=8, ax=ax)
     
-    ax.legend(title="", loc='best')
     
     ticks = sorted(df['num_groups_log2'].unique())
     if len(ticks) > 10:
@@ -59,15 +58,16 @@ def plot_groupby_thpt_vs_ngroups(df_in, machine, **params):
     ax.set_xticks(ticks)
     ax.set_xticklabels([f"$2^{{{int(tick)}}}$" for tick in ticks])
     ax.grid(True, which='both', axis='both', linestyle=':', alpha=0.75, zorder=0)
+    ax.legend(title="", loc='best', ncols=2)
     
     adjust_ax(
         ax, 
         fontsize=24, 
         legend_fontsize=20, 
         title="", 
-        xlabel = {"label": "Number of groups"},
+        xlabel = {"label": "Number of groups", "padding" : 4},
         # xscale = {"scale" : "log", "base": 2},
-        ylabel = {"label": "Thpt (Billion Tuples/s)"},
+        ylabel = {"label": "Thpt (Billion Tuples/s)", "padding" : 4},
         # yscale = {"scale" : "log", "base": 2},
         ylim = [0, df['thpt'].max() * 1.25])
 

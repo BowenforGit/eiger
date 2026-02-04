@@ -14,7 +14,7 @@ def preprocess(df):
     df['algo'] = df['join_algo'].str.upper() + "/" + df['mat_algo_short']
     # for narrow joins, use only the join algorithm as the algo name
     df.loc[~wide_join_mask & (df['mat_algo'] == 'gfur'), 'algo'] = df['join_algo'].str.upper()
-    df.loc[df['algo'] == 'HASH/UR', 'algo'] = 'HASH'
+    df.loc[df['algo'] == 'HASH/UR', 'algo'] = 'HJ'
     df['thpt'] = df['Elem/s (elem/sec)'] / 1e9
     df['left_num_items_log2'] = np.log2(df['left_num_items'])
     if 'ratio' in df.columns:
@@ -46,7 +46,7 @@ def plot_vary_table_size(path_to_csv, **params):
         print(f"Warning: no data for params {params}")
         return
     
-    fig, ax = create_plot((8, 6))
+    fig, ax = create_plot((6, 5))
 
     if "left_num_items" in params:
         side = "right"
@@ -62,17 +62,17 @@ def plot_vary_table_size(path_to_csv, **params):
     ax = sns.lineplot(data=df, x=x_col, y='thpt', hue="algo", style="algo", markers=True, markersize=8, ax=ax)
     ax.legend(title="", loc='best', ncols=2)
 
-    ax.set_xticks(sorted(df[x_col].unique()[::2]))
-    ax.set_xticklabels([f"$2^{{{int(tick)}}}$" for tick in sorted(df[x_col].unique()[::2])])
+    ax.set_xticks(sorted(df[x_col].unique()[2::4]))
+    ax.set_xticklabels([f"$2^{{{int(tick)}}}$" for tick in sorted(df[x_col].unique()[2::4])])
     ax.grid(True, which='both', axis='both', linestyle=':', alpha=0.75, zorder=0)
     
     adjust_ax(
         ax, 
         fontsize=24, 
-        legend_fontsize=18, 
+        legend_fontsize=20, 
         title="", 
-        xlabel = {"label": f"Size of Table {table} (Number of Tuples)"},
-        ylabel = {"label": "Thpt (Billion Tuples/s)"})
+        xlabel = {"label": f"|{table}|", "padding": 4},
+        ylabel = {"label": "Thpt (Billion Tuples/s)", "padding": 4})
 
     save_fig(fig, f"ieq_join_vary_{side}_table_size_{dict_to_str(params)}", subdir=f"join/{params.get('machine', '')}", suffix="pdf")
 
@@ -94,18 +94,18 @@ def plot_vary_match_ratio(path_to_csv, **params):
         print(f"Warning: no data for params {params}")
         return
     
-    fig, ax = create_plot((8, 6))
+    fig, ax = create_plot((6, 5))
     ax = sns.lineplot(data=df, x='match_ratio', y='thpt', hue="algo", style="algo", markers=True, markersize=8, ax=ax)
     ax.legend(title="", loc='best', ncols=2)
 
     adjust_ax(
         ax, 
         fontsize=24, 
-        legend_fontsize=18, 
+        legend_fontsize=20, 
         title="", 
-        xlabel = {"label": "Match ratio"},
-        xticklabels = {'ticks': [f"{float(i.get_text())*100} %" for i in ax.get_xticklabels()]},
-        ylabel = {"label": "Thpt (10^9 Tuples/s)"},
+        xlabel = {"label": "Match ratio", "padding": 4},
+        xticklabels = {'ticks': [f"{float(i.get_text())}" for i in ax.get_xticklabels()]},
+        ylabel = {"label": "Thpt (Billion Tuples/s)", "padding" : 4},
         ylim = [0, df['thpt'].max() * 1.25])
     ax.grid(True, which='both', axis='both', linestyle=':', alpha=0.75, zorder=0)
 

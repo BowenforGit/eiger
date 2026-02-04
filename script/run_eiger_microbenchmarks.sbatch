@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
-#SBATCH --time=12:00:00
+#SBATCH --time=02:00:00
 #SBATCH --output=/iopsstor/scratch/cscs/%u/eiger_mb/%x_%j.log
 #SBATCH --error=/iopsstor/scratch/cscs/%u/eiger_mb/%x_%j.err
 #SBATCH --environment=my_env
