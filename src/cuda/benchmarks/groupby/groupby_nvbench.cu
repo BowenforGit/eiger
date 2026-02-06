@@ -56,7 +56,6 @@ void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
     struct groupby_hint hint;
     hint.groups_upper_bound = params.num_groups;
     hint.zero_based_ids = false;
-    hint.optimize_sort = false;
 
     gamax::table key_table;
     gamax::table val_table;
@@ -77,8 +76,7 @@ void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
     } else if(algo == "hash") {
         hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
     } else if(algo == "sort_opt") {
-        hint.groupby_algo = gamax::groupby::groupby_algo::SORT;
-        hint.optimize_sort = true;
+        hint.groupby_algo = gamax::groupby::groupby_algo::SORT_OPT;
     } else if(algo == "partition") {
         hint.groupby_algo = gamax::groupby::groupby_algo::PARTITION;
     } else if(algo == "partition_gfur") {

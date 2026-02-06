@@ -194,6 +194,9 @@ std::unique_ptr<gamax::table> groupby(
     // Execute the internal groupby
     std::unique_ptr<gamax::table> internal_result;
     switch (hint.groupby_algo) {
+        case gamax::groupby::SORT_OPT:
+            hint.optimize_sort = true;
+            [[fallthrough]];
         case gamax::groupby::SORT:
             internal_result = gamax::groupby::sort::groupby(key, extended_val, internal_agg_requests, hint, stream);
             break;

@@ -17,6 +17,7 @@ enum groupby_algo {
     AUTO_ALGO, // for runtime selection
     HASH,
     SORT,
+    SORT_OPT,
     SORT_GFUR,
     PARTITION,
     PARTITION_GFUR,

@@ -58,8 +58,7 @@ void test_floating_point_groupby() {
     }
 
     {
-        hint.groupby_algo = gamax::groupby::groupby_algo::SORT;
-        hint.optimize_sort = true;
+        hint.groupby_algo = gamax::groupby::groupby_algo::SORT_OPT;
         TEST_GROUPBY()
     }
 }
