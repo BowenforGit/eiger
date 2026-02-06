@@ -183,6 +183,25 @@ public:
         return col;
     }
 
+    /**
+     * @brief Release ownership of a column without removing it from the table.
+     * 
+     * Unlike remove_column, this method leaves a nullptr in the column slot,
+     * preserving indices for subsequent operations. Useful when processing
+     * expressions that may reference multiple columns by index.
+     *
+     * @param column_index The index of the column to release
+     * @return std::unique_ptr<column> The released column
+     */
+    std::unique_ptr<column> release_column(gamax::size_type column_index)
+    {
+        if (column_index < 0 || column_index >= _columns.size())
+        {
+            throw std::invalid_argument("column out of range");
+        }
+        return std::move(_columns[column_index]);
+    }
+
     table_view view() const {
         return table_view(_columns);
     }

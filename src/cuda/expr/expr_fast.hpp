@@ -365,6 +365,30 @@ public:
         return _root.type;
     }
 
+    /**
+     * @brief Check if this expression is a simple column reference.
+     * 
+     * A column reference is a leaf node with ExprId::Column and no children.
+     * Such expressions can be optimized by directly moving the column
+     * instead of evaluating/copying.
+     *
+     * @return true if this is a simple column reference
+     */
+    bool is_column_ref() const {
+        return _root.id == ExprId::Column && _children.empty();
+    }
+
+    /**
+     * @brief Get the column index from a column reference expression.
+     * 
+     * Should only be called when is_column_ref() returns true.
+     *
+     * @return The column index this expression references
+     */
+    gamax::size_type get_column_index() const {
+        return _root.data.col.cid;
+    }
+
     auto make_program_host() {
         std::vector<Expr> program_exprs;
         
