@@ -37,6 +37,7 @@ struct OpDataset {
     std::vector<std::string> strings;
     std::string query;
     std::vector<bool> expected;
+    std::vector<bool> mask;  // empty = no mask
 };
 
 class StringOpsTest : public ::testing::TestWithParam<TestParams> {
@@ -73,13 +74,15 @@ protected:
                             "ABCD EFGH IJKL MNOP !@#$ UVWX YZ12 3456 7890"
                         },
                         "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456",
-                        {true,true,false,false,false,false}
+                        {true,true,false,false,false,false},
+                        {}  // no mask
                     };
                 } else {
                     return {
                         {"test","test","testing","string",""},
                         "test",
-                        {true,true,false,false,false}
+                        {true,false,false,false,false}, // expected
+                        {true,false,true,true,false} // mask
                     };
                 }
             }
@@ -95,7 +98,8 @@ protected:
                             "ABCD EFGH IJKL MNOP !@#$ UVWX YZ12 3456 7890"
                         },
                         "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456",
-                        {true,true,false,false,true,false}
+                        {true,true,false,false,true,false},
+                        {}  // no mask
                     };
                 } else {
                     return {
@@ -107,7 +111,8 @@ protected:
                             "hello world!!!"
                         },
                         "hello",
-                        {true,false,false,false,true}
+                        {true,false,false,false,false}, // expected
+                        {true,false,true,true,false} // mask
                     };
                 }
             }
@@ -123,13 +128,15 @@ protected:
                             "ABCD EFGH IJKL MNOP !@#$ UVWX YZ12 3456"
                         },
                         "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456",
-                        {true,true,false,false,true,false}
+                        {true,true,false,false,true,false},
+                        {}  // no mask
                     };
                 } else {
                     return {
                         {"testing","ing","long","string",""},
                         "ing",
-                        {true,true,false,true,false}
+                        {false,true,false,true,false},
+                        {false,true,true,true,false}
                     };
                 }
             }
@@ -145,13 +152,15 @@ protected:
                             "ABCD EFGH IJKL MNOP !@#$ UVWX YZ12 3456 7890"
                         },
                         "ABCD EFGH IJKL MNOP QRST UVWX YZ12 3456",
-                        {true,true,false,false,true,false}
+                        {true,true,false,false,true,false},
+                        {}  // no mask
                     };
                 } else {
                     return {
                         {"abc","bcd","cde","","abcdef"},
                         "cd",
-                        {false,true,true,false,true}
+                        {false,false,true,false,true}, // expected
+                        {true,false,true,false,true} // mask
                     };
                 }
             }
@@ -174,6 +183,40 @@ protected:
             case Operation::Contains:   return contains(in, param, stream, options);
         }
         return nullptr;
+    }
+
+    static column_ptr runOpWithMask(
+        Operation op,
+        const gamax::string_column_view& in,
+        const gamax::string_scalar_view& param,
+        const gamax::column_view& mask,
+        cudaStream_t stream,
+        string_op_options options)
+    {
+        switch(op) {
+            case Operation::Equal:      return equal_bitmask(in, param, mask, stream, options);
+            case Operation::StartsWith: return startswith_bitmask(in, param, mask, stream, options);
+            case Operation::EndsWith:   return endswith_bitmask(in, param, mask, stream, options);
+            case Operation::Contains:   return contains_bitmask(in, param, mask, stream, options);
+        }
+        return nullptr;
+    }
+
+    static column_ptr makeMaskColumn(
+        const std::vector<bool>& mask_vals,
+        cudaStream_t stream)
+    {
+        auto mask_col = gamax::make_column(
+            gamax::data_type{gamax::type_id::BOOL8},
+            static_cast<size_type>(mask_vals.size()));
+        std::vector<bool> tmp(mask_vals.begin(), mask_vals.end());
+        // std::vector<bool> is bit-packed; copy to a contiguous byte buffer
+        std::vector<uint8_t> bytes(tmp.size());
+        for (size_t i = 0; i < tmp.size(); ++i) bytes[i] = tmp[i] ? 1 : 0;
+        cudaMemcpyAsync(mask_col->mutable_view().data<bool>(), bytes.data(),
+                        bytes.size() * sizeof(uint8_t), cudaMemcpyHostToDevice, stream);
+        cudaStreamSynchronize(stream);
+        return mask_col;
     }
 };
 
@@ -250,6 +293,91 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         TEST_VALUES(ARROW_STRING,  Contains, false),
         TEST_VALUES(ARROW_STRING,  Contains, true)
+    ));
+
+// --- Masked tests using Case2 datasets ---
+
+class MaskedStringOpsTest : public StringOpsTest {};
+
+TEST_P(MaskedStringOpsTest, StringOperationWithMaskProducesExpectedResult) {
+    const auto params = GetParam();
+    const auto ds = getDataset(params.op, params.dataset_id);
+    ASSERT_FALSE(ds.mask.empty()) << "Case2 datasets must define a mask";
+
+    gamax::string_op_options options{};
+    options.cg_size = params.cg_size;
+    options.access_width = params.access_width;
+    options.use_kmp = params.use_kmp;
+
+    auto [flat, lens] = prepareFlatData(ds.strings);
+    auto str_col_ptr = make_string_column(
+        flat.data(),
+        lens.data(),
+        static_cast<size_type>(ds.strings.size()),
+        stream_,
+        params.impl);
+
+    ASSERT_NE(str_col_ptr, nullptr);
+    auto& str_col = dynamic_cast<gamax::string_column&>(*str_col_ptr);
+    auto str_view = str_col.view_s();
+
+    auto scalar_ptr = make_string_scalar(ds.query, stream_);
+    ASSERT_NE(scalar_ptr, nullptr);
+
+    auto mask_col = makeMaskColumn(ds.mask, stream_);
+    ASSERT_NE(mask_col, nullptr);
+
+    auto result = runOpWithMask(params.op, str_view, scalar_ptr->view(),
+                                mask_col->view(), stream_, options);
+
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(result->type().id(), gamax::type_id::BOOL8);
+    EXPECT_EQ(result->size(), static_cast<size_type>(ds.expected.size()));
+
+    auto host = gamax::copy_column_to_host<bool>(result->view(), stream_);
+    cudaStreamSynchronize(stream_);
+    for (size_type i = 0; i < result->size(); ++i) {
+        EXPECT_EQ(static_cast<bool>(host[i]), ds.expected[i]) << "Mismatch at index " << i;
+    }
+}
+
+#define TEST_VALUES_MASKED(IMPL, OP, USE_KMP) \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case2, 1, 1, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case2, 1, 2, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case2, 1, 4, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case2, 1, 8, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case2, 4, 1, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case2, 4, 2, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case2, 4, 4, USE_KMP}, \
+    TestParams{string_impl_id::IMPL, Operation::OP, OpDatasetId::Case2, 4, 8, USE_KMP}
+
+INSTANTIATE_TEST_SUITE_P(
+    MaskedEqual,
+    MaskedStringOpsTest,
+    ::testing::Values(
+        TEST_VALUES_MASKED(ARROW_STRING, Equal, false)
+    ));
+
+INSTANTIATE_TEST_SUITE_P(
+    MaskedStartsWith,
+    MaskedStringOpsTest,
+    ::testing::Values(
+        TEST_VALUES_MASKED(ARROW_STRING, StartsWith, false)
+    ));
+
+INSTANTIATE_TEST_SUITE_P(
+    MaskedEndsWith,
+    MaskedStringOpsTest,
+    ::testing::Values(
+        TEST_VALUES_MASKED(ARROW_STRING, EndsWith, false)
+    ));
+
+INSTANTIATE_TEST_SUITE_P(
+    MaskedContains,
+    MaskedStringOpsTest,
+    ::testing::Values(
+        TEST_VALUES_MASKED(ARROW_STRING, Contains, false),
+        TEST_VALUES_MASKED(ARROW_STRING, Contains, true)
     ));
 
 } // namespace test

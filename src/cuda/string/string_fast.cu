@@ -225,7 +225,8 @@ template<int GroupSize, int kAlignAt>
 __global__ void equal_kernel(
     string_column_view col,
     string_scalar_view pattern,
-    mutable_column_view out)
+    mutable_column_view out,
+    const bool* __restrict__ mask)
 {
     __shared__ char pattern_buffer[kAlignAt][kMaxPatternLen];
     pattern_helper<kAlignAt> ph(pattern, pattern_buffer);
@@ -239,6 +240,7 @@ __global__ void equal_kernel(
             idx < col.size(); 
             idx += blockDim.x * gridDim.x) 
         {
+            if(mask && !mask[idx]) { out_data[idx] = false; continue; }
             auto str = impl.viewAt(idx);
             out_data[idx] = (pattern.size() == str.size()) && ph.compare(str.data());
         }
@@ -249,6 +251,10 @@ __global__ void equal_kernel(
             idx < col.size(); 
             idx += nthreads() / GroupSize) 
         {
+            if(mask && !mask[idx]) {
+                if(g.thread_rank() == 0) { out_data[idx] = false; }
+                continue;
+            }
             auto str = impl.viewAt(idx);
             bool match = (pattern.size() == str.size()) && ph.compare(g, str.data());
             g.sync();
@@ -263,7 +269,8 @@ template<int GroupSize, int kAlignAt>
 __global__ void startswith_kernel(
     string_column_view col,
     string_scalar_view pattern,
-    mutable_column_view out)
+    mutable_column_view out,
+    const bool* __restrict__ mask)
 {
     __shared__ char pattern_buffer[kAlignAt][kMaxPatternLen];
     pattern_helper<kAlignAt> ph(pattern, pattern_buffer);
@@ -277,6 +284,7 @@ __global__ void startswith_kernel(
             idx < col.size(); 
             idx += blockDim.x * gridDim.x) 
         {
+            if(mask && !mask[idx]) { out_data[idx] = false; continue; }
             auto str = impl.viewAt(idx);
             out_data[idx] = (pattern.size() <= str.size()) && ph.compare(str.data());
         }
@@ -287,6 +295,10 @@ __global__ void startswith_kernel(
             idx < col.size(); 
             idx += nthreads() / GroupSize) 
         {
+            if(mask && !mask[idx]) {
+                if(g.thread_rank() == 0) { out_data[idx] = false; }
+                continue;
+            }
             auto str = impl.viewAt(idx);
             bool match = (pattern.size() <= str.size()) && ph.compare(g, str.data());
             g.sync();
@@ -301,7 +313,8 @@ template<int GroupSize, int kAlignAt>
 __global__ void endswith_kernel(
     string_column_view col,
     string_scalar_view pattern,
-    mutable_column_view out)
+    mutable_column_view out,
+    const bool* __restrict__ mask)
 {
     __shared__ char pattern_buffer[kAlignAt][kMaxPatternLen];
     pattern_helper<kAlignAt> ph(pattern, pattern_buffer);
@@ -315,6 +328,7 @@ __global__ void endswith_kernel(
             idx < col.size(); 
             idx += blockDim.x * gridDim.x) 
         {
+            if(mask && !mask[idx]) { out_data[idx] = false; continue; }
             auto str = impl.viewAt(idx);
             out_data[idx] = (pattern.size() <= str.size()) && ph.compare(str.data() + (str.size() - pattern.size()));
         }
@@ -325,6 +339,10 @@ __global__ void endswith_kernel(
             idx < col.size(); 
             idx += nthreads() / GroupSize) 
         {
+            if(mask && !mask[idx]) {
+                if(g.thread_rank() == 0) { out_data[idx] = false; }
+                continue;
+            }
             auto str = impl.viewAt(idx);
             bool match = (pattern.size() <= str.size()) && ph.compare(g, str.data() + (str.size() - pattern.size()));
             g.sync();
@@ -339,7 +357,8 @@ template<int kAlignAt=4>
 __global__ void contains_kernel(
     string_column_view col,
     string_scalar_view substring,
-    mutable_column_view out)
+    mutable_column_view out,
+    const bool* __restrict__ mask)
 {
     __shared__ char pattern_buffer[kAlignAt][kMaxPatternLen];
     pattern_helper<kAlignAt> ph(substring, pattern_buffer);
@@ -353,6 +372,7 @@ __global__ void contains_kernel(
         idx < col.size(); 
         idx += blockDim.x * gridDim.x) 
     {
+        if(mask && !mask[idx]) { out_data[idx] = false; continue; }
         out_data[idx] = false;
         
         auto str = impl.viewAt(idx);
@@ -375,7 +395,8 @@ __global__ void contains_kernel(
 __global__ void contains_kmp_kernel(
     string_column_view col,
     string_scalar_view substring,
-    mutable_column_view out)
+    mutable_column_view out,
+    const bool* __restrict__ mask)
 {
     __shared__ char smem[kMaxPatternLen];
     string_scalar_view substring_smem(smem, substring.size());
@@ -410,6 +431,7 @@ __global__ void contains_kmp_kernel(
         idx < col.size(); 
         idx += blockDim.x * gridDim.x) 
     {
+        if(mask && !mask[idx]) { out_data[idx] = false; continue; }
         out_data[idx] = false;
         auto str = impl.viewAt(idx);
         const auto str_len = str.size();
@@ -440,7 +462,8 @@ __global__ void contains_multiple_kernel(
     string_column_view col,
     const string_scalar_view* patterns,
     int num_patterns,
-    mutable_column_view out)
+    mutable_column_view out,
+    const bool* __restrict__ mask)
 {
     __shared__ char pattern_buffer[kMaxNumPatterns][kMaxPatternLen];
     __shared__ int pattern_sizes[kMaxNumPatterns];
@@ -455,6 +478,7 @@ __global__ void contains_multiple_kernel(
         idx < col.size(); 
         idx += blockDim.x * gridDim.x) 
     {
+        if(mask && !mask[idx]) { out_data[idx] = false; continue; }
         auto str = impl.viewAt(idx);
         const char* str_ptr = str.data();
         const auto str_len = str.size();
@@ -548,11 +572,12 @@ struct EqualLauncher {
         string_column_view in,
         string_scalar_view param,
         mutable_column_view out,
+        const bool* mask,
         cudaStream_t stream)
     {
         constexpr int block_size = 256;
         const int grid_size = (in.size() + block_size - 1) / block_size;
-        equal_kernel<CG, kAlignAt><<<grid_size, block_size, 0, stream>>>(in, param, out);
+        equal_kernel<CG, kAlignAt><<<grid_size, block_size, 0, stream>>>(in, param, out, mask);
         cudaStreamSynchronize(stream);
     }
 };
@@ -563,11 +588,12 @@ struct StartsWithLauncher {
         string_column_view in,
         string_scalar_view param,
         mutable_column_view out,
+        const bool* mask,
         cudaStream_t stream)
     {
         constexpr int block_size = 256;
         const int grid_size = (in.size() + block_size - 1) / block_size;
-        startswith_kernel<CG, kAlignAt><<<grid_size, block_size, 0, stream>>>(in, param, out);
+        startswith_kernel<CG, kAlignAt><<<grid_size, block_size, 0, stream>>>(in, param, out, mask);
         cudaStreamSynchronize(stream);
     }
 };
@@ -578,11 +604,12 @@ struct EndsWithLauncher {
         string_column_view in,
         string_scalar_view param,
         mutable_column_view out,
+        const bool* mask,
         cudaStream_t stream)
     {
         constexpr int block_size = 256;
         const int grid_size = (in.size() + block_size - 1) / block_size;
-        endswith_kernel<CG, kAlignAt><<<grid_size, block_size, 0, stream>>>(in, param, out);
+        endswith_kernel<CG, kAlignAt><<<grid_size, block_size, 0, stream>>>(in, param, out, mask);
         cudaStreamSynchronize(stream);
     }
 };
@@ -593,6 +620,7 @@ struct ContainsLauncher {
         string_column_view in,
         string_scalar_view param,
         mutable_column_view out,
+        const bool* mask,
         bool use_kmp,
         cudaStream_t stream)
     {
@@ -600,9 +628,9 @@ struct ContainsLauncher {
         const int grid_size = (in.size() + block_size - 1) / block_size;
 
         if(use_kmp) {
-            contains_kmp_kernel<<<grid_size, block_size, 0, stream>>>(in, param, out);
+            contains_kmp_kernel<<<grid_size, block_size, 0, stream>>>(in, param, out, mask);
         } else {
-            contains_kernel<kAlignAt><<<grid_size, block_size, 0, stream>>>(in, param, out);
+            contains_kernel<kAlignAt><<<grid_size, block_size, 0, stream>>>(in, param, out, mask);
         }
         cudaStreamSynchronize(stream);
     }
@@ -615,11 +643,12 @@ struct ContainsMultipleLauncher {
         const string_scalar_view* patterns,
         int num_patterns,
         mutable_column_view out,
+        const bool* mask,
         cudaStream_t stream)
     {
         constexpr int block_size = 256;
         const int grid_size = (in.size() + block_size - 1) / block_size;
-        contains_multiple_kernel<kAlignAt><<<grid_size, block_size, 0, stream>>>(in, patterns, num_patterns, out);
+        contains_multiple_kernel<kAlignAt><<<grid_size, block_size, 0, stream>>>(in, patterns, num_patterns, out, mask);
         cudaStreamSynchronize(stream);
     }
 };
@@ -632,13 +661,7 @@ column_ptr equal(
     cudaStream_t stream,
     string_op_options options)
 {
-    auto out = gamax::make_column(
-        gamax::data_type{gamax::type_id::BOOL8},
-        in.size());
-    
-    dispatch_string_ops<EqualLauncher>(options, in, string, out->mutable_view(), stream);
-    
-    return out;
+    return equal_bitmask(in, string, column_view{}, stream, options);
 }
 
 column_ptr startswith(
@@ -647,13 +670,7 @@ column_ptr startswith(
     cudaStream_t stream,
     string_op_options options) 
 {
-    auto out = gamax::make_column(
-        gamax::data_type{gamax::type_id::BOOL8},
-        in.size());
-    
-    dispatch_string_ops<StartsWithLauncher>(options, in, prefix, out->mutable_view(), stream);
-    
-    return out;
+    return startswith_bitmask(in, prefix, column_view{}, stream, options);
 }
 
 column_ptr endswith(
@@ -662,13 +679,7 @@ column_ptr endswith(
     cudaStream_t stream,
     string_op_options options)
 {
-    auto out = gamax::make_column(
-        gamax::data_type{gamax::type_id::BOOL8},
-        in.size());
-
-    dispatch_string_ops<EndsWithLauncher>(options, in, suffix, out->mutable_view(), stream);
-    
-    return out;
+    return endswith_bitmask(in, suffix, column_view{}, stream, options);
 }
 
 column_ptr contains(
@@ -677,13 +688,7 @@ column_ptr contains(
     cudaStream_t stream,
     string_op_options options)
 {
-    auto out = gamax::make_column(
-        gamax::data_type{gamax::type_id::BOOL8},
-        in.size());
-    
-    dispatch_string_ops<ContainsLauncher>(options, in, substring, out->mutable_view(), options.use_kmp, stream);
-    
-    return out;
+    return contains_bitmask(in, substring, column_view{}, stream, options);
 }
 
 column_ptr contains_multiple(
@@ -692,12 +697,144 @@ column_ptr contains_multiple(
     cudaStream_t stream,
     string_op_options options)
 {
+    return contains_multiple_bitmask(in, patterns, column_view{}, stream, options);
+}
+
+// --- Masked overloads ---
+
+column_ptr equal_bitmask(
+    gamax::string_column_view in,
+    gamax::string_scalar_view string,
+    gamax::column_view const& mask,
+    cudaStream_t stream,
+    string_op_options options)
+{
+    const bool has_mask = mask.size() > 0;
+    if(has_mask) {
+        if(mask.type().id() != gamax::type_id::BOOL8) {
+            throw std::runtime_error("Mask must be of type BOOL8");
+        }
+        if(mask.size() != in.size()) {
+            throw std::runtime_error("Mask size must match input column size");
+        }
+    }
+
+    auto out = gamax::make_column(
+        gamax::data_type{gamax::type_id::BOOL8},
+        in.size());
+    
+    dispatch_string_ops<EqualLauncher>(options, in, string, out->mutable_view(), has_mask ? mask.data<bool>() : nullptr, stream);
+    
+    return out;
+}
+
+column_ptr startswith_bitmask(
+    gamax::string_column_view in,
+    gamax::string_scalar_view prefix,
+    gamax::column_view const& mask,
+    cudaStream_t stream,
+    string_op_options options)
+{
+    const bool has_mask = mask.size() > 0;
+    if(has_mask) {
+        if(mask.type().id() != gamax::type_id::BOOL8) {
+            throw std::runtime_error("Mask must be of type BOOL8");
+        }
+        if(mask.size() != in.size()) {
+            throw std::runtime_error("Mask size must match input column size");
+        }
+    }
+
+    auto out = gamax::make_column(
+        gamax::data_type{gamax::type_id::BOOL8},
+        in.size());
+    
+    dispatch_string_ops<StartsWithLauncher>(options, in, prefix, out->mutable_view(), has_mask ? mask.data<bool>() : nullptr, stream);
+    
+    return out;
+}
+
+column_ptr endswith_bitmask(
+    gamax::string_column_view in,
+    gamax::string_scalar_view suffix,
+    gamax::column_view const& mask,
+    cudaStream_t stream,
+    string_op_options options)
+{
+    const bool has_mask = mask.size() > 0;
+    if(has_mask) {
+        if(mask.type().id() != gamax::type_id::BOOL8) {
+            throw std::runtime_error("Mask must be of type BOOL8");
+        }
+        if(mask.size() != in.size()) {
+            throw std::runtime_error("Mask size must match input column size");
+        }
+    }
+
+    auto out = gamax::make_column(
+        gamax::data_type{gamax::type_id::BOOL8},
+        in.size());
+
+    dispatch_string_ops<EndsWithLauncher>(options, in, suffix, out->mutable_view(), has_mask ? mask.data<bool>() : nullptr, stream);
+    
+    return out;
+}
+
+column_ptr contains_bitmask(
+    gamax::string_column_view in,
+    gamax::string_scalar_view substring,
+    gamax::column_view const& mask,
+    cudaStream_t stream,
+    string_op_options options)
+{
+    const bool has_mask = mask.size() > 0;
+    if(has_mask) {
+        if(mask.type().id() != gamax::type_id::BOOL8) {
+            throw std::runtime_error("Mask must be of type BOOL8");
+        }
+        if(mask.size() != in.size()) {
+            throw std::runtime_error("Mask size must match input column size");
+        }
+    }
+
+    auto out = gamax::make_column(
+        gamax::data_type{gamax::type_id::BOOL8},
+        in.size());
+    
+    dispatch_string_ops<ContainsLauncher>(options, in, substring, out->mutable_view(), has_mask ? mask.data<bool>() : nullptr, options.use_kmp, stream);
+    
+    return out;
+}
+
+column_ptr contains_multiple_bitmask(
+    gamax::string_column_view in,
+    const std::vector<gamax::string_scalar_view>& patterns,
+    gamax::column_view const& mask,
+    cudaStream_t stream,
+    string_op_options options)
+{
+    const bool has_mask = mask.size() > 0;
+    if(has_mask) {
+        if(mask.type().id() != gamax::type_id::BOOL8) {
+            throw std::runtime_error("Mask must be of type BOOL8");
+        }
+        if(mask.size() != in.size()) {
+            throw std::runtime_error("Mask size must match input column size");
+        }
+    }
+
     if(patterns.empty()) {
-        // If no patterns, all strings trivially "contain" them
+        // If no patterns, all strings trivially "contain" them;
+        // result is the mask if present, otherwise all true
         auto out = gamax::make_column(
             gamax::data_type{gamax::type_id::BOOL8},
             in.size());
-        cudaMemsetAsync(out->mutable_view().data<bool>(), 1, in.size() * sizeof(bool), stream);
+        if(has_mask) {
+            cudaMemcpyAsync(out->mutable_view().data<bool>(), mask.data<bool>(), 
+                            in.size() * sizeof(bool), cudaMemcpyDeviceToDevice, stream);
+        } else {
+            cudaMemsetAsync(out->mutable_view().data<bool>(), 1, in.size() * sizeof(bool), stream);
+        }
         cudaStreamSynchronize(stream);
         return out;
     }
@@ -716,7 +853,8 @@ column_ptr contains_multiple(
                     cudaMemcpyHostToDevice, stream);
     
     dispatch_string_ops<ContainsMultipleLauncher>(
-        options, in, reinterpret_cast<const gamax::string_scalar_view*>(d_patterns.data()), static_cast<int>(patterns.size()), out->mutable_view(), stream);
+        options, in, reinterpret_cast<const gamax::string_scalar_view*>(d_patterns.data()), 
+        static_cast<int>(patterns.size()), out->mutable_view(), has_mask ? mask.data<bool>() : nullptr, stream);
     
     cudaStreamSynchronize(stream);
     
