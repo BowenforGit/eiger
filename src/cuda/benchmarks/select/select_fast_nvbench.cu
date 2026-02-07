@@ -179,14 +179,14 @@ void bench_select_fast(nvbench::state& state, nvbench::type_list<KeyT>) {
     summary.set_string("description", "The expression being evaluated");
     summary.set_string("value", expr_builder->to_string());
 
-    auto fn = params.use_fuse ? 
-        gamax::select::select_fuse : 
-        gamax::select::select_nofuse; // both use same function, but different expr evaluation internally
+    auto fn = gamax::select::select;
+    gamax::select::select_options options;
+    options.fuse_operations = params.use_fuse;
 
     try {
         state.exec(nvbench::exec_tag::sync,
             [&](nvbench::launch& launch) { 
-                auto res = fn(table->view(), expr_tree, launch.get_stream()); 
+                auto res = fn(table->view(), expr_tree, options, launch.get_stream()); 
                 cudaStreamSynchronize(launch.get_stream());
             });
     }

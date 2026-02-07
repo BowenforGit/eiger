@@ -16,6 +16,16 @@ std::unique_ptr<gamax::table> select(
         select_options options,
         cudaStream_t stream)
 {
+    auto [result_table, _] = select_and_return_bitmask(table, expr, options, stream);
+    return std::move(result_table);
+}
+
+std::pair<std::unique_ptr<gamax::table>, gamax::column_ptr> select_and_return_bitmask(
+        gamax::table_view table,
+        gamax::expression::ExprTree& expr,
+        select_options options,
+        cudaStream_t stream)
+{
     if (options.fuse_operations) {
         return select_fuse(table, expr, stream);
     } else {
@@ -23,21 +33,21 @@ std::unique_ptr<gamax::table> select(
     }
 }
 
-std::unique_ptr<gamax::table> select_fuse(
+std::pair<std::unique_ptr<gamax::table>, gamax::column_ptr> select_fuse(
     gamax::table_view table,
     gamax::expression::ExprTree& expr,
     cudaStream_t stream) 
 {
     auto mask = gamax::expression::evaluate_expr(table, expr, stream);
-    return gamax::util::device::compact(table, mask->view(), stream);
+    return {gamax::util::device::compact(table, mask->view(), stream), std::move(mask)};
 }
 
-std::unique_ptr<gamax::table> select_nofuse(
+std::pair<std::unique_ptr<gamax::table>, gamax::column_ptr> select_nofuse(
     gamax::table_view table,
     gamax::expression::ExprTree& expr,
     cudaStream_t stream) 
 {
     auto mask = gamax::expression::evaluate_expr_nofuse(table, expr, stream);
-    return gamax::util::device::compact(table, mask->view(), stream);
+    return {gamax::util::device::compact(table, mask->view(), stream), std::move(mask)};
 }
 } // namespace gamax::select

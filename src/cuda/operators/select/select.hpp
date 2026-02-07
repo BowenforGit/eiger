@@ -17,13 +17,19 @@ namespace gamax::select {
         gamax::expression::ExprTree& expr,
         select_options options = {},
         cudaStream_t stream = cudaStreamDefault);
+    
+    std::pair<std::unique_ptr<gamax::table>, gamax::column_ptr> select_and_return_bitmask(
+        gamax::table_view table,
+        gamax::expression::ExprTree& expr,
+        select_options options = {},
+        cudaStream_t stream = cudaStreamDefault);
 
-    std::unique_ptr<gamax::table> select_fuse(
+    std::pair<std::unique_ptr<gamax::table>, gamax::column_ptr> select_fuse(
         gamax::table_view table,
         gamax::expression::ExprTree& expr,
         cudaStream_t stream = cudaStreamDefault);
     
-    std::unique_ptr<gamax::table> select_nofuse(
+    std::pair<std::unique_ptr<gamax::table>, gamax::column_ptr> select_nofuse(
         gamax::table_view table,
         gamax::expression::ExprTree& expr,
         cudaStream_t stream = cudaStreamDefault);
