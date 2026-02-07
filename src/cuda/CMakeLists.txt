@@ -63,6 +63,7 @@ set(srcs
 if(USE_NVIDIA)
     list(APPEND srcs
         compress/dictionary_encode.cu
+        compress/multikey_compress.cu
         operators/groupby/groupby_partition.cu
         operators/groupby/groupby.cu
         operators/join/materialize.cu
