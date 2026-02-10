@@ -89,6 +89,24 @@ namespace {
         }
     }
 
+    // Helper to compute aligned buffer offset for a given aggregation index
+    __device__ __forceinline__ char* get_agg_buffer_offset(
+        char* base,
+        gamax::size_type target_agg,
+        gamax::size_type num_groups,
+        gamax::experimental::mutable_table_device_view res)
+    {
+        char* offset = base;
+        for(gamax::size_type k = 0; k < target_agg; k++) {
+            std::size_t agg_size = gamax::size_of(res.get_column(k).type());
+            offset += num_groups * agg_size;
+            // Ensure 8-byte alignment for next aggregation buffer
+            std::size_t addr = reinterpret_cast<std::size_t>(offset);
+            offset = reinterpret_cast<char*>((addr + 7) & ~std::size_t(7));
+        }
+        return offset;
+    }
+
     __global__ void compute_aggregation_block(
         gamax::experimental::table_device_view val,
         gamax::experimental::mutable_table_device_view res,
@@ -102,20 +120,17 @@ namespace {
 
         auto const block = cooperative_groups::this_thread_block();
 
-        extern __shared__ int16_t temp[];
+        // Use long long for 8-byte alignment of shared memory base
+        extern __shared__ long long temp[];
         char* agg_buffer = reinterpret_cast<char*>(temp);
 
         // initialize aggregation buffer
-        char* cur_agg_buffer;
-        
         #pragma unroll
         for(gamax::size_type t = block.thread_rank(); t < num_groups; t += block.size()) {
-            cur_agg_buffer = agg_buffer;
-
             #pragma unroll
             for(gamax::size_type k = 0; k < num_aggs; k++) {
+                char* cur_agg_buffer = get_agg_buffer_offset(agg_buffer, k, num_groups, res);
                 init_agg(aggs[k].agg_kind, val.get_column(aggs[k].column_index).type(), cur_agg_buffer, t);
-                cur_agg_buffer = cur_agg_buffer + (num_groups)*gamax::size_of(res.get_column(k).type());
             }
         }
         block.sync();
@@ -126,33 +141,24 @@ namespace {
             const auto loc = group_ids_loc[t];
             const auto gid = sparse_group_ids[loc];
 
-            cur_agg_buffer = agg_buffer;
-
             #pragma unroll
             for(gamax::size_type i = 0; i < num_aggs; i++) {
+                char* cur_agg_buffer = get_agg_buffer_offset(agg_buffer, i, num_groups, res);
                 block_aggregate(
                     aggs[i].agg_kind,
                     val.get_column(aggs[i].column_index), t,
                     cur_agg_buffer, gid);
-                cur_agg_buffer = cur_agg_buffer + (num_groups)*gamax::size_of(res.get_column(i).type());
             }
         }
         block.sync();
 
-        cur_agg_buffer = agg_buffer;
-
-        gamax::size_type last_i = 0;
-        
+        // Copy from shared memory to global memory
         #pragma unroll
         for(gamax::size_type t = block.thread_rank(); t < num_groups*num_aggs; t += block.size()) {
             const gamax::size_type i = t / num_groups; // which request
             const gamax::size_type j = t % num_groups; // which group
             
-            #pragma unroll
-            for(gamax::size_type k = last_i; k < i; k++) {
-                cur_agg_buffer = cur_agg_buffer + (num_groups)*gamax::size_of(res.get_column(k).type());
-            }
-            last_i = i;
+            char* cur_agg_buffer = get_agg_buffer_offset(agg_buffer, i, num_groups, res);
             
             auto out_type = res.get_column(i).type();
             gamax::column_view temp_col(cur_agg_buffer, 
@@ -254,17 +260,26 @@ namespace {
 
             initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *agg_res_device_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
             
-            std::size_t agg_bytes = 0;
-            for(gamax::size_type i = 0; i < agg_requests.size(); i++) {
-                agg_bytes += gamax::size_of(res->get_column(num_key_cols + i).type());
-            }
+            // Calculate shared memory size with 8-byte alignment padding between aggregation buffers
+            auto compute_aligned_smem_bytes = [&](gamax::size_type n_groups) -> std::size_t {
+                std::size_t total_bytes = 0;
+                for(gamax::size_type i = 0; i < agg_requests.size(); i++) {
+                    total_bytes += n_groups * gamax::size_of(res->get_column(num_key_cols + i).type());
+                    // Add alignment padding for next buffer (align to 8 bytes)
+                    total_bytes = (total_bytes + 7) & ~std::size_t(7);
+                }
+                return total_bytes;
+            };
+            
+            // Estimate bytes per group (with alignment overhead)
+            std::size_t agg_bytes_per_group = compute_aligned_smem_bytes(1);
             
             const std::size_t max_shared_mem_size = static_cast<std::size_t>(gamax::max_smem_bytes());
             /* When the number of groups becomes larger, 
             it is no longer efficient to aggregate in SMEM 
             even though it goes not go beyond SMEM's capacity.
             Experimentally, we found 2048 to be the threshold */
-            const auto smem_groups = std::min(max_shared_mem_size / agg_bytes, 16384UL);
+            const auto smem_groups = std::min(max_shared_mem_size / agg_bytes_per_group, 16384UL);
 
             if(num_groups > smem_groups) {
                  compute_aggregation<<<num_tb(input_num_rows, 1024), 1024, 0, stream>>>(
@@ -275,7 +290,7 @@ namespace {
                     static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()), 
                     agg_requests.size());
             } else {
-                const std::size_t sm_bytes = num_groups * agg_bytes;
+                const std::size_t sm_bytes = compute_aligned_smem_bytes(num_groups);
                 auto agg_fn = compute_aggregation_block;
 #ifdef __NVCC__ // only works for CUDA because AMD will ignore
                 if(sm_bytes > 48*1024) {

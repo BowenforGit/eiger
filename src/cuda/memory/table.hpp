@@ -126,6 +126,13 @@ public:
         return table_view_base<column_view_t>(selected_columns);
     }
 
+    void add_column(column_view_t new_col) {
+        if (new_col.size() != num_rows()) {
+            throw std::runtime_error("New column must have the same number of rows as the table");
+        }
+        _columns.push_back(new_col);
+    }
+
 private:
     std::vector<column_view_t> _columns {};
 };

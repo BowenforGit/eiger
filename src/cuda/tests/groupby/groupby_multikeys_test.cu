@@ -2,8 +2,10 @@
 #include <cuda_runtime.h>
 #include <vector>
 #include <map>
+#include <tuple>
 #include <algorithm>
 #include <numeric>
+#include <string>
 
 #include "operators/groupby/groupby.hpp"
 #include "operators/groupby/aggregation.hpp"
@@ -14,7 +16,17 @@
 namespace gamax {
 namespace test {
 
-class GroupbyMultiKeysTest : public ::testing::Test {
+struct GroupbyMultiKeysParams {
+    std::string name;
+    gamax::groupby::groupby_algo algo;
+    bool enable_skf;
+
+    friend std::ostream& operator<<(std::ostream& os, const GroupbyMultiKeysParams& p) {
+        return os << p.name;
+    }
+};
+
+class GroupbyMultiKeysTest : public ::testing::TestWithParam<GroupbyMultiKeysParams> {
 protected:
     void SetUp() override { 
         cudaStreamCreate(&stream_); 
@@ -24,13 +36,22 @@ protected:
         cudaStreamDestroy(stream_); 
     }
 
+    gamax::groupby::groupby_hint make_hint(gamax::size_type groups_upper_bound = 10) {
+        auto const& p = GetParam();
+        gamax::groupby::groupby_hint hint;
+        hint.groupby_algo = p.algo;
+        hint.enable_skf   = p.enable_skf;
+        hint.groups_upper_bound = groups_upper_bound;
+        return hint;
+    }
+
     cudaStream_t stream_{};
 };
 
 // =============================================================================
 // Test Case 1: Two integer key columns with SUM aggregation
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoIntKeyColumns_Sum) {
+TEST_P(GroupbyMultiKeysTest, TwoIntKeyColumns_Sum) {
     // Key1: [1, 1, 2, 2, 1]
     // Key2: [10, 20, 10, 20, 10]
     // Val:  [100, 200, 300, 400, 500]
@@ -56,9 +77,7 @@ TEST_F(GroupbyMultiKeysTest, TwoIntKeyColumns_Sum) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -89,7 +108,7 @@ TEST_F(GroupbyMultiKeysTest, TwoIntKeyColumns_Sum) {
 // =============================================================================
 // Test Case 2: Three key columns with SUM aggregation
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, ThreeIntKeyColumns_Sum) {
+TEST_P(GroupbyMultiKeysTest, ThreeIntKeyColumns_Sum) {
     // Key1: [1, 1, 1, 1, 2, 2]
     // Key2: [1, 1, 2, 2, 1, 1]
     // Key3: [1, 2, 1, 2, 1, 2]
@@ -119,9 +138,7 @@ TEST_F(GroupbyMultiKeysTest, ThreeIntKeyColumns_Sum) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -130,21 +147,31 @@ TEST_F(GroupbyMultiKeysTest, ThreeIntKeyColumns_Sum) {
     EXPECT_EQ(result->num_columns(), 4);  // 3 keys + 1 agg result
     EXPECT_EQ(result->num_rows(), 6);     // 6 unique combinations
     
-    // Verify sum of all aggregated values equals sum of input
+    // Copy results to host and verify every row
+    auto h_key1 = gamax::copy_column_to_host<int32_t>(result->get_column(0).view(), stream_);
+    auto h_key2 = gamax::copy_column_to_host<int32_t>(result->get_column(1).view(), stream_);
+    auto h_key3 = gamax::copy_column_to_host<int32_t>(result->get_column(2).view(), stream_);
     auto h_vals = gamax::copy_column_to_host<int64_t>(result->get_column(3).view(), stream_);
     cudaStreamSynchronize(stream_);
     
-    int64_t total = 0;
+    // Each combination is unique, so SUM = original value
+    std::map<std::tuple<int32_t, int32_t, int32_t>, int64_t> expected = {
+        {{1, 1, 1}, 10}, {{1, 1, 2}, 20}, {{1, 2, 1}, 30},
+        {{1, 2, 2}, 40}, {{2, 1, 1}, 50}, {{2, 1, 2}, 60}
+    };
+    
+    std::map<std::tuple<int32_t, int32_t, int32_t>, int64_t> actual;
     for (size_t i = 0; i < 6; ++i) {
-        total += h_vals[i];
+        actual[{h_key1[i], h_key2[i], h_key3[i]}] = h_vals[i];
     }
-    EXPECT_EQ(total, 10 + 20 + 30 + 40 + 50 + 60);
+    
+    EXPECT_EQ(actual, expected);
 }
 
 // =============================================================================
 // Test Case 3: Two key columns with MAX aggregation
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoIntKeyColumns_Max) {
+TEST_P(GroupbyMultiKeysTest, TwoIntKeyColumns_Max) {
     // Key1: [1, 1, 1, 2, 2, 2]
     // Key2: [1, 1, 2, 1, 2, 2]
     // Val:  [10, 50, 30, 40, 20, 60]
@@ -170,9 +197,7 @@ TEST_F(GroupbyMultiKeysTest, TwoIntKeyColumns_Max) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::MAX});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -201,7 +226,7 @@ TEST_F(GroupbyMultiKeysTest, TwoIntKeyColumns_Max) {
 // =============================================================================
 // Test Case 4: Mixed type keys (int32 and int64) with SUM
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, MixedTypeKeys_Int32AndInt64) {
+TEST_P(GroupbyMultiKeysTest, MixedTypeKeys_Int32AndInt64) {
     // Key1 (int32): [1, 1, 2, 2]
     // Key2 (int64): [100, 200, 100, 200]
     // Val (int32):  [10, 20, 30, 40]
@@ -226,9 +251,7 @@ TEST_F(GroupbyMultiKeysTest, MixedTypeKeys_Int32AndInt64) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -237,21 +260,29 @@ TEST_F(GroupbyMultiKeysTest, MixedTypeKeys_Int32AndInt64) {
     EXPECT_EQ(result->num_columns(), 3);
     EXPECT_EQ(result->num_rows(), 4);  // All combinations unique
     
-    // Verify total sum preserved
+    // Copy results to host and verify every row
+    auto h_key1 = gamax::copy_column_to_host<int32_t>(result->get_column(0).view(), stream_);
+    auto h_key2 = gamax::copy_column_to_host<int64_t>(result->get_column(1).view(), stream_);
     auto h_vals = gamax::copy_column_to_host<int64_t>(result->get_column(2).view(), stream_);
     cudaStreamSynchronize(stream_);
     
-    int64_t total = 0;
+    // Each combination is unique, so SUM = original value
+    std::map<std::pair<int32_t, int64_t>, int64_t> expected = {
+        {{1, 100}, 10}, {{1, 200}, 20}, {{2, 100}, 30}, {{2, 200}, 40}
+    };
+    
+    std::map<std::pair<int32_t, int64_t>, int64_t> actual;
     for (size_t i = 0; i < 4; ++i) {
-        total += h_vals[i];
+        actual[{h_key1[i], h_key2[i]}] = h_vals[i];
     }
-    EXPECT_EQ(total, 10 + 20 + 30 + 40);
+    
+    EXPECT_EQ(actual, expected);
 }
 
 // =============================================================================
 // Test Case 5: Two keys with multiple value columns and aggregations
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoKeys_MultipleAggregations) {
+TEST_P(GroupbyMultiKeysTest, TwoKeys_MultipleAggregations) {
     // Key1: [1, 1, 2, 2, 1]
     // Key2: [1, 2, 1, 2, 1]
     // Val1: [10, 20, 30, 40, 50]
@@ -285,9 +316,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_MultipleAggregations) {
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     requests.push_back({1, gamax::groupby::aggregation_id::SUM});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -317,7 +346,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_MultipleAggregations) {
 // =============================================================================
 // Test Case 6: All rows have the same composite key (single group)
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, SingleGroup_AllSameKeys) {
+TEST_P(GroupbyMultiKeysTest, SingleGroup_AllSameKeys) {
     // All keys are (1, 100)
     int32_t key1[] = {1, 1, 1, 1, 1};
     int32_t key2[] = {100, 100, 100, 100, 100};
@@ -339,9 +368,7 @@ TEST_F(GroupbyMultiKeysTest, SingleGroup_AllSameKeys) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -363,7 +390,7 @@ TEST_F(GroupbyMultiKeysTest, SingleGroup_AllSameKeys) {
 // =============================================================================
 // Test Case 7: Each row is its own group (all unique composite keys)
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, AllUniqueKeys_EachRowIsGroup) {
+TEST_P(GroupbyMultiKeysTest, AllUniqueKeys_EachRowIsGroup) {
     int32_t key1[] = {1, 2, 3, 4, 5};
     int32_t key2[] = {10, 20, 30, 40, 50};
     int32_t vals[] = {100, 200, 300, 400, 500};
@@ -384,9 +411,7 @@ TEST_F(GroupbyMultiKeysTest, AllUniqueKeys_EachRowIsGroup) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -395,21 +420,29 @@ TEST_F(GroupbyMultiKeysTest, AllUniqueKeys_EachRowIsGroup) {
     EXPECT_EQ(result->num_columns(), 3);
     EXPECT_EQ(result->num_rows(), 5);  // Each row is a group
     
-    // Verify sum of all output values equals sum of input
+    // Copy results to host and verify every row
+    auto h_key1 = gamax::copy_column_to_host<int32_t>(result->get_column(0).view(), stream_);
+    auto h_key2 = gamax::copy_column_to_host<int32_t>(result->get_column(1).view(), stream_);
     auto h_vals = gamax::copy_column_to_host<int64_t>(result->get_column(2).view(), stream_);
     cudaStreamSynchronize(stream_);
     
-    int64_t total = 0;
+    // Each group has one row, so SUM = original value
+    std::map<std::pair<int32_t, int32_t>, int64_t> expected = {
+        {{1, 10}, 100}, {{2, 20}, 200}, {{3, 30}, 300}, {{4, 40}, 400}, {{5, 50}, 500}
+    };
+    
+    std::map<std::pair<int32_t, int32_t>, int64_t> actual;
     for (size_t i = 0; i < 5; ++i) {
-        total += h_vals[i];
+        actual[{h_key1[i], h_key2[i]}] = h_vals[i];
     }
-    EXPECT_EQ(total, 100 + 200 + 300 + 400 + 500);
+    
+    EXPECT_EQ(actual, expected);
 }
 
 // =============================================================================
 // Test Case 8: Keys with negative values
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, NegativeKeyValues) {
+TEST_P(GroupbyMultiKeysTest, NegativeKeyValues) {
     int32_t key1[] = {-1, -1, 1, 1};
     int32_t key2[] = {-10, 10, -10, 10};
     int32_t vals[] = {100, 200, 300, 400};
@@ -430,9 +463,7 @@ TEST_F(GroupbyMultiKeysTest, NegativeKeyValues) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -460,7 +491,7 @@ TEST_F(GroupbyMultiKeysTest, NegativeKeyValues) {
 // =============================================================================
 // Test Case 9: Keys where first column matches but second differs
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, FirstKeyMatchesSecondDiffers) {
+TEST_P(GroupbyMultiKeysTest, FirstKeyMatchesSecondDiffers) {
     // All key1 values are 1, key2 provides the grouping
     int32_t key1[] = {1, 1, 1, 1, 1, 1};
     int32_t key2[] = {1, 2, 3, 1, 2, 3};
@@ -482,9 +513,7 @@ TEST_F(GroupbyMultiKeysTest, FirstKeyMatchesSecondDiffers) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -512,7 +541,7 @@ TEST_F(GroupbyMultiKeysTest, FirstKeyMatchesSecondDiffers) {
 // =============================================================================
 // Test Case 10: Large number of groups (stress test)
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, LargeNumberOfGroups) {
+TEST_P(GroupbyMultiKeysTest, LargeNumberOfGroups) {
     // Create 100 groups from 10x10 key combinations
     const int N = 100;
     std::vector<int32_t> key1_data(N), key2_data(N), val_data(N);
@@ -539,9 +568,7 @@ TEST_F(GroupbyMultiKeysTest, LargeNumberOfGroups) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 200;
+    auto hint = make_hint(200);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -549,19 +576,32 @@ TEST_F(GroupbyMultiKeysTest, LargeNumberOfGroups) {
     ASSERT_NE(result, nullptr);
     EXPECT_EQ(result->num_rows(), 100);  // 10x10 = 100 unique combinations
     
-    // Each group should have sum = 1 (each combination appears once)
+    // Copy results to host and verify every row
+    auto h_key1 = gamax::copy_column_to_host<int32_t>(result->get_column(0).view(), stream_);
+    auto h_key2 = gamax::copy_column_to_host<int32_t>(result->get_column(1).view(), stream_);
     auto h_vals = gamax::copy_column_to_host<int64_t>(result->get_column(2).view(), stream_);
     cudaStreamSynchronize(stream_);
     
-    for (int i = 0; i < 100; ++i) {
-        EXPECT_EQ(h_vals[i], 1);
+    // Build expected: each of 10x10 combinations appears once with value 1
+    std::map<std::pair<int32_t, int32_t>, int64_t> expected;
+    for (int i = 0; i < 10; ++i) {
+        for (int j = 0; j < 10; ++j) {
+            expected[{i, j}] = 1;
+        }
     }
+    
+    std::map<std::pair<int32_t, int32_t>, int64_t> actual;
+    for (int i = 0; i < 100; ++i) {
+        actual[{h_key1[i], h_key2[i]}] = h_vals[i];
+    }
+    
+    EXPECT_EQ(actual, expected);
 }
 
 // =============================================================================
 // Test Case 11: Two keys with SUM and MAX on same value column
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoKeys_SumAndMaxOnSameColumn) {
+TEST_P(GroupbyMultiKeysTest, TwoKeys_SumAndMaxOnSameColumn) {
     // Key1: [1, 1, 1, 2, 2]
     // Key2: [1, 1, 2, 1, 1]
     // Val:  [10, 30, 20, 50, 40]
@@ -590,9 +630,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_SumAndMaxOnSameColumn) {
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     requests.push_back({0, gamax::groupby::aggregation_id::MAX});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -622,7 +660,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_SumAndMaxOnSameColumn) {
 // =============================================================================
 // Test Case 12: Float value column with integer keys
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, FloatValues_IntegerKeys) {
+TEST_P(GroupbyMultiKeysTest, FloatValues_IntegerKeys) {
     int32_t key1[] = {1, 1, 2, 2};
     int32_t key2[] = {1, 2, 1, 2};
     float vals[] = {1.5f, 2.5f, 3.5f, 4.5f};
@@ -643,9 +681,7 @@ TEST_F(GroupbyMultiKeysTest, FloatValues_IntegerKeys) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -653,21 +689,31 @@ TEST_F(GroupbyMultiKeysTest, FloatValues_IntegerKeys) {
     ASSERT_NE(result, nullptr);
     EXPECT_EQ(result->num_rows(), 4);
     
-    // Total sum should be preserved
+    // Copy results to host and verify every row
+    auto h_key1 = gamax::copy_column_to_host<int32_t>(result->get_column(0).view(), stream_);
+    auto h_key2 = gamax::copy_column_to_host<int32_t>(result->get_column(1).view(), stream_);
     auto h_vals = gamax::copy_column_to_host<float>(result->get_column(2).view(), stream_);
     cudaStreamSynchronize(stream_);
     
-    float total = 0.0;
+    // Each combination is unique, so SUM = original value
+    std::map<std::pair<int32_t, int32_t>, float> expected = {
+        {{1, 1}, 1.5f}, {{1, 2}, 2.5f}, {{2, 1}, 3.5f}, {{2, 2}, 4.5f}
+    };
+    
+    std::map<std::pair<int32_t, int32_t>, float> actual;
     for (size_t i = 0; i < 4; ++i) {
-        total += h_vals[i];
+        actual[{h_key1[i], h_key2[i]}] = h_vals[i];
     }
-    EXPECT_NEAR(total, 1.5 + 2.5 + 3.5 + 4.5, 0.001);
+    
+    for (const auto& [key, val] : expected) {
+        EXPECT_NEAR(actual[key], val, 0.001f);
+    }
 }
 
 // =============================================================================
 // Test Case 13: Double value column with MAX aggregation
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, DoubleValues_Max) {
+TEST_P(GroupbyMultiKeysTest, DoubleValues_Max) {
     int32_t key1[] = {1, 1, 1, 2, 2, 2};
     int32_t key2[] = {1, 1, 2, 1, 2, 2};
     double vals[] = {1.1, 3.3, 2.2, 5.5, 4.4, 6.6};
@@ -688,9 +734,7 @@ TEST_F(GroupbyMultiKeysTest, DoubleValues_Max) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::MAX});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -724,7 +768,7 @@ TEST_F(GroupbyMultiKeysTest, DoubleValues_Max) {
 // =============================================================================
 // Test Case 14: Basic AVG aggregation with two keys
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoKeys_BasicAvg) {
+TEST_P(GroupbyMultiKeysTest, TwoKeys_BasicAvg) {
     // Key1: [1, 1, 2, 2, 1]
     // Key2: [10, 10, 20, 20, 10]
     // Val:  [10, 20, 30, 40, 30]
@@ -750,9 +794,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_BasicAvg) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::AVG});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -787,7 +829,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_BasicAvg) {
 // =============================================================================
 // Test Case 15: AVG and SUM on the same column (should compute SUM only once)
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgAndSumSameColumn) {
+TEST_P(GroupbyMultiKeysTest, TwoKeys_AvgAndSumSameColumn) {
     // Key1: [1, 1, 2, 2]
     // Key2: [1, 1, 2, 2]
     // Val:  [10, 30, 20, 40]
@@ -815,9 +857,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgAndSumSameColumn) {
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});
     requests.push_back({0, gamax::groupby::aggregation_id::AVG});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -855,7 +895,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgAndSumSameColumn) {
 // =============================================================================
 // Test Case 16: AVG before SUM on the same column (order reversed)
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgBeforeSumSameColumn) {
+TEST_P(GroupbyMultiKeysTest, TwoKeys_AvgBeforeSumSameColumn) {
     // Same as Test 15 but AVG requested before SUM
     int32_t key1[] = {1, 1, 2, 2};
     int32_t key2[] = {1, 1, 2, 2};
@@ -878,9 +918,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgBeforeSumSameColumn) {
     requests.push_back({0, gamax::groupby::aggregation_id::AVG});  // AVG first
     requests.push_back({0, gamax::groupby::aggregation_id::SUM});  // SUM second
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -918,7 +956,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgBeforeSumSameColumn) {
 // =============================================================================
 // Test Case 17: Multiple AVG on different columns
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoKeys_MultipleAvgDifferentColumns) {
+TEST_P(GroupbyMultiKeysTest, TwoKeys_MultipleAvgDifferentColumns) {
     // Key1: [1, 1, 2, 2]
     // Key2: [1, 1, 2, 2]
     // Val1: [10, 20, 30, 40]
@@ -950,9 +988,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_MultipleAvgDifferentColumns) {
     requests.push_back({0, gamax::groupby::aggregation_id::AVG});
     requests.push_back({1, gamax::groupby::aggregation_id::AVG});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -990,7 +1026,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_MultipleAvgDifferentColumns) {
 // =============================================================================
 // Test Case 18: Multiple AVG on the same column (should compute only once)
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoKeys_MultipleAvgSameColumn) {
+TEST_P(GroupbyMultiKeysTest, TwoKeys_MultipleAvgSameColumn) {
     // Two AVG requests on the same column should produce two identical result columns
     int32_t key1[] = {1, 1, 2, 2};
     int32_t key2[] = {1, 1, 2, 2};
@@ -1013,9 +1049,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_MultipleAvgSameColumn) {
     requests.push_back({0, gamax::groupby::aggregation_id::AVG});
     requests.push_back({0, gamax::groupby::aggregation_id::AVG});  // Duplicate AVG
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -1050,7 +1084,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_MultipleAvgSameColumn) {
 // =============================================================================
 // Test Case 19: AVG with MAX on same column
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgAndMaxSameColumn) {
+TEST_P(GroupbyMultiKeysTest, TwoKeys_AvgAndMaxSameColumn) {
     int32_t key1[] = {1, 1, 1, 2, 2};
     int32_t key2[] = {1, 1, 1, 2, 2};
     int32_t vals[] = {10, 20, 30, 40, 50};
@@ -1072,9 +1106,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgAndMaxSameColumn) {
     requests.push_back({0, gamax::groupby::aggregation_id::AVG});
     requests.push_back({0, gamax::groupby::aggregation_id::MAX});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -1114,7 +1146,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgAndMaxSameColumn) {
 // =============================================================================
 // Test Case 20: AVG with SUM and MAX on same column (three aggregations)
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgSumMaxSameColumn) {
+TEST_P(GroupbyMultiKeysTest, TwoKeys_AvgSumMaxSameColumn) {
     int32_t key1[] = {1, 1, 2, 2};
     int32_t key2[] = {1, 1, 2, 2};
     int32_t vals[] = {10, 30, 20, 60};
@@ -1137,9 +1169,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgSumMaxSameColumn) {
     requests.push_back({0, gamax::groupby::aggregation_id::AVG});
     requests.push_back({0, gamax::groupby::aggregation_id::MAX});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -1179,7 +1209,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgSumMaxSameColumn) {
 // =============================================================================
 // Test Case 21: AVG on float values
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgFloatValues) {
+TEST_P(GroupbyMultiKeysTest, TwoKeys_AvgFloatValues) {
     int32_t key1[] = {1, 1, 2, 2};
     int32_t key2[] = {1, 1, 2, 2};
     float vals[] = {1.5f, 2.5f, 3.5f, 4.5f};
@@ -1200,9 +1230,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgFloatValues) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::AVG});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -1233,7 +1261,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgFloatValues) {
 // =============================================================================
 // Test Case 22: AVG single group (all same keys)
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, SingleGroup_Avg) {
+TEST_P(GroupbyMultiKeysTest, SingleGroup_Avg) {
     int32_t key1[] = {1, 1, 1, 1, 1};
     int32_t key2[] = {10, 10, 10, 10, 10};
     int32_t vals[] = {10, 20, 30, 40, 50};
@@ -1254,9 +1282,7 @@ TEST_F(GroupbyMultiKeysTest, SingleGroup_Avg) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::AVG});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -1275,7 +1301,7 @@ TEST_F(GroupbyMultiKeysTest, SingleGroup_Avg) {
 // =============================================================================
 // Test Case 23: AVG each row is its own group
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, AllUniqueKeys_Avg) {
+TEST_P(GroupbyMultiKeysTest, AllUniqueKeys_Avg) {
     int32_t key1[] = {1, 2, 3, 4, 5};
     int32_t key2[] = {10, 20, 30, 40, 50};
     int32_t vals[] = {100, 200, 300, 400, 500};
@@ -1296,9 +1322,7 @@ TEST_F(GroupbyMultiKeysTest, AllUniqueKeys_Avg) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::AVG});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -1326,7 +1350,7 @@ TEST_F(GroupbyMultiKeysTest, AllUniqueKeys_Avg) {
 // =============================================================================
 // Test Case 24: AVG with agg_count hint enabled
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgWithCountHint) {
+TEST_P(GroupbyMultiKeysTest, TwoKeys_AvgWithCountHint) {
     int32_t key1[] = {1, 1, 2, 2, 2};
     int32_t key2[] = {1, 1, 2, 2, 2};
     int32_t vals[] = {10, 20, 30, 40, 50};
@@ -1347,9 +1371,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgWithCountHint) {
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.push_back({0, gamax::groupby::aggregation_id::AVG});
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     hint.agg_count = true;  // Request count column
     
     auto result = gamax::groupby::groupby(
@@ -1382,7 +1404,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_AvgWithCountHint) {
 // =============================================================================
 // Test Case 25: Complex case - AVG and SUM on different columns + AVG on same col as SUM
 // =============================================================================
-TEST_F(GroupbyMultiKeysTest, TwoKeys_ComplexMixedAggregations) {
+TEST_P(GroupbyMultiKeysTest, TwoKeys_ComplexMixedAggregations) {
     // Key1: [1, 1, 2, 2]
     // Key2: [1, 1, 2, 2]
     // Val1: [10, 20, 30, 40]  -> SUM, AVG
@@ -1413,9 +1435,7 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_ComplexMixedAggregations) {
     requests.push_back({1, gamax::groupby::aggregation_id::AVG});  // AVG on Val2
     requests.push_back({0, gamax::groupby::aggregation_id::AVG});  // AVG on Val1 (reuse SUM)
     
-    gamax::groupby::groupby_hint hint;
-    hint.groupby_algo = gamax::groupby::groupby_algo::HASH;
-    hint.groups_upper_bound = 10;
+    auto hint = make_hint(10);
     
     auto result = gamax::groupby::groupby(
         key_table->view(), val_table->view(), requests, hint, stream_);
@@ -1451,6 +1471,23 @@ TEST_F(GroupbyMultiKeysTest, TwoKeys_ComplexMixedAggregations) {
         }
     }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    AllAlgos,
+    GroupbyMultiKeysTest,
+    ::testing::Values(
+        GroupbyMultiKeysParams{"Hash_NoSKF",       gamax::groupby::HASH,           false},
+        GroupbyMultiKeysParams{"Hash_SKF",          gamax::groupby::HASH,           true},
+        GroupbyMultiKeysParams{"Sort_SKF",          gamax::groupby::SORT,           true},
+        GroupbyMultiKeysParams{"SortOpt_SKF",       gamax::groupby::SORT_OPT,       true},
+        GroupbyMultiKeysParams{"SortGFUR_SKF",      gamax::groupby::SORT_GFUR,      true},
+        GroupbyMultiKeysParams{"Partition_SKF",     gamax::groupby::PARTITION,       true},
+        GroupbyMultiKeysParams{"PartitionGFUR_SKF", gamax::groupby::PARTITION_GFUR,  true}
+    ),
+    [](const ::testing::TestParamInfo<GroupbyMultiKeysParams>& info) {
+        return info.param.name;
+    }
+);
 
 } // namespace test
 } // namespace gamax

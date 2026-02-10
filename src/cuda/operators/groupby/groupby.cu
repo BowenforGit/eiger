@@ -17,6 +17,8 @@
 #include "operators/groupby/groupby_hash.hpp"
 #include "operators/groupby/groupby_partition.hpp"
 #include "stats/stats_compute.hpp"
+#include "compress/multikey_compress.hpp"
+#include "utils/transform.hpp"
 
 namespace gamax::groupby {
 
@@ -94,9 +96,7 @@ void auto_select_groupby_algo(
     }
 }
 
-} // anonymous namespace
-
-std::unique_ptr<gamax::table> groupby(
+std::unique_ptr<gamax::table> groupby_noskf(
     gamax::table_view key, 
     gamax::table_view val, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
@@ -255,6 +255,7 @@ std::unique_ptr<gamax::table> groupby(
             final_columns.push_back(std::move(avg_col));
         } else {
             // For SUM, MAX, etc., copy the column directly
+            // TODO: check again, why copying?
             final_columns.push_back(internal_result->get_column(internal_col_idx).deep_copy(stream));
         }
     }
@@ -268,5 +269,65 @@ std::unique_ptr<gamax::table> groupby(
     cudaStreamSynchronize(stream);
     
     return std::make_unique<gamax::table>(std::move(final_columns));
+}
+} // anonymous namespace
+
+std::unique_ptr<gamax::table> groupby(
+    gamax::table_view key, 
+    gamax::table_view val, 
+    std::vector<gamax::groupby::aggregation_request>& agg_requests,
+    gamax::groupby::groupby_hint& hint,
+    cudaStream_t stream)
+{
+    if (!hint.enable_skf) {
+        return groupby_noskf(key, val, agg_requests, hint, stream);
+    }
+
+    int compressed_bits = 0;
+    gamax::compress::multikey_compress_options compress_options;
+    compress_options.out_total_bits = &compressed_bits;
+
+    auto compressed_key = gamax::compress::multikey_compress(key, compress_options, stream);
+    if(!compressed_key) {
+        return groupby_noskf(key, val, agg_requests, hint, stream);
+    }
+
+    hint.groups_upper_bound = std::min(hint.groups_upper_bound, static_cast<gamax::size_type>(1) << compressed_bits);
+
+    std::vector<column_ptr> compressed_key_vec;
+    compressed_key_vec.push_back(std::move(compressed_key));
+    auto combined_key_table = gamax::make_table(std::move(compressed_key_vec));
+
+    auto tids = gamax::make_sequence<gamax::size_type>(key.num_rows(), 0, 1, stream);
+    val.add_column(tids->view());
+
+    // Make a local copy to avoid mutating caller's agg_requests
+    auto local_agg_requests = agg_requests;
+    local_agg_requests.push_back(gamax::groupby::aggregation_request(val.num_columns() - 1, gamax::groupby::aggregation_id::ANY));
+    
+    auto result = groupby_noskf(combined_key_table->view(), val, local_agg_requests, hint, stream);
+
+    // result schema: [compressed_key, agg_col_0, agg_col_1, ..., ANY(tids), count (if agg_count == true)]
+    auto tid_idx = result->num_columns() - 1;
+    if(hint.agg_count) {
+        tid_idx -= 1; // if count is needed, the ANY column is before the count column
+    }
+
+    // Remove the ANY column (tids)
+    auto res_tids = result->remove_column(tid_idx);
+
+    // Gather the original key columns using the tids
+    std::vector<column_ptr> final_columns;
+    for(int i = 0; i < key.num_columns(); i++) {
+        auto res_key = gamax::util::device::gather(res_tids->view(), key.get_column(i), stream);
+        final_columns.push_back(std::move(res_key));
+    }
+    for(int i = 1; i < result->num_columns(); i++) {
+        final_columns.push_back(std::move(result->release_column(i)));
+    }
+
+    cudaStreamSynchronize(stream);
+
+    return gamax::make_table(std::move(final_columns));
 }
 } // namespace gamax::groupby

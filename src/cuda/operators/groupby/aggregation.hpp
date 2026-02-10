@@ -9,7 +9,9 @@ namespace groupby {
 enum class aggregation_id {
     SUM,
     MAX,
+    MIN,
     AVG,
+    ANY,
     NOT_SUPPORTED_AGGREGATION
 };
 
@@ -29,9 +31,9 @@ std::unique_ptr<gamax::table> aggregate(
     cudaStream_t stream = cudaStreamDefault);
 }
 
-#define DISPATCH_AGGREGATE(fn) \
+#define DISPATCH_AGGREGATE(fn, SPECIFIER) \
 template<typename... Ts> \
-void dispatch_aggregate(gamax::groupby::aggregation_id agg_kind, Ts&&... args) { \
+SPECIFIER void dispatch_aggregate(gamax::groupby::aggregation_id agg_kind, Ts&&... args) { \
     switch(agg_kind) { \
         case gamax::groupby::aggregation_id::SUM: \
             fn<gamax::groupby::aggregation_id::SUM>{}(std::forward<Ts>(args)...); \
@@ -39,8 +41,14 @@ void dispatch_aggregate(gamax::groupby::aggregation_id agg_kind, Ts&&... args) {
         case gamax::groupby::aggregation_id::MAX: \
             fn<gamax::groupby::aggregation_id::MAX>{}(std::forward<Ts>(args)...); \
             break; \
+        case gamax::groupby::aggregation_id::MIN: \
+            fn<gamax::groupby::aggregation_id::MIN>{}(std::forward<Ts>(args)...); \
+            break; \
+        case gamax::groupby::aggregation_id::ANY: \
+            fn<gamax::groupby::aggregation_id::ANY>{}(std::forward<Ts>(args)...); \
+            break; \
         default: \
-            throw std::runtime_error("Unsupported aggregation function"); \
+            GAMAX_UNREACHABLE("Unsupported aggregation function"); \
     } \
 }
 

@@ -163,7 +163,7 @@ struct dispatch_val_type_helper {
     }
 };
 
-DISPATCH_AGGREGATE(dispatch_val_type_helper)
+DISPATCH_AGGREGATE(dispatch_val_type_helper, __host__)
 
 void aggregate(
     gamax::groupby::aggregation_id agg_kind, 

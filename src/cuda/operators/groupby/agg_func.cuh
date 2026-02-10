@@ -120,6 +120,92 @@ struct Max {
     }
 };
 
+template<typename ValT>
+struct Min {
+    using InputType = ValT;
+    using OutputType = ValT;
+    
+    static constexpr bool is_monoid = true;
+    static constexpr bool is_atomic_updatable = true;
+    static constexpr OutputType identity = std::numeric_limits<OutputType>::max();
+
+    template <typename IdxT, typename ResultT>
+    __device__ __forceinline__ void global_update(IdxT idx, 
+                                        ResultT* result, 
+                                        ValT val) const {
+        gamax::atomic::atomic_min(&result[idx], val);
+    }
+
+    template <typename ResultT>
+    __device__ __forceinline__ void atomic_update(ResultT* result, 
+                                                    ValT val) const {
+        gamax::atomic::atomic_min(result, val);
+    }
+
+    template <typename ResultT>
+    __device__ __forceinline__ ResultT thread_local_update(
+                                        const ResultT& local_agg,
+                                        const ValT& val) const {
+        return local_agg < val ? local_agg : val;
+    }
+
+    template<typename T, typename U>
+    __device__ __forceinline__ OutputType operator() (
+                                        const T& a,
+                                        const U& b) const {
+        return static_cast<OutputType>(a) < static_cast<OutputType>(b) ? static_cast<OutputType>(a) : static_cast<OutputType>(b);
+    }
+
+    __device__ __forceinline__ void operator() (
+                                        gamax::column_view src, gamax::size_type src_idx, 
+                                        gamax::mutable_column_view dst, gamax::size_type dst_idx) const {
+        this->global_update(dst_idx, dst.data<OutputType>(), src.data<ValT>()[src_idx]);
+    }
+};
+
+template<typename ValT>
+struct Any {
+    using InputType = ValT;
+    using OutputType = ValT;
+    
+    static constexpr bool is_monoid = true;
+    static constexpr bool is_atomic_updatable = true;
+    static constexpr OutputType identity = static_cast<OutputType>(0);
+
+    template <typename IdxT, typename ResultT>
+    __device__ __forceinline__ void global_update(IdxT idx, 
+                                        ResultT* result, 
+                                        ValT val) const {
+        result[idx] = val;
+    }
+
+    template <typename ResultT>
+    __device__ __forceinline__ void atomic_update(ResultT* result, 
+                                                    ValT val) const {
+        *result = val;
+    }
+
+    template <typename ResultT>
+    __device__ __forceinline__ ResultT thread_local_update(
+                                        const ResultT& local_agg,
+                                        const ValT& val) const {
+        return val;
+    }
+
+    template<typename T, typename U>
+    __device__ __forceinline__ OutputType operator() (
+                                        const T& a,
+                                        const U& b) const {
+        return static_cast<OutputType>(a);
+    }
+
+    __device__ __forceinline__ void operator() (
+                                        gamax::column_view src, gamax::size_type src_idx, 
+                                        gamax::mutable_column_view dst, gamax::size_type dst_idx) const {
+        this->global_update(dst_idx, dst.data<OutputType>(), src.data<ValT>()[src_idx]);
+    }
+};
+
 template<gamax::groupby::aggregation_id agg_kind, typename ValT>
 struct agg_fn_mapper {
     using F = void;
@@ -133,4 +219,6 @@ struct agg_fn_mapper {
 
 AGG_FN_MAPPER(SUM, Sum)
 AGG_FN_MAPPER(MAX, Max)
+AGG_FN_MAPPER(MIN, Min)
+AGG_FN_MAPPER(ANY, Any)
 } // namespace gamax::groupby

@@ -30,6 +30,7 @@ struct groupby_hint {
     bool optimize_sort {false}; // optimize sort for sort-based groupby
     gamax::groupby::groupby_algo groupby_algo {gamax::groupby::AUTO_ALGO};
     bool agg_count {false};
+    bool enable_skf {false}; // smart-key-fusion
 };
 
 std::unique_ptr<gamax::table> groupby(

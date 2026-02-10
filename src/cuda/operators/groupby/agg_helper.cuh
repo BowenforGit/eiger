@@ -13,6 +13,26 @@
 #include "types/data_type.hpp"
 
 namespace gamax::groupby::details {
+
+// Helper to compute aligned buffer offset for a given aggregation index
+// Aggregation columns in res start at index 1 (index 0 is the key column)
+__device__ __forceinline__ char* get_partition_agg_buffer_offset(
+    char* base,
+    gamax::size_type target_agg,
+    gamax::size_type num_groups,
+    gamax::experimental::mutable_table_device_view res)
+{
+    char* offset = base;
+    for(gamax::size_type k = 0; k < target_agg; k++) {
+        std::size_t agg_size = gamax::size_of(res.get_column(k + 1).type());
+        offset += num_groups * agg_size;
+        // Ensure 8-byte alignment for next aggregation buffer
+        std::size_t addr = reinterpret_cast<std::size_t>(offset);
+        offset = reinterpret_cast<char*>((addr + 7) & ~std::size_t(7));
+    }
+    return offset;
+}
+
 template<gamax::groupby::aggregation_id agg_kind>
 struct dispatch_val_type_helper {
     template<typename T>
@@ -70,9 +90,15 @@ struct dispatch_val_type_helper {
         #pragma unroll
         // for(int i = threadIdx.x; i < src_end - src_start; i += blockDim.x) {
         for(gamax::size_type i = group.thread_rank(); i < src_end - src_start; i += group.size()) {
-            tl_agg = f.thread_local_update(tl_agg, src.data<T>()[src_idx[i]]);
+            tl_agg = f.thread_local_update(tl_agg, src.data<T>()[src_idx[i + src_start]]);
         }
-        f.atomic_update(&agg_val, tl_agg);
+        
+        if(tl_agg != F::identity) {
+            // this condition check avoids unnecessary atomic updates for threads 
+            // that have no contribution to the final aggregation result.
+            // It also guarantees the correctness of ANY aggregation.
+            f.atomic_update(&agg_val, tl_agg);
+        }
         block.sync();
 
         if(block.thread_rank() == 0) {
@@ -159,20 +185,7 @@ struct dispatch_val_type_helper {
     }
 };
 
-template<typename... Ts>
-__device__ __forceinline__ void dispatch_type_aggregate(gamax::groupby::aggregation_id agg_kind, Ts&&... args)
-{
-    switch(agg_kind) {
-        case gamax::groupby::aggregation_id::SUM:
-            dispatch_val_type_helper<gamax::groupby::aggregation_id::SUM>{}(std::forward<Ts>(args)...);
-            break;
-        case gamax::groupby::aggregation_id::MAX:
-            dispatch_val_type_helper<gamax::groupby::aggregation_id::MAX>{}(std::forward<Ts>(args)...);
-            break;
-        default:
-            GAMAX_UNREACHABLE("Unsupported aggregation function");
-    }
-}
+DISPATCH_AGGREGATE(dispatch_val_type_helper, __device__)
 
 __device__ __forceinline__ void aggregate(
     gamax::groupby::aggregation_id agg_kind,
@@ -181,7 +194,7 @@ __device__ __forceinline__ void aggregate(
     gamax::mutable_column_view dst,
     gamax::size_type dst_idx)
 {
-    dispatch_type_aggregate(
+    dispatch_aggregate(
         agg_kind,
         src, 
         src_idx, 
@@ -201,7 +214,7 @@ __device__ __forceinline__ void reduce(
     gamax::size_type dst_idx
 )
 {
-    dispatch_type_aggregate(
+    dispatch_aggregate(
         agg_kind,
         group,
         src, 
@@ -219,7 +232,7 @@ __device__ __forceinline__ void block_aggregate(
     void* dst,
     gamax::size_type dst_idx)
 {
-    dispatch_type_aggregate(
+    dispatch_aggregate(
         agg_kind,
         src, 
         src_idx, 
@@ -269,17 +282,15 @@ __device__ __forceinline__ void copy_agg_from_smem_to_global(
     const gamax::size_type num_groups,
     const gamax::size_type num_aggs)
 {
-    auto cur_agg_buffer = block_agg;
-
     #pragma unroll
     for(gamax::size_type k = 0; k < num_aggs; k++) {
+        char* cur_agg_buffer = get_partition_agg_buffer_offset(reinterpret_cast<char*>(block_agg), k, num_groups, res);
         copy_agg_from_smem_to_global(
             group,
             res.get_column(k+1), 
             offset, 
             cur_agg_buffer, 
             num_groups);
-        cur_agg_buffer = reinterpret_cast<void*>(reinterpret_cast<char*>(cur_agg_buffer) + (num_groups)*gamax::size_of(res.get_column(k+1).type()));
     }
 
     cooperative_groups::wait(group);
@@ -330,17 +341,15 @@ __device__ __forceinline__ void copy_agg_from_smem_to_global(
     const gamax::size_type num_groups,
     const gamax::size_type num_aggs)
 {
-    auto cur_agg_buffer = block_agg;
-
     #pragma unroll
     for(gamax::size_type k = 0; k < num_aggs; k++) {
+        char* cur_agg_buffer = get_partition_agg_buffer_offset(reinterpret_cast<char*>(block_agg), k, num_groups, res);
         copy_agg_from_smem_to_global(
             group,
             res.get_column(k+1), 
             offset, 
             cur_agg_buffer, 
             num_groups);
-        cur_agg_buffer = reinterpret_cast<void*>(reinterpret_cast<char*>(cur_agg_buffer) + (num_groups)*gamax::size_of(res.get_column(k+1).type()));
     }
 
     group.sync();
@@ -353,7 +362,7 @@ __device__ __forceinline__ void init_agg(
     gamax::mutable_column_view dst,
     gamax::size_type dst_idx)
 {
-    dispatch_type_aggregate(
+    dispatch_aggregate(
         agg_kind,
         src_type,
         dst.data(),
@@ -366,7 +375,7 @@ __device__ __forceinline__ void init_agg(
     void* dst,
     gamax::size_type dst_idx)
 {
-    dispatch_type_aggregate(
+    dispatch_aggregate(
         agg_kind,
         src_type, // agg fn and src type can together deduce the output type
         dst, 

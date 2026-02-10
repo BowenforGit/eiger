@@ -75,7 +75,8 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
     using extent_type      = cuco::extent<std::size_t, NumSlots>;
     using storage_ref_type = cuco::bucket_storage_ref<slot_type, BucketSize, extent_type>;
 
-    extern __shared__ int16_t temp[];
+    // Use long long for 8-byte alignment of shared memory base
+    extern __shared__ long long temp[];
     auto shared_slots = reinterpret_cast<slot_type*>(temp);
     struct {
         gamax::size_type num_groups_local;
@@ -148,19 +149,15 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
             }
         } else if(num_groups_local <= 256) { // TODO: re-evaluate this condition
             // void* agg_buffer = reinterpret_cast<void*>(u+1);
-            void* agg_buffer = reinterpret_cast<void*>(temp);
+            char* agg_buffer = reinterpret_cast<char*>(temp);
 
             // initialize the aggregation buffer in SMEM
-            auto cur_agg_buffer = agg_buffer;
-
             #pragma unroll
             for(gamax::size_type t = block.thread_rank(); t < num_groups_local; t += block.size()) {
-                cur_agg_buffer = agg_buffer;
-                
                 #pragma unroll
                 for(gamax::size_type k = 0; k < num_aggs; k++) {
-                    init_agg(aggs[k].agg_kind, values.get_column(k).type(), cur_agg_buffer, t);
-                    cur_agg_buffer = reinterpret_cast<void*>(reinterpret_cast<char*>(cur_agg_buffer) + (num_groups_local)*gamax::size_of(res.get_column(k+1).type()));
+                    char* cur_agg_buffer = get_partition_agg_buffer_offset(agg_buffer, k, num_groups_local, res);
+                    init_agg(aggs[k].agg_kind, values.get_column(aggs[k].column_index).type(), cur_agg_buffer, t);
                 }
             }
             block.sync();
@@ -178,15 +175,13 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
                     l_group_id = (group_id[gl] & groupid_read_mask);
                 }
                 
-                auto cur_agg_buffer = agg_buffer;
-                
                 #pragma unroll
                 for(gamax::size_type k = 0; k < num_aggs; k++) {
+                    char* cur_agg_buffer = get_partition_agg_buffer_offset(agg_buffer, k, num_groups_local, res);
                     block_aggregate(
                         aggs[k].agg_kind,
                         values.get_column(aggs[k].column_index), val_idx[idx],
                         cur_agg_buffer, l_group_id);
-                    cur_agg_buffer = reinterpret_cast<void*>(reinterpret_cast<char*>(cur_agg_buffer) + (num_groups_local)*gamax::size_of(res.get_column(k+1).type()));
                 }
             }
             block.sync();
@@ -292,11 +287,14 @@ std::unique_ptr<gamax::table> compute_aggregate(
     // Add space for the extended u struct (num_groups_local, block_offset, key_ptr)
     std::size_t sm_bytes = num_slots * sizeof(gamax::size_type) + sizeof(gamax::size_type)*2 + sizeof(const Key*);
     if(estimated_num_groups / num_partitions <= 256) {
+        // Calculate aligned shared memory size for aggregation buffers
         std::size_t agg_bytes = 0;
         for(gamax::size_type i = 1; i < res->num_columns(); i++) {
-            agg_bytes += gamax::size_of(res->get_column(i).type());
+            agg_bytes += 256 * gamax::size_of(res->get_column(i).type());
+            // Add alignment padding (align to 8 bytes)
+            agg_bytes = (agg_bytes + 7) & ~std::size_t(7);
         }
-        sm_bytes = std::max(agg_bytes * 256, sm_bytes);
+        sm_bytes = std::max(agg_bytes, sm_bytes);
     }
     // std::cout << "sm_bytes: " << sm_bytes << std::endl; 
     auto agg_fn = partition_groupby_aggregate_kernel<Key, NumSlots, decltype(itr)>;
