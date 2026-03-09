@@ -24,6 +24,7 @@ set(benchmarkSources
     compress/dict_enc_nvbench.cu
     join/ieq_join_nvbench.cu
     # containers/multimap_nvbench.cu
+    containers/multiset_nvbench.cu
     containers/map_nvbench.cu
     sort/sort_nvbench.cu
     sort/sort_table_nvbench.cu
