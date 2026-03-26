@@ -24,6 +24,42 @@
 #include "types/data_type.hpp"
 
 // ============================================================================
+// Simple gather kernel and wrapper
+// ============================================================================
+
+template <typename GatherMapT, typename ValueT>
+__global__ void gather_kernel(const GatherMapT* __restrict__ gather_map,
+                              const ValueT* __restrict__ input,
+                              ValueT* __restrict__ output,
+                              gamax::size_type n) {
+    gamax::size_type idx = blockIdx.x * blockDim.x + threadIdx.x;
+    gamax::size_type stride = blockDim.x * gridDim.x;
+    for (gamax::size_type i = idx; i < n; i += stride) {
+        output[i] = input[gather_map[i]];
+    }
+}
+
+template <typename ValueT>
+std::unique_ptr<gamax::column> simple_gather(
+    gamax::column_view gather_map,
+    gamax::column_view input,
+    cudaStream_t stream = cudaStreamDefault) {
+    const gamax::size_type n = gather_map.size();
+    auto output = std::make_unique<gamax::column>(input.type(), n);
+
+    constexpr int block_size = 256;
+    const int grid_size = (n + block_size - 1) / block_size;
+
+    gather_kernel<gamax::size_type, ValueT><<<grid_size, block_size, 0, stream>>>(
+        gather_map.data<gamax::size_type>(),
+        input.data<ValueT>(),
+        output->mutable_view().data<ValueT>(),
+        n);
+
+    return output;
+}
+
+// ============================================================================
 // Benchmark: gather with varying input sizes and gather map sizes
 // ============================================================================
 
@@ -34,6 +70,7 @@ void bench_gather(nvbench::state& state, nvbench::type_list<ValueT>) {
 
     const gamax::size_type num_inputs = state.get_int64("num_inputs");
     const gamax::size_type gather_map_size = state.get_int64("gather_map_size");
+    const std::string algo = state.get_string("algo");
     constexpr int seed = 42;
 
     // Skip invalid configurations: gather map indices must be within input bounds
@@ -69,10 +106,18 @@ void bench_gather(nvbench::state& state, nvbench::type_list<ValueT>) {
     try {
         state.exec(nvbench::exec_tag::sync,
             [&](nvbench::launch& launch) {
-                auto output = gamax::util::device::gather(
-                    gather_map_col,
-                    input_col,
-                    launch.get_stream());
+                std::unique_ptr<gamax::column> output;
+                if (algo == "thrust") {
+                    output = gamax::util::device::gather(
+                        gather_map_col,
+                        input_col,
+                        launch.get_stream());
+                } else {
+                    output = simple_gather<ValueT>(
+                        gather_map_col,
+                        input_col,
+                        launch.get_stream());
+                }
                 cudaStreamSynchronize(launch.get_stream());
             });
     } catch (const std::exception& e) {
@@ -90,4 +135,5 @@ NVBENCH_BENCH_TYPES(bench_gather,
 .set_name("bench_gather")
 .set_type_axes_names({"ValueType"})
 .add_int64_power_of_two_axis("num_inputs", nvbench::range(25, 28, 1))
-.add_int64_power_of_two_axis("gather_map_size", nvbench::range(25, 28, 1));
+.add_int64_power_of_two_axis("gather_map_size", nvbench::range(25, 28, 1))
+.add_string_axis("algo", {"thrust", "ours"});
