@@ -15,6 +15,8 @@ else(USE_NVIDIA)
         NAME nvbench
         GITHUB_REPOSITORY NVIDIA/nvbench
         GIT_TAG main
+        OPTIONS
+            "NVBench_ENABLE_CUPTI OFF"
     )
     set(GAMAX_BENCHMARK_MAIN_TARGET nvbench::main)
 endif()
@@ -37,6 +39,7 @@ set(benchmarkSources
     misc/hash_fn_nvbench.cu
     misc/gather_nvbench.cu
     misc/read_write_nvbench.cu
+    misc/ilp_nvbench.cu
     stats/stats_nvbench.cu
 )
 
@@ -52,3 +55,9 @@ foreach(source IN LISTS benchmarkSources)
     target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
     target_link_libraries(${target} PRIVATE gamax)
 endforeach()
+
+# ILP benchmark: bypass L1 cache for all loads/stores by default
+if(USE_NVIDIA)
+    target_compile_options(benchmark_ilp PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-dlcm=cg,-dscm=wt>)
+endif()
