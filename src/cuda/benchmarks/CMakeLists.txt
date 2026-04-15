@@ -56,8 +56,6 @@ foreach(source IN LISTS benchmarkSources)
     target_link_libraries(${target} PRIVATE gamax)
 endforeach()
 
-# ILP benchmark: bypass L1 cache for all loads/stores by default
-if(USE_NVIDIA)
-    target_compile_options(benchmark_ilp PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-dlcm=cg,-dscm=wt>)
-endif()
+# Target-specific options live in a separate file so that editing them
+# does not cause CMake to re-evaluate CPMAddPackage in this file.
+include(${CMAKE_CURRENT_LIST_DIR}/benchmark_options.cmake)
