@@ -8,6 +8,7 @@ option(USE_NVIDIA "Use CUDA. [Default=ON]" OFF)
 option(USE_ROCM "Use ROCm. [Default=OFF]" OFF)
 option(BUILD_TEST "Build tests. [Default=ON]" ON)
 option(BUILD_BENCHMARK "Build benchmarks. [Default=ON]" ON)
+option(BUILD_TPCH "Build TPC-H query runner (requires Arrow and Parquet). [Default=OFF]" OFF)
 option(USE_DEFAULT_MEMALLOC "Use the default memory allocation and deallocation. [Default=OFF]" OFF)
 
 if (NOT CMAKE_BUILD_TYPE)

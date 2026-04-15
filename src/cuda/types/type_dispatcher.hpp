@@ -274,7 +274,7 @@ inline __host__ __device__ std::size_t size_of(data_type element_type)
 
 inline std::string to_string(data_type element_type)
 {
-  return type_dispatcher(element_type, to_string_helper{});
+  return type_dispatcher_all(element_type, to_string_helper{});
 }
 
 inline std::string to_string(type_id id)

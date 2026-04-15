@@ -61,3 +61,12 @@ if(USE_NVIDIA)
     target_compile_options(benchmark_ilp PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-dlcm=cg,-dscm=wt>)
 endif()
+
+# TPC-H benchmark: needs gamax_tpch (which links gamax publicly)
+if(BUILD_TPCH AND USE_NVIDIA)
+    add_executable(benchmark_tpch tpch/tpch_nvbench.cu)
+    target_link_libraries(benchmark_tpch PRIVATE common)
+    target_link_libraries(benchmark_tpch PRIVATE ${GAMAX_BENCHMARK_MAIN_TARGET})
+    target_link_libraries(benchmark_tpch PRIVATE gamax_tpch)
+    target_link_libraries(benchmark_tpch PRIVATE OpenMP::OpenMP_CXX)
+endif()

@@ -97,3 +97,7 @@ endif()
     
 add_subdirectory(benchmarks)
 add_subdirectory(tests)
+
+if(BUILD_TPCH AND USE_NVIDIA)
+    add_subdirectory(tpch)
+endif()

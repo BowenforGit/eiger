@@ -33,6 +33,19 @@ std::pair<std::unique_ptr<gamax::table>, gamax::column_ptr> select_and_return_bi
     }
 }
 
+gamax::column_ptr select_to_bitmask(
+    gamax::table_view table,
+    gamax::expression::ExprTree& expr,
+    select_options options,
+    cudaStream_t stream) 
+{
+    if (options.fuse_operations) {
+        return gamax::expression::evaluate_expr(table, expr, stream);;
+    } else {
+        return gamax::expression::evaluate_expr_nofuse(table, expr, stream);
+    }
+}
+
 std::pair<std::unique_ptr<gamax::table>, gamax::column_ptr> select_fuse(
     gamax::table_view table,
     gamax::expression::ExprTree& expr,
