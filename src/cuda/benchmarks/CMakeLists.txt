@@ -56,12 +56,6 @@ foreach(source IN LISTS benchmarkSources)
     target_link_libraries(${target} PRIVATE gamax)
 endforeach()
 
-# ILP benchmark: bypass L1 cache for all loads/stores by default
-if(USE_NVIDIA)
-    target_compile_options(benchmark_ilp PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-dlcm=cg,-dscm=wt>)
-endif()
-
 # TPC-H benchmark: needs gamax_tpch (which links gamax publicly)
 if(BUILD_TPCH AND USE_NVIDIA)
     add_executable(benchmark_tpch tpch/tpch_nvbench.cu)
@@ -70,3 +64,6 @@ if(BUILD_TPCH AND USE_NVIDIA)
     target_link_libraries(benchmark_tpch PRIVATE gamax_tpch)
     target_link_libraries(benchmark_tpch PRIVATE OpenMP::OpenMP_CXX)
 endif()
+# Target-specific options live in a separate file so that editing them
+# does not cause CMake to re-evaluate CPMAddPackage in this file.
+include(${CMAKE_CURRENT_LIST_DIR}/benchmark_options.cmake)

@@ -37,6 +37,7 @@
 #include "utils/launch.cuh"
 
 constexpr int REPETITIONS = 1024;
+constexpr bool synchronize = false;
 
 // ============================================================================
 // Kernels
@@ -99,6 +100,10 @@ __global__ void read_kernel(T* input,
             _CCCL_PRAGMA_UNROLL(VT)
             for (int i = 0; i < VT; ++i) {
                 acc += cub::ThreadLoad<cub::LOAD_CG>(base_ptr + i * blockDim.x);
+            }
+
+            if constexpr(synchronize) {
+                __syncthreads(); // ensure all threads have issued their loads before next iteration
             }
         }
     }
@@ -250,8 +255,8 @@ void bench_ilp_read(nvbench::state& state, nvbench::type_list<T>) {
         return;
     }
 
-    int stride_size = vt * grid_dim * block_dim;
-    int actual_num_items = ((num_items + stride_size - 1) / stride_size) * stride_size; // round up to nearest multiple of stride
+    int64_t stride_size = static_cast<int64_t>(vt) * grid_dim * block_dim;
+    int64_t actual_num_items = ((num_items + stride_size - 1) / stride_size) * stride_size; // round up to nearest multiple of stride
     if (actual_num_items != num_items) {
         std::cout << "Warning: num_items (" << num_items << ") rounded up to " << actual_num_items
                   << " to ensure full waves of VT accesses." << std::endl;
@@ -261,10 +266,10 @@ void bench_ilp_read(nvbench::state& state, nvbench::type_list<T>) {
     // Verify data fits in L2 cache
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
-    if (static_cast<size_t>(actual_num_items) * sizeof(T) > static_cast<size_t>(prop.l2CacheSize)) {
-        state.skip("Data size exceeds L2 cache size");
-        return;
-    }
+    // if (static_cast<size_t>(actual_num_items) * sizeof(T) > static_cast<size_t>(prop.l2CacheSize)) {
+    //     state.skip("Data size exceeds L2 cache size");
+    //     return;
+    // }
 
     // Allocate input (cleared = data brought into L2 via memset inside allocate_mem)
     T* d_input = nullptr;
