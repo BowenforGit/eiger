@@ -128,9 +128,10 @@ struct tpch_params {
         return options;
     }
 
-    gamax::groupby::groupby_hint groupby_options(const std::string& op_name) const {
+    gamax::groupby::groupby_hint groupby_options(const std::string& op_name, bool count = false) const {
         gamax::groupby::groupby_hint options;
         options.groupby_algo = static_cast<gamax::groupby::groupby_algo>(get_algo(op_name));
+        options.agg_count = count;
         return options;
     }
 
@@ -170,7 +171,7 @@ struct tpch_params {
             {"partition_gftr",  static_cast<int>(gamax::groupby::PARTITION)},
             {"partition_gfur",  static_cast<int>(gamax::groupby::PARTITION_GFUR)},
             // join (composite encoding: join_algo * 100 + mat_algo)
-            {"hash_auto", 100}, {"hash_gfur", 101}, {"hash_gftr", 102},
+            {"hash_auto", 100}, {"hash_gfur", 101},
             {"sort_merge_gfur", 201}, {"sort_merge_gftr", 202},
             {"partition_hash_gfur", 301}, {"partition_hash_gftr", 302},
         };
@@ -180,6 +181,49 @@ struct tpch_params {
         }
         return it->second;
     }
+};
+
+class JoinOption {
+public:
+    JoinOption(tpch_params const& params, std::string const& op_name) 
+        : hint_(params.join_options(op_name)) {}
+
+    JoinOption& is_pkfk() {
+        hint_.unique_left = true; // p_partkey is unique
+        return *this;
+    }
+
+    JoinOption& unique_left() {
+        hint_.unique_left = true; // p_partkey is unique
+        return *this;
+    }
+
+    JoinOption& unique_right() {
+        hint_.unique_right = true; // p_partkey is unique
+        return *this;
+    }
+
+    JoinOption& sorted_left() {
+        hint_.sorted_left = true; // p_partkey is sorted
+        return *this;
+    }
+
+    JoinOption& sorted_right() {
+        hint_.sorted_right = true; // p_partkey is sorted
+        return *this;
+    }
+
+    JoinOption& max_output(gamax::size_type max_out) {
+        hint_.max_out = max_out;
+        return *this;
+    }
+
+    gamax::join::join_hint get() {
+        return hint_;
+    }
+
+private:
+    gamax::join::join_hint hint_;
 };
 
 class TpchTableReader {
@@ -248,70 +292,6 @@ public:
 private:
     std::vector<gamax::groupby::aggregation_request> agg_requests_;
 };
-
-// ---------------------------------------------------------------------------
-// Operator wrappers: handle NVTX push/pop and algorithm lookup
-// ---------------------------------------------------------------------------
-std::unique_ptr<gamax::table> tpch_select(
-    query_context& qc,
-    tpch_params const& params,
-    std::string const& op_name,
-    gamax::table_view input,
-    gamax::expression::ExprTree& expr);
-
-std::unique_ptr<gamax::table> tpch_project(
-    query_context& qc,
-    tpch_params const& params,
-    std::string const& op_name,
-    gamax::table_view input,
-    std::vector<gamax::expression::ExprTree>& exprs);
-
-std::unique_ptr<gamax::table> tpch_project(
-    query_context& qc,
-    tpch_params const& params,
-    std::string const& op_name,
-    std::unique_ptr<gamax::table> input,
-    std::vector<gamax::expression::ExprTree>& exprs);
-
-std::unique_ptr<gamax::table> tpch_groupby(
-    query_context& qc,
-    std::string const& op_name,
-    gamax::table_view key_view,
-    gamax::table_view val_view,
-    std::vector<gamax::groupby::aggregation_request>& agg_requests,
-    gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream);
-
-std::unique_ptr<gamax::table> tpch_aggregate(
-    query_context& qc,
-    std::string const& op_name,
-    gamax::table_view input,
-    std::vector<gamax::groupby::aggregation_request>& agg_requests,
-    cudaStream_t stream);
-
-std::unique_ptr<gamax::table> tpch_sort(
-    query_context& qc,
-    tpch_params const& params,
-    std::string const& op_name,
-    gamax::table_view input,
-    std::vector<int> const& keys,
-    std::vector<gamax::sort_order> const& orders);
-
-std::unique_ptr<gamax::table> tpch_inner_join(
-    query_context& qc,
-    std::string const& op_name,
-    gamax::table_view left,
-    gamax::table_view right,
-    gamax::join::join_hint const& hint,
-    cudaStream_t stream);
-
-std::unique_ptr<gamax::table> tpch_semi_join(
-    query_context& qc,
-    std::string const& op_name,
-    gamax::table_view left,
-    gamax::table_view right,
-    gamax::join::join_hint const& hint,
-    cudaStream_t stream);
 
 // ---------------------------------------------------------------------------
 // Query runner base and factory

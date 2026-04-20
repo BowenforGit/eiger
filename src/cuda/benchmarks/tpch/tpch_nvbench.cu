@@ -48,28 +48,48 @@ void bench_tpch(nvbench::state& state, tpch_query qid) {
 
 #define FUSE_NO_FUSE_AXES {"fuse", "nofuse"}
 #define ALL_GROUPBY_AXES {"hash", "sort_gftr", "sort_gftr_opt", "sort_gfur", "partition_gftr", "partition_gfur"}
+#define ALL_JOIN_AXES {"hash_gfur", "sort_merge_gftr", "sort_merge_gfur", "partition_hash_gftr", "partition_hash_gfur"}
 #define ALL_SORT_AXES {"skf", "no_skf"}
+
+#define TPCH_NVBENCH(qid) \
+    void bench_tpch_q##qid(nvbench::state& state) { bench_tpch(state, tpch_query::Q##qid); } \
+    NVBENCH_BENCH(bench_tpch_q##qid) \
+        .set_name("tpch_q" #qid) \
+        .add_int64_axis("scale_factor", {1})
+
+#define FILTER(OP_NAME) \
+    .add_string_axis(OP_NAME, FUSE_NO_FUSE_AXES)
+
+#define PROJECT(OP_NAME) \
+    .add_string_axis(OP_NAME, FUSE_NO_FUSE_AXES)
+
+#define GROUPBY(OP_NAME) \
+    .add_string_axis(OP_NAME, ALL_GROUPBY_AXES)
+
+#define SORT(OP_NAME) \
+    .add_string_axis(OP_NAME, ALL_SORT_AXES)
+
+#define JOIN(OP_NAME) \
+    .add_string_axis(OP_NAME, ALL_JOIN_AXES)
 
 // ============================================================
 // TPC-H Q1: Pricing Summary Report
 // ============================================================
-void bench_tpch_q1(nvbench::state& state) { bench_tpch(state, tpch_query::Q1); }
-
-NVBENCH_BENCH(bench_tpch_q1)
-    .set_name("tpch_q1")
-    .add_int64_axis("scale_factor", {1})
-    .add_string_axis("filter",  FUSE_NO_FUSE_AXES)
-    .add_string_axis("project", FUSE_NO_FUSE_AXES)
-    .add_string_axis("groupby", ALL_GROUPBY_AXES)
-    .add_string_axis("sort",    ALL_SORT_AXES);
+TPCH_NVBENCH(1)
+    FILTER("filter")
+    PROJECT("project")
+    GROUPBY("groupby")
+    SORT("sort");
 
 // ============================================================
 // TPC-H Q6: Forecasting Revenue Change
 // ============================================================
-void bench_tpch_q6(nvbench::state& state) { bench_tpch(state, tpch_query::Q6); }
+TPCH_NVBENCH(6)
+    FILTER("filter")
+    PROJECT("project");
 
-NVBENCH_BENCH(bench_tpch_q6)
-    .set_name("tpch_q6")
-    .add_int64_axis("scale_factor", {1})
-    .add_string_axis("filter",  FUSE_NO_FUSE_AXES)
-    .add_string_axis("project", FUSE_NO_FUSE_AXES);
+TPCH_NVBENCH(14)
+    FILTER("filter_lineitem")
+    PROJECT("project_lineitem")
+    JOIN("join_lineitem_part")
+    PROJECT("project_join_lineitem_part");
