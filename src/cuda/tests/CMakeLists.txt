@@ -27,6 +27,7 @@ if(USE_NVIDIA)
         join/ieq_join_test.cu
         join/semi_join_test.cu
         select/select_fast_test.cu
+        select/predicate_test.cu
         expr/expr_fast_test.cu
         expr/expr_parser_test.cu
         types/floating_point_test.cu

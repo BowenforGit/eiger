@@ -2,12 +2,12 @@ if(USE_ROCM)
     CPMAddPackage(
         NAME libhipcxx
         GITHUB_REPOSITORY ROCm/libhipcxx
-        GIT_TAG release/2.7.x 
+        GIT_TAG 9ac637b66019a8fcf6796f8cfd7b2c13f76313b6 # release/2.7.x @ 2025-11-04
     )
     CPMAddPackage(
         NAME cuco
         GITHUB_REPOSITORY ROCm/hipCollections
-        GIT_TAG release/rocmds-25.10
+        GIT_TAG 77f2e84e4b6f9d667d8733967301dbdad4e795de # release/rocmds-25.10 @ 2025-11-11
         OPTIONS
             "BUILD_TESTS OFF"
             "BUILD_BENCHMARKS OFF"
@@ -17,13 +17,13 @@ else(USE_NVIDIA)
     CPMAddPackage(
         NAME CCCL
         GITHUB_REPOSITORY nvidia/cccl
-        GIT_TAG main # Fetches the latest commit on the main branch
+        GIT_TAG v3.3.2
     )
 
     CPMAddPackage(
         NAME cuco
         GITHUB_REPOSITORY NVIDIA/cuCollections
-        GIT_TAG dev
+        GIT_TAG 6477be2182668015f9a91e3a0bb7e248eceecd09 # dev @ 2026-03-31
         OPTIONS
             "BUILD_TESTS OFF"
             "BUILD_BENCHMARKS OFF"
@@ -58,6 +58,10 @@ set(srcs
     string/string_factory.cu
     string/string_fast.cu
     string/string_sort.cu
+    # optimizer/catalog.cpp
+    # optimizer/logical_plan.cpp
+    # optimizer/plan_builder.cpp
+    # optimizer/plan_printer.cpp
     )
     
 if(USE_NVIDIA)
@@ -74,6 +78,7 @@ if(USE_NVIDIA)
         operators/join/partition_hash_join.cu
         operators/join/hash_join.cu
         operators/select/select.cu
+        operators/select/predicate.cu
         operators/project/project.cu
         operators/sort/topk_table.cu
         expr/expr_fast.cu

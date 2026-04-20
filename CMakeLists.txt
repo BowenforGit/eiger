@@ -135,6 +135,9 @@ file(
 )
 include(${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake)
 
+# Use a shared CPM source cache so dependencies are not re-downloaded across build directories.
+set(CPM_SOURCE_CACHE "$ENV{HOME}/.cache/CPM" CACHE PATH "CPM shared source cache")
+
 # hipify the code
 if(USE_ROCM)
     execute_process(

@@ -2,7 +2,7 @@ if(USE_ROCM)
     CPMAddPackage(
         NAME hipbench
         GITHUB_REPOSITORY ROCm/hipBench
-        GIT_TAG main
+        GIT_TAG 5a7d2b452feaa9d32d194dc989f494ea6afa13b3 # main @ 2024-10-30
         OPTIONS
             "NVBench_ENABLE_TESTING OFF"
     )
@@ -14,7 +14,7 @@ else(USE_NVIDIA)
     CPMAddPackage(
         NAME nvbench
         GITHUB_REPOSITORY NVIDIA/nvbench
-        GIT_TAG main
+        GIT_TAG b0a46f44c21c344e2c338225d724eed60d912fe2 # main @ 2026-04-14
         OPTIONS
             "NVBench_ENABLE_CUPTI OFF"
     )

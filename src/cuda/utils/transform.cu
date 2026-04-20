@@ -229,6 +229,70 @@ namespace {
         return type_dispatcher(input.type(), count_nonzero_impl{}, input, stream);
     }
 
+    namespace {
+    __global__ void bitmask_and_kernel(const bool* __restrict__ lhs, const bool* __restrict__ rhs, bool* __restrict__ out, gamax::size_type n) {
+        gamax::size_type idx = static_cast<gamax::size_type>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (idx < n) {
+            out[idx] = lhs[idx] && rhs[idx];
+        }
+    }
+
+    __global__ void bitmask_or_kernel(const bool* __restrict__ lhs, const bool* __restrict__ rhs, bool* __restrict__ out, gamax::size_type n) {
+        gamax::size_type idx = static_cast<gamax::size_type>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (idx < n) {
+            out[idx] = lhs[idx] || rhs[idx];
+        }
+    }
+
+    __global__ void bitmask_not_kernel(const bool* __restrict__ in, bool* __restrict__ out, gamax::size_type n) {
+        gamax::size_type idx = static_cast<gamax::size_type>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (idx < n) {
+            out[idx] = !in[idx];
+        }
+    }
+    } // namespace
+
+    std::unique_ptr<gamax::column> bitmask_and(
+        gamax::column_view lhs,
+        gamax::column_view rhs,
+        cudaStream_t stream)
+    {
+        auto n = lhs.size();
+        auto output = gamax::make_column(gamax::data_type{gamax::type_id::BOOL8}, n, false, stream);
+        constexpr int block_size = 256;
+        int grid_size = (n + block_size - 1) / block_size;
+        bitmask_and_kernel<<<grid_size, block_size, 0, stream>>>(
+            lhs.data<bool>(), rhs.data<bool>(), output->data<bool>(), n);
+        return output;
+    }
+
+    std::unique_ptr<gamax::column> bitmask_or(
+        gamax::column_view lhs,
+        gamax::column_view rhs,
+        cudaStream_t stream)
+    {
+        auto n = lhs.size();
+        auto output = gamax::make_column(gamax::data_type{gamax::type_id::BOOL8}, n, false, stream);
+        constexpr int block_size = 256;
+        int grid_size = (n + block_size - 1) / block_size;
+        bitmask_or_kernel<<<grid_size, block_size, 0, stream>>>(
+            lhs.data<bool>(), rhs.data<bool>(), output->data<bool>(), n);
+        return output;
+    }
+
+    std::unique_ptr<gamax::column> bitmask_not(
+        gamax::column_view input,
+        cudaStream_t stream)
+    {
+        auto n = input.size();
+        auto output = gamax::make_column(gamax::data_type{gamax::type_id::BOOL8}, n, false, stream);
+        constexpr int block_size = 256;
+        int grid_size = (n + block_size - 1) / block_size;
+        bitmask_not_kernel<<<grid_size, block_size, 0, stream>>>(
+            input.data<bool>(), output->data<bool>(), n);
+        return output;
+    }
+
 } // namespace device
 } // namespace util
 } // namespace gamax

@@ -56,6 +56,20 @@ namespace device {
     gamax::size_type count_nonzero(
         gamax::column_view input,
         cudaStream_t stream = cudaStreamDefault);
+
+    std::unique_ptr<gamax::column> bitmask_and(
+        gamax::column_view lhs,
+        gamax::column_view rhs,
+        cudaStream_t stream = cudaStreamDefault);
+
+    std::unique_ptr<gamax::column> bitmask_or(
+        gamax::column_view lhs,
+        gamax::column_view rhs,
+        cudaStream_t stream = cudaStreamDefault);
+
+    std::unique_ptr<gamax::column> bitmask_not(
+        gamax::column_view input,
+        cudaStream_t stream = cudaStreamDefault);
 } // namespace device
 } // namespace util
 } // namespace gamax

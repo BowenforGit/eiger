@@ -39,4 +39,12 @@ namespace gamax::select {
         gamax::table_view table,
         gamax::expression::ExprTree& expr,
         cudaStream_t stream = cudaStreamDefault);
+
+    // Forward declaration — full definition in predicate.hpp
+    class Predicate;
+
+    gamax::column_ptr select_to_bitmask(
+        gamax::table_view table,
+        Predicate& predicate,
+        cudaStream_t stream = cudaStreamDefault);
 } // namespace gamax::select
