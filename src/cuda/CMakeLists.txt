@@ -63,6 +63,7 @@ set(srcs
     ir/expr.cpp
     ir/plan_node.cpp
     ir/builder.cpp
+    ir/lower_expr.cpp
     )
     
 if(USE_NVIDIA)
