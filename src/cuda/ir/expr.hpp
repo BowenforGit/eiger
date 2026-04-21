@@ -21,6 +21,7 @@ enum class ExprKind {
     Unary,
     StringOp,
     Case,
+    FunctionCall,   // name-tagged scalar function: year/extract/substring/...
     // Subquery and AggRef are reserved for later phases; their node
     // kinds will be added when HAVING / ORDER-BY-over-aggregates /
     // correlated subqueries become in scope.
@@ -68,6 +69,7 @@ struct Expr {
     UnaryOp       unary_op   {UnaryOp::Not};          // Unary
     StringOpKind  string_op  {StringOpKind::Equal};   // StringOp
     std::vector<std::string> string_values;           // StringOp (In/ContainsAny)
+    std::string   function_name;                      // FunctionCall
 };
 
 // ── Factories (each runs type inference and validation) ────────────
@@ -109,6 +111,21 @@ Expr case_when(Expr cond, Expr then_, Expr else_);
 // supplies the needle(s) (one for Equal/Startswith/Endswith/Contains,
 // possibly many for ContainsAny/In). Result is BOOL8.
 Expr string_op(StringOpKind op, Expr col, std::vector<std::string> values);
+
+// Name-tagged scalar function call. The IR tracks the `name` (e.g.
+// "year", "substring", "extract_year") and the argument list; the
+// declared `return_type` / `nullable` are taken on faith, since the IR
+// deliberately stays generic about built-in functions (a later pass
+// / emitter resolves the name to a concrete physical implementation
+// or errors with "unknown function").
+//
+// This is the escape hatch for the long tail of scalar functions
+// (date/time, math, string manipulation) without baking each into
+// ExprKind.
+Expr func(std::string name,
+          std::vector<Expr> args,
+          gamax::data_type return_type,
+          bool nullable = false);
 
 // ── Operator overloads (for fluent construction) ───────────────────
 

@@ -23,6 +23,7 @@ set(testSources
     ir/builder_test.cu
     ir/lower_expr_test.cu
     ir/emit_test.cu
+    ir/tpch_ir_test.cu
     test_header.cpp
 )
 

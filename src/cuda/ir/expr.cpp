@@ -210,6 +210,25 @@ Expr case_when(Expr cond, Expr then_, Expr else_) {
     return e;
 }
 
+Expr func(std::string name,
+          std::vector<Expr> args,
+          gamax::data_type return_type,
+          bool nullable)
+{
+    if (name.empty()) type_error("func: name must not be empty");
+    Expr e;
+    e.kind = ExprKind::FunctionCall;
+    e.function_name = std::move(name);
+    e.type = return_type;
+    e.nullable = nullable;
+    // Any-arg nullability contributes too (conservatively).
+    for (auto& a : args) {
+        if (a.nullable) e.nullable = true;
+    }
+    e.children = std::move(args);
+    return e;
+}
+
 Expr string_op(StringOpKind op, Expr col, std::vector<std::string> values) {
     if (col.type.id() != gamax::type_id::STRING) {
         type_error(std::string("string_op: column operand must be STRING, got ")

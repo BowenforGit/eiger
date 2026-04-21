@@ -187,6 +187,10 @@ ExprTree lower_expr_to_tree(const Expr& e, const Schema& input) {
         case ExprKind::StringOp:
             lower_error("StringOp cannot appear inside a computational "
                         "ExprTree; materialize it as a bool column first");
+        case ExprKind::FunctionCall:
+            lower_error("scalar function '" + e.function_name +
+                        "' has no ExprTree lowering yet "
+                        "(add a rewrite rule or a physical builtin)");
     }
     lower_error("unknown ExprKind");
 }
