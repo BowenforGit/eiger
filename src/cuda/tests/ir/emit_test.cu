@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -9,6 +10,8 @@
 #include "ir/emit.hpp"
 #include "memory/column.hpp"
 #include "memory/table.hpp"
+#include "string/string.hpp"
+#include "string/string_column.hpp"
 
 namespace gir = gamax::ir;
 using gamax::data_type;
@@ -24,6 +27,22 @@ gamax::column_ptr make_col(const std::vector<T>& values) {
     return gamax::make_column_from_host(
         const_cast<T*>(values.data()),
         static_cast<gamax::size_type>(values.size()));
+}
+
+// Helper: build a string column from a vector of std::string. Matches
+// the pattern used in predicate_test.cu.
+gamax::column_ptr make_string_col(const std::vector<std::string>& strings) {
+    std::vector<char> flat;
+    std::vector<int32_t> lens;
+    for (const auto& s : strings) {
+        lens.push_back(static_cast<int32_t>(s.size()));
+        flat.insert(flat.end(), s.begin(), s.end());
+    }
+    auto sptr = gamax::make_string_column(
+        flat.data(), lens.data(),
+        static_cast<gamax::size_type>(strings.size()),
+        cudaStreamDefault, gamax::ARROW_STRING);
+    return std::unique_ptr<gamax::column>(std::move(sptr));
 }
 
 gir::Catalog make_lineitem_catalog() {
@@ -242,9 +261,175 @@ TEST(IrEmit, Q6EndToEnd) {
     EXPECT_DOUBLE_EQ(total[0], 12.0 + 15.0);
 }
 
-// ── NotImplemented errors for deferred physical paths ───────────────
+// ── String-column filter (needs gather_strings path) ────────────────
 
-TEST(IrEmit, LimitReportsNotImplemented) {
+TEST(IrEmit, StringColumnFilterGathersAndCompactsTogether) {
+    // Build a small table [orderkey (int32), name (string)] and filter
+    // by a numeric predicate on orderkey. The string column must be
+    // preserved on the surviving rows.
+    std::vector<int32_t> keys = {1, 2, 3, 4};
+    std::vector<std::string> names = {"a", "b", "c", "d"};
+
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(make_col(keys));
+    cols.push_back(make_string_col(names));
+    auto tbl = gamax::make_table(std::move(cols));
+    auto view = tbl->view();
+
+    gir::Catalog cat;
+    gir::CatalogTable ct;
+    ct.name = "orders";
+    ct.column_names  = {"o_orderkey", "o_name"};
+    ct.column_types  = {t(type_id::INT32), t(type_id::STRING)};
+    ct.column_nullable = {false, false};
+    cat.add_table(std::move(ct));
+
+    gir::EmitContext ctx;
+    ctx.catalog = &cat;
+    ctx.stream  = cudaStreamDefault;
+    ctx.resolve_table = [&](const std::string& name) {
+        if (name == "orders") return view;
+        throw std::runtime_error("unknown table: " + name);
+    };
+
+    gir::IdGenerator gen;
+    gir::QueryBuilder qb(cat, gen);
+    auto o = qb.scan("orders", {"o_orderkey", "o_name"});
+    auto filtered = o.filter(o.c("o_orderkey") >= gir::lit(3));
+    auto out = gir::emit(filtered.plan(), ctx);
+
+    ASSERT_EQ(out->num_columns(), 2);
+    ASSERT_EQ(out->num_rows(), 2);
+    auto kk = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    EXPECT_EQ(kk[0], 3);
+    EXPECT_EQ(kk[1], 4);
+    // Just verify the string column is intact (2 rows) — reading string
+    // content requires string_column_view plumbing we don't need here.
+    EXPECT_EQ(out->view()[1].size(), 2);
+}
+
+// ── Inner join ──────────────────────────────────────────────────────
+
+namespace {
+// A second catalog holding a small "part" table for join tests.
+struct JoinFixtures {
+    gir::Catalog cat;
+    std::unique_ptr<gamax::table> li_tbl;
+    std::unique_ptr<gamax::table> part_tbl;
+    std::unordered_map<std::string, gamax::table_view> by_name;
+};
+
+JoinFixtures make_join_fixtures() {
+    JoinFixtures f;
+
+    gir::CatalogTable li;
+    li.name = "lineitem";
+    li.column_names = {"l_partkey", "l_extendedprice"};
+    li.column_types = {t(type_id::INT32), t(type_id::FLOAT64)};
+    li.column_nullable = {false, false};
+    f.cat.add_table(std::move(li));
+
+    gir::CatalogTable p;
+    p.name = "part";
+    p.column_names = {"p_partkey", "p_size"};
+    p.column_types = {t(type_id::INT32), t(type_id::INT32)};
+    p.column_nullable = {false, false};
+    f.cat.add_table(std::move(p));
+
+    std::vector<int32_t> li_partkey = {10, 20, 30, 30, 40};
+    std::vector<double>  li_price   = {1.0, 2.0, 3.0, 4.0, 5.0};
+    std::vector<gamax::column_ptr> li_cols;
+    li_cols.push_back(make_col(li_partkey));
+    li_cols.push_back(make_col(li_price));
+    f.li_tbl = gamax::make_table(std::move(li_cols));
+    f.by_name["lineitem"] = f.li_tbl->view();
+
+    std::vector<int32_t> p_partkey = {20, 30, 50};
+    std::vector<int32_t> p_size    = {100, 200, 300};
+    std::vector<gamax::column_ptr> p_cols;
+    p_cols.push_back(make_col(p_partkey));
+    p_cols.push_back(make_col(p_size));
+    f.part_tbl = gamax::make_table(std::move(p_cols));
+    f.by_name["part"] = f.part_tbl->view();
+
+    return f;
+}
+
+gir::EmitContext make_join_ctx(JoinFixtures& f) {
+    gir::EmitContext ctx;
+    ctx.catalog = &f.cat;
+    ctx.stream = cudaStreamDefault;
+    ctx.resolve_table = [&](const std::string& name) {
+        auto it = f.by_name.find(name);
+        if (it == f.by_name.end())
+            throw std::runtime_error("unknown table: " + name);
+        return it->second;
+    };
+    return ctx;
+}
+} // namespace
+
+TEST(IrEmit, InnerJoinSingleKey) {
+    auto f = make_join_fixtures();
+    auto ctx = make_join_ctx(f);
+
+    gir::IdGenerator gen;
+    gir::QueryBuilder qb(f.cat, gen);
+    auto li = qb.scan("lineitem", {"l_partkey", "l_extendedprice"});
+    auto p  = qb.scan("part",     {"p_partkey", "p_size"});
+    auto joined = li.inner_join(
+        p, li.c("l_partkey") == p.c("p_partkey"));
+    auto out = gir::emit(joined.plan(), ctx);
+
+    // Matching partkeys: 20, 30 (twice from lineitem), 30 again.
+    // That's 3 output rows.
+    EXPECT_EQ(out->num_rows(), 3);
+    // IR output schema: [l_partkey, l_extendedprice, p_partkey, p_size].
+    ASSERT_EQ(out->num_columns(), 4);
+    auto lpk = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto ppk = gamax::copy_column_to_host<int32_t>(out->view()[2]);
+    // Every row's l_partkey must equal its p_partkey (equi-join).
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(lpk[i], ppk[i]);
+}
+
+TEST(IrEmit, LeftSemiJoinKeepsLeftSchemaOnly) {
+    auto f = make_join_fixtures();
+    auto ctx = make_join_ctx(f);
+
+    gir::IdGenerator gen;
+    gir::QueryBuilder qb(f.cat, gen);
+    auto li = qb.scan("lineitem", {"l_partkey", "l_extendedprice"});
+    auto p  = qb.scan("part",     {"p_partkey", "p_size"});
+    auto semi = li.left_semi_join(
+        p, li.c("l_partkey") == p.c("p_partkey"));
+    auto out = gir::emit(semi.plan(), ctx);
+
+    // Matching partkeys in lineitem: 20 (one row), 30 (two rows). 3 rows.
+    EXPECT_EQ(out->num_rows(), 3);
+    ASSERT_EQ(out->num_columns(), 2);  // left schema only
+}
+
+// ── Limit fused with Sort ──────────────────────────────────────────
+
+TEST(IrEmit, LimitFusedWithSort) {
+    gir::IdGenerator gen;
+    auto cat = make_lineitem_catalog();
+    auto in = make_q6_input();
+    auto ctx = make_ctx(cat, in);
+
+    gir::QueryBuilder qb(cat, gen);
+    auto li = qb.scan("lineitem", {"l_shipdate"});
+    // Take 2 smallest shipdates (ASC).
+    auto top = li.sort({gir::asc("l_shipdate")}).limit(2);
+    auto out = gir::emit(top.plan(), ctx);
+
+    ASSERT_EQ(out->num_rows(), 2);
+    auto sd = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    EXPECT_EQ(sd[0], 8000);
+    EXPECT_EQ(sd[1], 8800);
+}
+
+TEST(IrEmit, LimitWithoutSortReportsNotImplemented) {
     gir::IdGenerator gen;
     auto cat = make_lineitem_catalog();
     auto in = make_q6_input();
@@ -254,6 +439,8 @@ TEST(IrEmit, LimitReportsNotImplemented) {
     auto plan = qb.scan("lineitem", {"l_shipdate"}).limit(3);
     EXPECT_THROW(gir::emit(plan.plan(), ctx), std::runtime_error);
 }
+
+// ── Remaining deferred paths ───────────────────────────────────────
 
 TEST(IrEmit, CountAllReportsNotImplemented) {
     gir::IdGenerator gen;
@@ -265,6 +452,38 @@ TEST(IrEmit, CountAllReportsNotImplemented) {
     auto li = qb.scan("lineitem", {"l_shipdate"});
     auto plan = li.aggregate(/*keys=*/{},
         {{"n", gir::AggKind::CountAll, gir::lit(int64_t{0})}});
+    EXPECT_THROW(gir::emit(plan.plan(), ctx), std::runtime_error);
+}
+
+TEST(IrEmit, LeftOuterJoinReportsNotImplemented) {
+    auto f = make_join_fixtures();
+    auto ctx = make_join_ctx(f);
+    gir::IdGenerator gen;
+    gir::QueryBuilder qb(f.cat, gen);
+    auto li = qb.scan("lineitem", {"l_partkey", "l_extendedprice"});
+    auto p  = qb.scan("part",     {"p_partkey", "p_size"});
+    auto j = li.left_outer_join(p, li.c("l_partkey") == p.c("p_partkey"));
+    EXPECT_THROW(gir::emit(j.plan(), ctx), std::runtime_error);
+}
+
+TEST(IrEmit, CrossJoinReportsNotImplemented) {
+    auto f = make_join_fixtures();
+    auto ctx = make_join_ctx(f);
+    gir::IdGenerator gen;
+    gir::QueryBuilder qb(f.cat, gen);
+    auto li = qb.scan("lineitem", {"l_partkey", "l_extendedprice"});
+    auto p  = qb.scan("part",     {"p_partkey", "p_size"});
+    auto j = li.cross_join(p);
+    EXPECT_THROW(gir::emit(j.plan(), ctx), std::runtime_error);
+}
+
+TEST(IrEmit, DistinctReportsNotImplemented) {
+    gir::IdGenerator gen;
+    auto cat = make_lineitem_catalog();
+    auto in = make_q6_input();
+    auto ctx = make_ctx(cat, in);
+    gir::QueryBuilder qb(cat, gen);
+    auto plan = qb.scan("lineitem", {"l_shipdate"}).distinct();
     EXPECT_THROW(gir::emit(plan.plan(), ctx), std::runtime_error);
 }
 
