@@ -713,4 +713,466 @@ PlanPtr build_q11(const QueryBuilder& qb) {
     return projected.sort({desc("partkey_value")}).plan();
 }
 
+// ── Q12: Shipping Modes and Order Priority ─────────────────────────
+//
+// CASE-in-aggregate pattern: count lineitems by shipmode, split into
+// "high priority" (orderpriority ∈ {URGENT, HIGH}) and "low priority"
+// buckets. IR expresses the CASE inside a Project so each aggregate
+// body is a pure ColRef.
+PlanPtr build_q12(const QueryBuilder& qb) {
+    auto o = qb.scan("orders", {"o_orderkey", "o_orderpriority"});
+    auto l = qb.scan("lineitem",
+        {"l_orderkey", "l_shipmode", "l_commitdate",
+         "l_receiptdate", "l_shipdate"});
+
+    auto l_filt = l.filter(
+            string_op(StringOpKind::In, l.c("l_shipmode"),
+                      {"MAIL", "SHIP"})
+         && (l.c("l_commitdate") < l.c("l_receiptdate"))
+         && (l.c("l_shipdate")   < l.c("l_commitdate"))
+         && (l.c("l_receiptdate") >= lit(8766))
+         && (l.c("l_receiptdate") <  lit(9131)));
+    auto joined = o.inner_join(l_filt,
+        o.c("o_orderkey") == l_filt.c("l_orderkey"));
+
+    auto is_high = [&](const PlanBuilder& b) {
+        return string_op(StringOpKind::Equal, b.c("o_orderpriority"),
+                         {"1-URGENT"})
+            || string_op(StringOpKind::Equal, b.c("o_orderpriority"),
+                         {"2-HIGH"});
+    };
+    auto with_flags = joined.project({
+        {"l_shipmode", joined.c("l_shipmode")},
+        {"high", case_when(is_high(joined), lit(int64_t{1}), lit(int64_t{0}))},
+        {"low",  case_when(is_high(joined), lit(int64_t{0}), lit(int64_t{1}))},
+    });
+    auto agg = with_flags.aggregate(
+        {"l_shipmode"},
+        {
+            {"high_line_count", AggKind::Sum, with_flags.c("high")},
+            {"low_line_count",  AggKind::Sum, with_flags.c("low")},
+        });
+    return agg.sort({asc("l_shipmode")}).plan();
+}
+
+// ── Q13: Customer Distribution ─────────────────────────────────────
+//
+// Two-level aggregation with a LEFT OUTER JOIN that carries a filter
+// on the right side (part of the join condition, not a separate
+// filter — customers without matching orders survive).
+PlanPtr build_q13(const QueryBuilder& qb) {
+    auto c = qb.scan("customer", {"c_custkey"});
+    auto o = qb.scan("orders", {"o_orderkey", "o_custkey", "o_comment"});
+
+    // The "not like '%...%'" predicate is part of the join condition so
+    // outer-join nulls aren't introduced by filter pushdown.
+    auto joined = c.left_outer_join(o,
+            (c.c("c_custkey") == o.c("o_custkey"))
+         && !string_op(StringOpKind::Contains, o.c("o_comment"),
+                       {"special"}));
+
+    auto per_cust = joined.aggregate(
+        {"c_custkey"},
+        {{"c_count", AggKind::Count, joined.c("o_orderkey")}});
+    auto histogram = per_cust.aggregate(
+        {"c_count"},
+        {{"custdist", AggKind::CountAll, lit(int64_t{0})}});
+    return histogram.sort({desc("custdist"), desc("c_count")}).plan();
+}
+
+// ── Q14: Promotion Effect ──────────────────────────────────────────
+PlanPtr build_q14(const QueryBuilder& qb) {
+    auto l = qb.scan("lineitem",
+        {"l_orderkey", "l_partkey", "l_extendedprice",
+         "l_discount", "l_shipdate"});
+    auto p = qb.scan("part", {"p_partkey", "p_type"});
+
+    auto l_filt = l.filter(
+            (l.c("l_shipdate") >= lit(9374))
+         && (l.c("l_shipdate") <  lit(9404)));
+    auto joined = l_filt.inner_join(p,
+        l_filt.c("l_partkey") == p.c("p_partkey"));
+
+    auto with_classification = joined.project({
+        {"disc_price",
+            joined.c("l_extendedprice") *
+            (lit(1.0) - joined.c("l_discount"))},
+        {"is_promo",
+            string_op(StringOpKind::Startswith,
+                      joined.c("p_type"), {"PROMO"})},
+    });
+    auto with_case = with_classification.project({
+        {"promo_volume",
+            case_when(with_classification.c("is_promo"),
+                      with_classification.c("disc_price"),
+                      lit(0.0))},
+        {"volume", with_classification.c("disc_price")},
+    });
+    auto agg = with_case.aggregate(
+        /*keys=*/{},
+        {
+            {"sum_promo", AggKind::Sum, with_case.c("promo_volume")},
+            {"sum_total", AggKind::Sum, with_case.c("volume")},
+        });
+    return agg.project({
+        {"promo_revenue",
+            lit(100.0) * agg.c("sum_promo") / agg.c("sum_total")},
+    }).plan();
+}
+
+// ── Q15: Top Supplier Query ────────────────────────────────────────
+//
+// Three-phase: (1) per-supplier revenue within a date window;
+// (2) scalar max of those revenues; (3) cross-join the revenue list
+// with the max scalar and keep rows where revenue == max, then join
+// with supplier for the output. Maximus does the same shape.
+PlanPtr build_q15(const QueryBuilder& qb) {
+    auto l = qb.scan("lineitem",
+        {"l_suppkey", "l_extendedprice", "l_discount", "l_shipdate"});
+    auto l_filt = l.filter(
+            (l.c("l_shipdate") >= lit(9131))
+         && (l.c("l_shipdate") <  lit(9221)));
+    auto revenue_body = l_filt.project({
+        {"supplier_no", l_filt.c("l_suppkey")},
+        {"rev", l_filt.c("l_extendedprice") *
+                (lit(1.0) - l_filt.c("l_discount"))},
+    });
+    auto revenue = revenue_body.aggregate(
+        {"supplier_no"},
+        {{"total_revenue", AggKind::Sum, revenue_body.c("rev")}});
+
+    auto max_rev = revenue.aggregate(
+        /*keys=*/{},
+        {{"max_revenue", AggKind::Max, revenue.c("total_revenue")}});
+
+    auto crossed = revenue.cross_join(max_rev);
+    auto best = crossed.filter(
+        crossed.c("total_revenue") == crossed.c("max_revenue"));
+
+    auto s = qb.scan("supplier",
+        {"s_suppkey", "s_name", "s_address", "s_phone"});
+    auto joined = s.inner_join(best,
+        s.c("s_suppkey") == best.c("supplier_no"));
+    auto projected = joined.project({
+        {"s_suppkey",     joined.c("s_suppkey")},
+        {"s_name",        joined.c("s_name")},
+        {"s_address",     joined.c("s_address")},
+        {"s_phone",       joined.c("s_phone")},
+        {"total_revenue", joined.c("total_revenue")},
+    });
+    return projected.sort({asc("s_suppkey")}).plan();
+}
+
+// ── Q16: Parts/Supplier Relationship ───────────────────────────────
+//
+// NOT IN (subquery) → left_anti_join. COUNT DISTINCT is an IR
+// aggregate kind; its physical path isn't wired yet but the plan
+// builds.
+PlanPtr build_q16(const QueryBuilder& qb) {
+    auto ps = qb.scan("partsupp", {"ps_partkey", "ps_suppkey"});
+    auto p  = qb.scan("part",
+        {"p_partkey", "p_brand", "p_type", "p_size"});
+    auto s  = qb.scan("supplier", {"s_suppkey", "s_comment"});
+
+    auto p_filt = p.filter(
+            !string_op(StringOpKind::Equal, p.c("p_brand"), {"Brand#45"})
+         && !string_op(StringOpKind::Startswith,
+                       p.c("p_type"), {"MEDIUM POLISHED"})
+         && ( (p.c("p_size") == lit(49))
+           || (p.c("p_size") == lit(14))
+           || (p.c("p_size") == lit(23))
+           || (p.c("p_size") == lit(45))
+           || (p.c("p_size") == lit(19))
+           || (p.c("p_size") == lit(3))
+           || (p.c("p_size") == lit(36))
+           || (p.c("p_size") == lit(9)) ));
+    auto s_bad = s.filter(
+            string_op(StringOpKind::Contains, s.c("s_comment"), {"Customer"})
+         && string_op(StringOpKind::Contains, s.c("s_comment"),
+                      {"Complaints"}));
+
+    // partsupp LEFT ANTI JOIN suppliers-with-bad-comments on ps_suppkey.
+    auto ps_clean = ps.left_anti_join(s_bad,
+        ps.c("ps_suppkey") == s_bad.c("s_suppkey"));
+    auto joined = p_filt.inner_join(ps_clean,
+        p_filt.c("p_partkey") == ps_clean.c("ps_partkey"));
+
+    auto agg = joined.aggregate(
+        {"p_brand", "p_type", "p_size"},
+        {{"supplier_cnt", AggKind::CountDistinct,
+          joined.c("ps_suppkey")}});
+    return agg.sort({
+        desc("supplier_cnt"), asc("p_brand"), asc("p_type"), asc("p_size"),
+    }).plan();
+}
+
+// ── Q17: Small-Quantity-Order Revenue ──────────────────────────────
+//
+// Correlated subquery: per-part average quantity threshold, joined back
+// to the outer plan on l_partkey. This is the same general pattern as
+// Q2's min-supplycost correlation.
+PlanPtr build_q17(const QueryBuilder& qb) {
+    auto p = qb.scan("part", {"p_partkey", "p_brand", "p_container"});
+    auto l = qb.scan("lineitem",
+        {"l_orderkey", "l_partkey", "l_quantity", "l_extendedprice"});
+    auto p_filt = p.filter(
+            string_op(StringOpKind::Equal, p.c("p_brand"), {"Brand#23"})
+         && string_op(StringOpKind::Equal, p.c("p_container"), {"MED BOX"}));
+    auto pl = p_filt.inner_join(l,
+        p_filt.c("p_partkey") == l.c("l_partkey"));
+
+    // Subquery: avg quantity per partkey across all of lineitem.
+    auto l2 = qb.scan("lineitem", {"l_partkey", "l_quantity"});
+    auto per_part = l2.aggregate(
+        {"l_partkey"},
+        {{"avg_qty", AggKind::Avg, l2.c("l_quantity")}});
+    auto threshold = per_part.project({
+        {"l_partkey", per_part.c("l_partkey")},
+        {"thr", lit(0.2) * per_part.c("avg_qty")},
+    });
+
+    auto with_thresh = pl.inner_join(threshold,
+        pl.c("l_partkey") == threshold.c("l_partkey"));
+    auto below = with_thresh.filter(
+        with_thresh.c("l_quantity") < with_thresh.c("thr"));
+    auto agg = below.aggregate(
+        /*keys=*/{},
+        {{"sum_price", AggKind::Sum, below.c("l_extendedprice")}});
+    return agg.project({
+        {"avg_yearly", agg.c("sum_price") / lit(7.0)},
+    }).plan();
+}
+
+// ── Q18: Large Volume Customer ─────────────────────────────────────
+//
+// The IN-subquery over orders whose lineitem sum(quantity) > 300 is
+// lowered as: (1) aggregate lineitem per orderkey; (2) filter big
+// orders; (3) left_semi_join orders against the big-orders plan.
+PlanPtr build_q18(const QueryBuilder& qb) {
+    auto l_sub = qb.scan("lineitem", {"l_orderkey", "l_quantity"});
+    auto big_orders_agg = l_sub.aggregate(
+        {"l_orderkey"},
+        {{"sum_qty", AggKind::Sum, l_sub.c("l_quantity")}});
+    auto big = big_orders_agg.filter(
+        big_orders_agg.c("sum_qty") > lit(300.0));
+
+    auto c = qb.scan("customer", {"c_custkey", "c_name"});
+    auto o = qb.scan("orders",
+        {"o_orderkey", "o_custkey", "o_orderdate", "o_totalprice"});
+    auto l = qb.scan("lineitem", {"l_orderkey", "l_quantity"});
+
+    auto o_big = o.left_semi_join(big,
+        o.c("o_orderkey") == big.c("l_orderkey"));
+    auto co  = c.inner_join(o_big,
+        c.c("c_custkey") == o_big.c("o_custkey"));
+    auto col = co.inner_join(l,
+        co.c("o_orderkey") == l.c("l_orderkey"));
+    auto agg = col.aggregate(
+        {"c_name", "c_custkey", "o_orderkey",
+         "o_orderdate", "o_totalprice"},
+        {{"sum_quantity", AggKind::Sum, col.c("l_quantity")}});
+    return agg.sort({desc("o_totalprice"), asc("o_orderdate")})
+              .limit(100).plan();
+}
+
+// ── Q19: Discounted Revenue ────────────────────────────────────────
+//
+// Three disjunctive branches over brand/container/qty/size with a
+// shared shipmode+shipinstruct prefix. Tests the IR's ability to
+// compose deep boolean structure.
+PlanPtr build_q19(const QueryBuilder& qb) {
+    auto l = qb.scan("lineitem",
+        {"l_partkey", "l_quantity", "l_extendedprice", "l_discount",
+         "l_shipmode", "l_shipinstruct"});
+    auto p = qb.scan("part",
+        {"p_partkey", "p_brand", "p_container", "p_size"});
+    auto j = l.inner_join(p, l.c("l_partkey") == p.c("p_partkey"));
+
+    auto common =
+            string_op(StringOpKind::In, j.c("l_shipmode"),
+                      {"AIR", "AIR REG"})
+         && string_op(StringOpKind::Equal, j.c("l_shipinstruct"),
+                      {"DELIVER IN PERSON"});
+
+    auto branch = [&](const char* brand,
+                      std::vector<std::string> containers,
+                      double q_lo, double q_hi,
+                      int32_t sz_lo, int32_t sz_hi) {
+        return string_op(StringOpKind::Equal, j.c("p_brand"), {brand})
+            && string_op(StringOpKind::In,
+                         j.c("p_container"), std::move(containers))
+            && (j.c("l_quantity") >= lit(q_lo))
+            && (j.c("l_quantity") <= lit(q_hi))
+            && (j.c("p_size") >= lit(sz_lo))
+            && (j.c("p_size") <= lit(sz_hi));
+    };
+    auto filter =
+        common && (
+            branch("Brand#12",
+                   {"SM CASE","SM BOX","SM PACK","SM PKG"}, 1.0, 11.0, 1, 5)
+         || branch("Brand#23",
+                   {"MED BAG","MED BOX","MED PKG","MED PACK"},
+                   10.0, 20.0, 1, 10)
+         || branch("Brand#34",
+                   {"LG CASE","LG BOX","LG PACK","LG PKG"},
+                   20.0, 30.0, 1, 15));
+    auto filtered = j.filter(std::move(filter));
+    auto projected = filtered.project({
+        {"disc_price",
+            filtered.c("l_extendedprice") *
+            (lit(1.0) - filtered.c("l_discount"))},
+    });
+    return projected.aggregate(
+        /*keys=*/{},
+        {{"revenue", AggKind::Sum, projected.c("disc_price")}}).plan();
+}
+
+// ── Q20: Potential Part Promotion ──────────────────────────────────
+//
+// Deep nested IN / correlated threshold: select suppliers (in a given
+// nation) whose partsupp entries for "forest" parts have availqty >
+// 0.5 * sum(shipdate-bounded lineitem qty). Lowers to: semi-joins for
+// the IN, inner join against the threshold table (multi-key), then
+// another semi-join to prune suppliers.
+PlanPtr build_q20(const QueryBuilder& qb) {
+    auto p = qb.scan("part", {"p_partkey", "p_name"});
+    auto p_filt = p.filter(
+        string_op(StringOpKind::Contains, p.c("p_name"), {"forest"}));
+
+    auto l_sub = qb.scan("lineitem",
+        {"l_partkey", "l_suppkey", "l_quantity", "l_shipdate"});
+    auto l_filt = l_sub.filter(
+            (l_sub.c("l_shipdate") >= lit(9131))
+         && (l_sub.c("l_shipdate") <  lit(9496)));
+    auto qty = l_filt.aggregate(
+        {"l_partkey", "l_suppkey"},
+        {{"sum_qty", AggKind::Sum, l_filt.c("l_quantity")}});
+    auto threshold = qty.project({
+        {"l_partkey", qty.c("l_partkey")},
+        {"l_suppkey", qty.c("l_suppkey")},
+        {"thr", lit(0.5) * qty.c("sum_qty")},
+    });
+
+    auto ps = qb.scan("partsupp",
+        {"ps_partkey", "ps_suppkey", "ps_availqty"});
+    auto ps_in_p = ps.left_semi_join(p_filt,
+        ps.c("ps_partkey") == p_filt.c("p_partkey"));
+    auto with_thr = ps_in_p.inner_join(threshold,
+            (ps_in_p.c("ps_partkey") == threshold.c("l_partkey"))
+         && (ps_in_p.c("ps_suppkey") == threshold.c("l_suppkey")));
+    auto ps_ok = with_thr.filter(
+        with_thr.c("ps_availqty") > with_thr.c("thr"));
+
+    auto s = qb.scan("supplier",
+        {"s_suppkey", "s_name", "s_address", "s_nationkey"});
+    auto s_ok = s.left_semi_join(ps_ok,
+        s.c("s_suppkey") == ps_ok.c("ps_suppkey"));
+    auto n = qb.scan("nation", {"n_nationkey", "n_name"});
+    auto n_filt = n.filter(
+        string_op(StringOpKind::Equal, n.c("n_name"), {"CANADA"}));
+    auto joined = s_ok.inner_join(n_filt,
+        s_ok.c("s_nationkey") == n_filt.c("n_nationkey"));
+
+    auto projected = joined.project({
+        {"s_name",    joined.c("s_name")},
+        {"s_address", joined.c("s_address")},
+    });
+    return projected.sort({asc("s_name")}).plan();
+}
+
+// ── Q21: Suppliers Who Kept Orders Waiting ─────────────────────────
+//
+// Both EXISTS (at least one other supplier on the order) and NOT
+// EXISTS (no other supplier shipped late) — lowered as left_semi_join
+// and left_anti_join. Uses three independent scans of lineitem (l1,
+// l2, l3), each getting fresh ColumnIds so the conditions are
+// unambiguous.
+PlanPtr build_q21(const QueryBuilder& qb) {
+    auto l1 = qb.scan("lineitem",
+        {"l_orderkey", "l_suppkey", "l_commitdate", "l_receiptdate"});
+    auto l2 = qb.scan("lineitem", {"l_orderkey", "l_suppkey"});
+    auto l3 = qb.scan("lineitem",
+        {"l_orderkey", "l_suppkey", "l_commitdate", "l_receiptdate"});
+    auto s  = qb.scan("supplier", {"s_suppkey", "s_name", "s_nationkey"});
+    auto o  = qb.scan("orders",   {"o_orderkey", "o_orderstatus"});
+    auto n  = qb.scan("nation",   {"n_nationkey", "n_name"});
+
+    auto l1_late = l1.filter(
+        l1.c("l_receiptdate") > l1.c("l_commitdate"));
+    auto o_f = o.filter(
+        string_op(StringOpKind::Equal, o.c("o_orderstatus"), {"F"}));
+    auto n_f = n.filter(
+        string_op(StringOpKind::Equal, n.c("n_name"), {"SAUDI ARABIA"}));
+
+    // EXISTS l2: another supplier shipped for the same order.
+    auto with_other = l1_late.left_semi_join(l2,
+            (l1_late.c("l_orderkey") == l2.c("l_orderkey"))
+         && (l1_late.c("l_suppkey") != l2.c("l_suppkey")));
+
+    // NOT EXISTS l3: no other supplier shipped late on the same order.
+    auto l3_late = l3.filter(
+        l3.c("l_receiptdate") > l3.c("l_commitdate"));
+    auto surviving = with_other.left_anti_join(l3_late,
+            (with_other.c("l_orderkey") == l3_late.c("l_orderkey"))
+         && (with_other.c("l_suppkey") != l3_late.c("l_suppkey")));
+
+    auto j1 = surviving.inner_join(s,
+        surviving.c("l_suppkey") == s.c("s_suppkey"));
+    auto j2 = j1.inner_join(o_f,
+        j1.c("l_orderkey") == o_f.c("o_orderkey"));
+    auto j3 = j2.inner_join(n_f,
+        j2.c("s_nationkey") == n_f.c("n_nationkey"));
+
+    auto agg = j3.aggregate(
+        {"s_name"},
+        {{"numwait", AggKind::CountAll, lit(int64_t{0})}});
+    return agg.sort({desc("numwait"), asc("s_name")}).limit(100).plan();
+}
+
+// ── Q22: Global Sales Opportunity ──────────────────────────────────
+//
+// substring() via func(), plus the avg-threshold / cross_join pattern
+// from Q11, plus a NOT EXISTS → left_anti_join.
+PlanPtr build_q22(const QueryBuilder& qb) {
+    auto c = qb.scan("customer", {"c_custkey", "c_phone", "c_acctbal"});
+    auto with_cc = c.project({
+        {"c_custkey", c.c("c_custkey")},
+        {"c_acctbal", c.c("c_acctbal")},
+        {"cntrycode",
+            func("substring",
+                 {c.c("c_phone"), lit(int64_t{1}), lit(int64_t{2})},
+                 t_str)},
+    });
+    const std::vector<std::string> cc_set = {
+        "13","31","23","29","30","18","17"};
+    auto in_set = with_cc.filter(
+        string_op(StringOpKind::In, with_cc.c("cntrycode"), cc_set));
+
+    // Threshold plan: avg(c_acctbal) for c_acctbal > 0 within the same
+    // cntrycode set.
+    auto for_avg = in_set.filter(in_set.c("c_acctbal") > lit(0.0));
+    auto avg_plan = for_avg.aggregate(
+        /*keys=*/{},
+        {{"avg_acctbal", AggKind::Avg, for_avg.c("c_acctbal")}});
+
+    // Cross-join the full in-set with the 1-row threshold, filter by
+    // c_acctbal > avg.
+    auto crossed = in_set.cross_join(avg_plan);
+    auto above = crossed.filter(
+        crossed.c("c_acctbal") > crossed.c("avg_acctbal"));
+
+    // NOT EXISTS orders with o_custkey = c_custkey.
+    auto o = qb.scan("orders", {"o_custkey"});
+    auto no_orders = above.left_anti_join(o,
+        above.c("c_custkey") == o.c("o_custkey"));
+
+    auto agg = no_orders.aggregate(
+        {"cntrycode"},
+        {
+            {"numcust",    AggKind::CountAll, lit(int64_t{0})},
+            {"totacctbal", AggKind::Sum, no_orders.c("c_acctbal")},
+        });
+    return agg.sort({asc("cntrycode")}).plan();
+}
+
 } // namespace gamax::ir::tpch

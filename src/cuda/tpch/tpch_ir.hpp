@@ -48,5 +48,16 @@ PlanPtr build_q8(const QueryBuilder& qb);
 PlanPtr build_q9(const QueryBuilder& qb);
 PlanPtr build_q10(const QueryBuilder& qb);
 PlanPtr build_q11(const QueryBuilder& qb);
+PlanPtr build_q12(const QueryBuilder& qb);
+PlanPtr build_q13(const QueryBuilder& qb);
+PlanPtr build_q14(const QueryBuilder& qb);
+PlanPtr build_q15(const QueryBuilder& qb);
+PlanPtr build_q16(const QueryBuilder& qb);
+PlanPtr build_q17(const QueryBuilder& qb);
+PlanPtr build_q18(const QueryBuilder& qb);
+PlanPtr build_q19(const QueryBuilder& qb);
+PlanPtr build_q20(const QueryBuilder& qb);
+PlanPtr build_q21(const QueryBuilder& qb);
+PlanPtr build_q22(const QueryBuilder& qb);
 
 } // namespace gamax::ir::tpch

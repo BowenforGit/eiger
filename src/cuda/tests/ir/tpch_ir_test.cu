@@ -150,6 +150,121 @@ TEST(IrTpchExpressivity, Q11Builds) {
     EXPECT_EQ(plan->output_schema.size(), 2u);  // partkey + value
 }
 
+TEST(IrTpchExpressivity, Q12Builds) {
+    auto cat = gir_tpch::make_tpch_catalog();
+    gir::IdGenerator gen;
+    auto qb = make_qb(cat, gen);
+    auto plan = gir_tpch::build_q12(qb);
+    ASSERT_NE(plan, nullptr);
+    EXPECT_EQ(plan->kind, gir::NodeKind::Sort);
+    EXPECT_EQ(plan->output_schema.size(), 3u);  // shipmode + high + low
+}
+
+TEST(IrTpchExpressivity, Q13Builds) {
+    auto cat = gir_tpch::make_tpch_catalog();
+    gir::IdGenerator gen;
+    auto qb = make_qb(cat, gen);
+    auto plan = gir_tpch::build_q13(qb);
+    ASSERT_NE(plan, nullptr);
+    EXPECT_EQ(plan->kind, gir::NodeKind::Sort);
+    EXPECT_EQ(plan->output_schema.size(), 2u);  // c_count + custdist
+}
+
+TEST(IrTpchExpressivity, Q14Builds) {
+    auto cat = gir_tpch::make_tpch_catalog();
+    gir::IdGenerator gen;
+    auto qb = make_qb(cat, gen);
+    auto plan = gir_tpch::build_q14(qb);
+    ASSERT_NE(plan, nullptr);
+    EXPECT_EQ(plan->kind, gir::NodeKind::Project);
+    EXPECT_EQ(plan->output_schema.size(), 1u);  // promo_revenue
+}
+
+TEST(IrTpchExpressivity, Q15Builds) {
+    auto cat = gir_tpch::make_tpch_catalog();
+    gir::IdGenerator gen;
+    auto qb = make_qb(cat, gen);
+    auto plan = gir_tpch::build_q15(qb);
+    ASSERT_NE(plan, nullptr);
+    EXPECT_EQ(plan->kind, gir::NodeKind::Sort);
+    // s_suppkey, s_name, s_address, s_phone, total_revenue
+    EXPECT_EQ(plan->output_schema.size(), 5u);
+}
+
+TEST(IrTpchExpressivity, Q16Builds) {
+    auto cat = gir_tpch::make_tpch_catalog();
+    gir::IdGenerator gen;
+    auto qb = make_qb(cat, gen);
+    auto plan = gir_tpch::build_q16(qb);
+    ASSERT_NE(plan, nullptr);
+    EXPECT_EQ(plan->kind, gir::NodeKind::Sort);
+    // p_brand, p_type, p_size, supplier_cnt
+    EXPECT_EQ(plan->output_schema.size(), 4u);
+}
+
+TEST(IrTpchExpressivity, Q17Builds) {
+    auto cat = gir_tpch::make_tpch_catalog();
+    gir::IdGenerator gen;
+    auto qb = make_qb(cat, gen);
+    auto plan = gir_tpch::build_q17(qb);
+    ASSERT_NE(plan, nullptr);
+    EXPECT_EQ(plan->kind, gir::NodeKind::Project);
+    EXPECT_EQ(plan->output_schema.size(), 1u);  // avg_yearly
+}
+
+TEST(IrTpchExpressivity, Q18Builds) {
+    auto cat = gir_tpch::make_tpch_catalog();
+    gir::IdGenerator gen;
+    auto qb = make_qb(cat, gen);
+    auto plan = gir_tpch::build_q18(qb);
+    ASSERT_NE(plan, nullptr);
+    EXPECT_EQ(plan->kind, gir::NodeKind::Limit);
+    EXPECT_EQ(plan->limit_n, 100);
+    // c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice, sum_qty
+    EXPECT_EQ(plan->output_schema.size(), 6u);
+}
+
+TEST(IrTpchExpressivity, Q19Builds) {
+    auto cat = gir_tpch::make_tpch_catalog();
+    gir::IdGenerator gen;
+    auto qb = make_qb(cat, gen);
+    auto plan = gir_tpch::build_q19(qb);
+    ASSERT_NE(plan, nullptr);
+    EXPECT_EQ(plan->kind, gir::NodeKind::Aggregate);
+    EXPECT_EQ(plan->output_schema.size(), 1u);  // revenue
+}
+
+TEST(IrTpchExpressivity, Q20Builds) {
+    auto cat = gir_tpch::make_tpch_catalog();
+    gir::IdGenerator gen;
+    auto qb = make_qb(cat, gen);
+    auto plan = gir_tpch::build_q20(qb);
+    ASSERT_NE(plan, nullptr);
+    EXPECT_EQ(plan->kind, gir::NodeKind::Sort);
+    EXPECT_EQ(plan->output_schema.size(), 2u);  // s_name, s_address
+}
+
+TEST(IrTpchExpressivity, Q21Builds) {
+    auto cat = gir_tpch::make_tpch_catalog();
+    gir::IdGenerator gen;
+    auto qb = make_qb(cat, gen);
+    auto plan = gir_tpch::build_q21(qb);
+    ASSERT_NE(plan, nullptr);
+    EXPECT_EQ(plan->kind, gir::NodeKind::Limit);
+    EXPECT_EQ(plan->limit_n, 100);
+    EXPECT_EQ(plan->output_schema.size(), 2u);  // s_name, numwait
+}
+
+TEST(IrTpchExpressivity, Q22Builds) {
+    auto cat = gir_tpch::make_tpch_catalog();
+    gir::IdGenerator gen;
+    auto qb = make_qb(cat, gen);
+    auto plan = gir_tpch::build_q22(qb);
+    ASSERT_NE(plan, nullptr);
+    EXPECT_EQ(plan->kind, gir::NodeKind::Sort);
+    EXPECT_EQ(plan->output_schema.size(), 3u);  // cntrycode, numcust, totacctbal
+}
+
 // A sanity check on FunctionCall: Q7 and Q9 both use year(); make sure
 // the resulting Expr is well-formed.
 TEST(IrTpchExpressivity, FunctionCallConstructionAndNullable) {
