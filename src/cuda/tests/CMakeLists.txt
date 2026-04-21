@@ -18,6 +18,7 @@ set(testSources
     sort/sort_partition_test.cu
     memory/table_test.cu
     ir/schema_test.cu
+    ir/expr_test.cu
     test_header.cpp
 )
 

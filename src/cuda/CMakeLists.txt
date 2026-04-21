@@ -60,6 +60,7 @@ set(srcs
     string/string_sort.cu
     ir/column_id.cpp
     ir/catalog.cpp
+    ir/expr.cpp
     )
     
 if(USE_NVIDIA)
