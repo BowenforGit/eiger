@@ -62,6 +62,7 @@ set(srcs
     ir/catalog.cpp
     ir/expr.cpp
     ir/plan_node.cpp
+    ir/builder.cpp
     )
     
 if(USE_NVIDIA)
