@@ -22,6 +22,7 @@ set(testSources
     ir/plan_node_test.cu
     ir/builder_test.cu
     ir/lower_expr_test.cu
+    ir/emit_test.cu
     test_header.cpp
 )
 
