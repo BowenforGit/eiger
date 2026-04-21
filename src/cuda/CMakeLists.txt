@@ -58,10 +58,8 @@ set(srcs
     string/string_factory.cu
     string/string_fast.cu
     string/string_sort.cu
-    # optimizer/catalog.cpp
-    # optimizer/logical_plan.cpp
-    # optimizer/plan_builder.cpp
-    # optimizer/plan_printer.cpp
+    ir/column_id.cpp
+    ir/catalog.cpp
     )
     
 if(USE_NVIDIA)

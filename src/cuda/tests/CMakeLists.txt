@@ -9,7 +9,7 @@ CPMAddPackage(
 enable_testing()
 include(GoogleTest) # Include CMake module to use gtest_discover_tests
 
-set(testSources 
+set(testSources
     groupby/groupby_sort_test.cu
     groupby/groupby_hash_test.cu
     groupby/groupby_multikeys_test.cu
@@ -17,6 +17,7 @@ set(testSources
     aggregate/aggregate_test.cu
     sort/sort_partition_test.cu
     memory/table_test.cu
+    ir/schema_test.cu
     test_header.cpp
 )
 
