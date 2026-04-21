@@ -251,4 +251,22 @@ Expr operator&&(Expr l, Expr r) { return bin_logical(LogicalOp::And, std::move(l
 Expr operator||(Expr l, Expr r) { return bin_logical(LogicalOp::Or,  std::move(l), std::move(r)); }
 Expr operator!(Expr e)          { return unary_not(std::move(e)); }
 
+namespace {
+void collect_refs_into(const Expr& e, std::vector<ColumnId>& out) {
+    if (e.kind == ExprKind::ColRef) {
+        out.push_back(e.col_ref);
+        return;
+    }
+    for (const auto& c : e.children) {
+        collect_refs_into(c, out);
+    }
+}
+} // namespace
+
+std::vector<ColumnId> collect_column_refs(const Expr& e) {
+    std::vector<ColumnId> out;
+    collect_refs_into(e, out);
+    return out;
+}
+
 } // namespace gamax::ir

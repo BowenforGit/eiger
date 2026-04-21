@@ -19,6 +19,7 @@ set(testSources
     memory/table_test.cu
     ir/schema_test.cu
     ir/expr_test.cu
+    ir/plan_node_test.cu
     test_header.cpp
 )
 

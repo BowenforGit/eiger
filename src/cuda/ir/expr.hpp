@@ -135,4 +135,9 @@ bool is_integer(gamax::type_id t);
 // Throws if either argument is non-numeric.
 gamax::data_type promote_numeric(gamax::data_type a, gamax::data_type b);
 
+// All ColumnIds referenced by ColRef leaves of `e`, in in-order
+// traversal. Used by PlanNode factories to validate that an expression
+// only mentions columns in the input schema.
+std::vector<ColumnId> collect_column_refs(const Expr& e);
+
 } // namespace gamax::ir

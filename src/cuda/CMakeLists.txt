@@ -61,6 +61,7 @@ set(srcs
     ir/column_id.cpp
     ir/catalog.cpp
     ir/expr.cpp
+    ir/plan_node.cpp
     )
     
 if(USE_NVIDIA)
