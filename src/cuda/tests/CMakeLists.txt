@@ -24,6 +24,7 @@ set(testSources
     ir/lower_expr_test.cu
     ir/emit_test.cu
     ir/tpch_ir_test.cu
+    ir/print_test.cu
     test_header.cpp
 )
 

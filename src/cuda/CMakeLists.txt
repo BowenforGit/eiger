@@ -65,6 +65,7 @@ set(srcs
     ir/builder.cpp
     ir/lower_expr.cpp
     ir/emit.cpp
+    ir/print.cpp
     tpch/tpch_ir.cu
     )
     

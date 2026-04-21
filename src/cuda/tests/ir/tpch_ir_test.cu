@@ -1,8 +1,11 @@
 #include <gtest/gtest.h>
 
+#include <iostream>
+
 #include "ir/builder.hpp"
 #include "ir/catalog.hpp"
 #include "ir/plan_node.hpp"
+#include "ir/print.hpp"
 #include "tpch/tpch_ir.hpp"
 
 namespace gir = gamax::ir;
@@ -282,6 +285,58 @@ TEST(IrTpchExpressivity, FunctionCallConstructionAndNullable) {
     auto y_null = gir::func("year", {std::move(nn_col)},
                             gamax::data_type{gamax::type_id::INT32});
     EXPECT_TRUE(y_null.nullable);
+}
+
+// ── Visual-inspection dump of every TPC-H plan ─────────────────────
+//
+// This test asserts nothing; it prints the pretty-printed form of
+// every TPC-H query we've built. Meant for running by hand:
+//
+//     build/src/cuda/tests/test_tpch_ir --gtest_filter='*DumpAll*'
+//
+// It's not a correctness check — just makes it cheap to eyeball the
+// shape of each plan after an IR change.
+TEST(IrTpchExpressivity, DumpAllPlans) {
+    auto cat = gir_tpch::make_tpch_catalog();
+    gir::IdGenerator gen;
+    gir::QueryBuilder qb(cat, gen);
+
+    struct Entry {
+        const char* name;
+        gir::PlanPtr (*build)(const gir::QueryBuilder&);
+    };
+    const Entry queries[] = {
+        {"Q1",  gir_tpch::build_q1},
+        {"Q2",  gir_tpch::build_q2},
+        {"Q3",  gir_tpch::build_q3},
+        {"Q4",  gir_tpch::build_q4},
+        {"Q5",  gir_tpch::build_q5},
+        {"Q6",  gir_tpch::build_q6},
+        {"Q7",  gir_tpch::build_q7},
+        {"Q8",  gir_tpch::build_q8},
+        {"Q9",  gir_tpch::build_q9},
+        {"Q10", gir_tpch::build_q10},
+        {"Q11", gir_tpch::build_q11},
+        {"Q12", gir_tpch::build_q12},
+        {"Q13", gir_tpch::build_q13},
+        {"Q14", gir_tpch::build_q14},
+        {"Q15", gir_tpch::build_q15},
+        {"Q16", gir_tpch::build_q16},
+        {"Q17", gir_tpch::build_q17},
+        {"Q18", gir_tpch::build_q18},
+        {"Q19", gir_tpch::build_q19},
+        {"Q20", gir_tpch::build_q20},
+        {"Q21", gir_tpch::build_q21},
+        {"Q22", gir_tpch::build_q22},
+    };
+
+    for (const auto& q : queries) {
+        std::cout << "\n======================== TPC-H " << q.name
+                  << " ========================\n";
+        auto plan = q.build(qb);
+        std::cout << gir::format_plan(*plan);
+    }
+    std::cout << std::endl;
 }
 
 int main(int argc, char** argv) {
