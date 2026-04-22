@@ -44,6 +44,7 @@ using exec::ValueId;
 struct Lowering {
     ExecPlan plan;
     const Catalog* cat;
+    LowerOptions opts;
     LivenessResult liveness;
     std::unordered_map<const PlanNode*, ValueId> memo;
 
@@ -173,21 +174,25 @@ ValueId lower_filter(const PlanNode& node, Lowering& lo) {
     // downstream op consumes. Liveness tells us which ids survive past
     // this Filter; everything else can be discarded during
     // materialization rather than compact/gathered and then thrown
-    // away by a follow-up Reorder.
-    const auto& live = lo.liveness.at(&node);
+    // away by a follow-up Reorder. Gated by `prune_filter_materialization`
+    // so benchmarks / debugging can disable the optimization.
     std::vector<gamax::size_type> output_ordinals;
     Schema pruned_schema;
-    output_ordinals.reserve(in_schema.size());
-    for (gamax::size_type i = 0;
-         i < static_cast<gamax::size_type>(in_schema.size()); ++i)
-    {
-        const auto& f = in_schema[i];
-        if (live.count(f.id)) {
-            output_ordinals.push_back(i);
-            pruned_schema.append(f);
+    bool actually_pruned = false;
+    if (lo.opts.prune_filter_materialization) {
+        const auto& live = lo.liveness.at(&node);
+        output_ordinals.reserve(in_schema.size());
+        for (gamax::size_type i = 0;
+             i < static_cast<gamax::size_type>(in_schema.size()); ++i)
+        {
+            const auto& f = in_schema[i];
+            if (live.count(f.id)) {
+                output_ordinals.push_back(i);
+                pruned_schema.append(f);
+            }
         }
+        actually_pruned = (output_ordinals.size() != in_schema.size());
     }
-    const bool actually_pruned = (output_ordinals.size() != in_schema.size());
 
     // If nothing was dropped, leave output_ordinals empty so the
     // Executor takes the cheap "all-columns" filter path (no change
@@ -651,10 +656,13 @@ ValueId lower_node(const PlanNode& node, Lowering& lo) {
 
 } // namespace
 
-exec::ExecPlan lower_to_exec_plan(const PlanPtr& root, const Catalog& cat) {
+exec::ExecPlan lower_to_exec_plan(
+    const PlanPtr& root, const Catalog& cat, const LowerOptions& opts)
+{
     if (!root) lower_error("null root");
     Lowering lo;
     lo.cat = &cat;
+    lo.opts = opts;
     lo.liveness = compute_liveness(*root);
     (void)lower_node(*root, lo);
     return std::move(lo.plan);
