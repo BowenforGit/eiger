@@ -67,6 +67,7 @@ set(srcs
     ir/emit.cpp
     ir/print.cpp
     ir/liveness.cpp
+    ir/rules.cpp
     ir/lower_to_exec_plan.cpp
     exec/executor.cpp
     exec/print.cpp

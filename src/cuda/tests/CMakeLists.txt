@@ -27,6 +27,7 @@ set(testSources
     ir/print_test.cu
     ir/tpch_emit_test.cu
     ir/liveness_test.cu
+    ir/rules_test.cu
     phys/phys_test.cu
     exec/exec_test.cu
     test_header.cpp
