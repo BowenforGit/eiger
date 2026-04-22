@@ -46,8 +46,15 @@ struct SourceTablePayload {
 struct ReorderPayload {
     std::vector<gamax::size_type> ordinals;
 };
+// A Project step emits one output column per item. Numeric/ColRef
+// items are expressed as ExprTrees; items whose value is a BOOL8
+// predicate (including ones derived from StringOp leaves such as
+// LIKE/STARTSWITH) are expressed as Predicates and evaluated via
+// select_to_bitmask. The variant preserves per-item kind; output
+// ordering matches the `items` vector. `ProjectItem` is declared
+// once in `phys/phys.hpp`; re-used here.
 struct ProjectPayload {
-    std::vector<gamax::expression::ExprTree> exprs;
+    std::vector<gamax::phys::ProjectItem> items;
 };
 struct FilterPayload {
     gamax::select::Predicate predicate;

@@ -181,77 +181,82 @@ table_ptr reorder(gamax::table_view in,
 // ── Computation ───────────────────────────────────────────────────
 
 table_ptr project(gamax::table_view in,
-                  std::vector<gamax::expression::ExprTree>& exprs,
+                  std::vector<ProjectItem>& items,
                   const Context& ctx)
 {
-    // Empty input → 0 rows of each expression's declared output type.
+    // Per-item classification. Four kinds:
+    //   * Predicate        → select_to_bitmask (BOOL8 out)
+    //   * ExprTree ColRef  → copy_any_column   (STRING-safe)
+    //   * Computed ExprTree→ batched project::project
+    //   * (empty input is a separate branch below)
+    enum class Kind { Predicate, ColRef, Computed };
+    const auto n = static_cast<gamax::size_type>(items.size());
+    std::vector<Kind> kinds(n, Kind::Computed);
+    std::vector<gamax::expression::ExprTree> computed;
+    for (gamax::size_type i = 0; i < n; ++i) {
+        if (std::holds_alternative<gamax::select::Predicate>(items[i])) {
+            kinds[i] = Kind::Predicate;
+        } else {
+            auto& e = std::get<gamax::expression::ExprTree>(items[i]);
+            if (e.is_column_ref()) {
+                kinds[i] = Kind::ColRef;
+            } else {
+                kinds[i] = Kind::Computed;
+                computed.push_back(e);
+            }
+        }
+    }
+
+    // Empty input → 0 rows of each item's declared output type.
+    // Predicate items always produce BOOL8.
     if (in.num_rows() == 0) {
         std::vector<gamax::column_ptr> cols;
-        cols.reserve(exprs.size());
-        for (auto& e : exprs) {
-            cols.push_back(make_zero_row_column(e.type(), ctx.stream));
+        cols.reserve(n);
+        for (gamax::size_type i = 0; i < n; ++i) {
+            if (kinds[i] == Kind::Predicate) {
+                cols.push_back(make_zero_row_column(
+                    gamax::data_type{gamax::type_id::BOOL8}, ctx.stream));
+            } else {
+                auto& e = std::get<gamax::expression::ExprTree>(items[i]);
+                cols.push_back(make_zero_row_column(e.type(), ctx.stream));
+            }
         }
         return std::make_unique<gamax::table>(std::move(cols));
     }
 
+    // Batch the computed ExprTrees through project::project once,
+    // if any.
     gamax::project::project_options opts;  // defaults
-
-    // Classify each item. Pure column refs bypass project::project
-    // entirely, because its evaluate_expr dispatcher is numeric-only
-    // — a STRING column referenced from an all-ColRef project would
-    // fail. We handle those via copy_any_column below and batch the
-    // computed items through project::project in a single call.
-    std::vector<bool> is_col_ref(exprs.size(), false);
-    std::vector<gamax::expression::ExprTree> computed;
-    for (gamax::size_type i = 0;
-         i < static_cast<gamax::size_type>(exprs.size()); ++i)
-    {
-        if (exprs[i].is_column_ref()) {
-            is_col_ref[i] = true;
-        } else {
-            computed.push_back(exprs[i]);
-        }
+    std::unique_ptr<gamax::table> computed_tbl;
+    if (!computed.empty()) {
+        computed_tbl = gamax::project::project(
+            in, computed, opts, ctx.stream);
     }
 
-    bool any_computed  = !computed.empty();
-    bool any_col_ref   = std::find(is_col_ref.begin(), is_col_ref.end(), true)
-                         != is_col_ref.end();
-
-    // Fast path: everything is a column ref → one reorder call.
-    if (any_col_ref && !any_computed) {
-        std::vector<gamax::size_type> ordinals;
-        ordinals.reserve(exprs.size());
-        for (auto& e : exprs) ordinals.push_back(e.get_column_index());
-        return reorder(in, std::move(ordinals), ctx);
-    }
-
-    // Fast path: everything is computed → project::project directly.
-    // (Callers have already guaranteed no StringOp leaves by going
-    // through lower_expr_to_tree, so evaluate_expr's numeric
-    // dispatcher is safe here.)
-    if (!any_col_ref && any_computed) {
-        return gamax::project::project(in, computed, opts, ctx.stream);
-    }
-
-    // Mixed: do ColRef items column-by-column (STRING-safe) and
-    // compute the rest in a single project::project call, then
-    // interleave into original positions.
-    auto computed_tbl = gamax::project::project(
-        in, computed, opts, ctx.stream);
-
+    // Stitch per-item results in positional order.
     std::vector<gamax::column_ptr> out;
-    out.reserve(exprs.size());
-    for (gamax::size_type i = 0;
-         i < static_cast<gamax::size_type>(exprs.size()); ++i)
-    {
-        if (is_col_ref[i]) {
-            out.push_back(copy_any_column(
-                in.get_column(exprs[i].get_column_index()), ctx.stream));
-        } else {
-            // Pull the next computed column out of computed_tbl, in
-            // order. Using remove_column(0) keeps the head-taking
-            // semantics simple and deterministic.
-            out.push_back(computed_tbl->remove_column(0));
+    out.reserve(n);
+    for (gamax::size_type i = 0; i < n; ++i) {
+        switch (kinds[i]) {
+            case Kind::Predicate: {
+                auto& pred = std::get<gamax::select::Predicate>(items[i]);
+                auto bm = gamax::select::select_to_bitmask(in, pred, ctx.stream);
+                out.push_back(std::move(bm));
+                break;
+            }
+            case Kind::ColRef: {
+                auto& e = std::get<gamax::expression::ExprTree>(items[i]);
+                out.push_back(copy_any_column(
+                    in.get_column(e.get_column_index()), ctx.stream));
+                break;
+            }
+            case Kind::Computed: {
+                // Pull the next computed column out of computed_tbl in
+                // request order. remove_column(0) keeps head-taking
+                // semantics deterministic.
+                out.push_back(computed_tbl->remove_column(0));
+                break;
+            }
         }
     }
     return std::make_unique<gamax::table>(std::move(out));

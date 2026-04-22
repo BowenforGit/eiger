@@ -265,11 +265,11 @@ TEST(PhysProject, ComputesExpression) {
     cols.push_back(mk_col(b));
     auto tbl = gamax::make_table(std::move(cols));
 
-    std::vector<ExprTree> exprs;
-    exprs.push_back(ExprTree::multiply(
+    std::vector<gamax::phys::ProjectItem> items;
+    items.emplace_back(ExprTree::multiply(
         ExprTree::column(0, t(type_id::FLOAT64)),
         ExprTree::column(1, t(type_id::FLOAT64))));
-    auto out = phys::project(tbl->view(), exprs, default_ctx());
+    auto out = phys::project(tbl->view(), items, default_ctx());
     ASSERT_EQ(out->num_columns(), 1);
     auto result = gamax::copy_column_to_host<double>(out->view()[0]);
     EXPECT_DOUBLE_EQ(result[0], 10.0);

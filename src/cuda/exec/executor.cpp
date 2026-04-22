@@ -52,8 +52,8 @@ std::unique_ptr<gamax::table> run_step(
             return gamax::phys::reorder(input_view(0), pl.ordinals, ctx);
         } else if constexpr (std::is_same_v<T, ProjectPayload>) {
             // phys::project takes non-const ref; give it a local copy.
-            auto exprs = pl.exprs;
-            return gamax::phys::project(input_view(0), exprs, ctx);
+            auto items = pl.items;
+            return gamax::phys::project(input_view(0), items, ctx);
         } else if constexpr (std::is_same_v<T, FilterPayload>) {
             auto pred = pl.predicate;  // non-const needed
             if (pl.output_ordinals.empty()) {

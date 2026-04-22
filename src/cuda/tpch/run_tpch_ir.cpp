@@ -22,6 +22,7 @@
 #include "exec/print.hpp"
 #include "ir/lower_to_exec_plan.hpp"
 #include "ir/print.hpp"
+#include "ir/rules.hpp"
 #include "memory/column.hpp"
 #include "memory/table.hpp"
 #include "phys/phys.hpp"
@@ -58,14 +59,16 @@ gamax::ir::PlanPtr build_query(
     using namespace gamax::ir::tpch;
     switch (qid) {
         case 1:  return build_q1(qb);
+        case 2:  return build_q2(qb);
         case 6:  return build_q6(qb);
+        case 11: return build_q11(qb);
+        case 14: return build_q14(qb);
+        case 15: return build_q15(qb);
         case 18: return build_q18(qb);
+        case 20: return build_q20(qb);
         default:
             throw std::runtime_error(
-                "query " + std::to_string(qid) +
-                " not wired for IR-path run yet (this runner only "
-                "covers queries whose physical path is known-green; "
-                "today that's Q1/Q6/Q18).");
+                "query " + std::to_string(qid) + " not wired in this runner.");
     }
 }
 
@@ -138,10 +141,18 @@ int main(int argc, char** argv) try {
     std::cout << "IR built: " << plan->output_schema.size()
               << " output columns.\n";
     if (args.print_plan) {
-        std::cout << "\n-- IR --\n" << gamax::ir::format_plan(*plan) << "\n";
+        std::cout << "\n-- IR (pre-rules) --\n"
+                  << gamax::ir::format_plan(*plan) << "\n";
     }
 
-    // ── 2. Lower to ExecPlan ─────────────────────────────────────
+    // ── 2. Apply IR rewrite rules (defaults-on) ──────────────────
+    plan = gamax::ir::apply_rules(plan);
+    if (args.print_plan) {
+        std::cout << "\n-- IR (post-rules) --\n"
+                  << gamax::ir::format_plan(*plan) << "\n";
+    }
+
+    // ── 3. Lower to ExecPlan ─────────────────────────────────────
     auto ep = gamax::ir::lower_to_exec_plan(plan, catalog);
     std::cout << "ExecPlan: " << ep.steps.size() << " steps, "
               << ep.required_sources.size() << " sources.\n";

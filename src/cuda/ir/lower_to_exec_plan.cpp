@@ -213,10 +213,23 @@ ValueId lower_project(const PlanNode& node, Lowering& lo) {
     auto input_id = lower_node(*node.inputs[0], lo);
     const auto& in_schema = lo.exec_schema(input_id);
 
-    std::vector<gamax::expression::ExprTree> exprs;
-    exprs.reserve(node.project_items.size());
+    // Dispatch per item: items that contain a StringOp anywhere go
+    // through `lower_expr_to_predicate` (which emits a Predicate the
+    // Project step evaluates via select_to_bitmask); everything else
+    // goes through `lower_expr_to_tree`. The StringOp must sit at a
+    // position that `lower_expr_to_predicate` accepts — practically
+    // that means a BOOL8-producing subtree. A StringOp nested inside a
+    // numeric computational ExprTree (e.g. inside a CASE body) is
+    // still rejected; builders must pre-split such items.
+    std::vector<gamax::phys::ProjectItem> items;
+    items.reserve(node.project_items.size());
     for (const auto& it : node.project_items) {
-        exprs.push_back(lower_expr_to_tree(it.expr, in_schema));
+        if (expr_contains_string_op(it.expr)) {
+            items.emplace_back(lower_expr_to_predicate(
+                it.expr, in_schema, cudaStreamDefault));
+        } else {
+            items.emplace_back(lower_expr_to_tree(it.expr, in_schema));
+        }
     }
 
     // Project rebuilds its output from scratch (one column per item);
@@ -224,7 +237,7 @@ ValueId lower_project(const PlanNode& node, Lowering& lo) {
     // equals the IR's declared output_schema.
     ValueId out_id = lo.next_value(node.output_schema);
     lo.push_step(StepKind::Project, {input_id}, out_id,
-                 exec::ProjectPayload{std::move(exprs)});
+                 exec::ProjectPayload{std::move(items)});
     return out_id;
 }
 
@@ -302,19 +315,22 @@ std::pair<ValueId, gamax::size_type> materialize_keys_and_values(
         lo.push_step(StepKind::Reorder, {input_id}, mat_id,
                      exec::ReorderPayload{std::move(ordinals)});
     } else {
-        // Mixed / computed → Project.
-        std::vector<gamax::expression::ExprTree> exprs;
-        exprs.reserve(node.agg_keys.size() + node.agg_items.size());
+        // Mixed / computed → Project. Agg keys are always ColRefs;
+        // agg bodies are ColRefs or numeric computed — no StringOps
+        // flow through here, so every item is an ExprTree wrapped in
+        // the ProjectItem variant.
+        std::vector<gamax::phys::ProjectItem> items;
+        items.reserve(node.agg_keys.size() + node.agg_items.size());
         for (auto kid : node.agg_keys) {
             auto ordinal = resolve_ordinal(in_schema, kid);
-            exprs.push_back(gamax::expression::ExprTree::column(
+            items.emplace_back(gamax::expression::ExprTree::column(
                 ordinal, in_schema[ordinal].type));
         }
         for (const auto& ag : node.agg_items) {
-            exprs.push_back(lower_expr_to_tree(ag.body, in_schema));
+            items.emplace_back(lower_expr_to_tree(ag.body, in_schema));
         }
         lo.push_step(StepKind::Project, {input_id}, mat_id,
-                     exec::ProjectPayload{std::move(exprs)});
+                     exec::ProjectPayload{std::move(items)});
     }
     return {mat_id, n_keys};
 }

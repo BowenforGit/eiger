@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <cuda_runtime_api.h>
@@ -82,12 +83,19 @@ table_ptr reorder(gamax::table_view in,
 
 // ── Computation ───────────────────────────────────────────────────
 
-// Computed projection via the existing `gamax::project::project`.
-// `exprs` must reference columns by ordinal and produce numeric /
-// BOOL8 / Case results — StringOp bodies are rejected at the
-// `lower_expr_to_tree` layer, so they can't reach here.
+// Per-item projection. Each item is either a computed/ColRef
+// `ExprTree` (evaluated through the existing numeric expression
+// evaluator) or a `Predicate` (evaluated through `select_to_bitmask`
+// to produce a BOOL8 column). Output schema matches the `items`
+// vector positionally. The predicate path is the vehicle for
+// StringOp-based columns (e.g. `p_type LIKE 'PROMO%'`) living
+// at the top of a ProjectItem — StringOps nested inside a numeric
+// computational context are still rejected upstream at lowering time.
+using ProjectItem = std::variant<
+    gamax::expression::ExprTree,
+    gamax::select::Predicate>;
 table_ptr project(gamax::table_view in,
-                  std::vector<gamax::expression::ExprTree>& exprs,
+                  std::vector<ProjectItem>& items,
                   const Context& ctx);
 
 // Heterogeneous filter. Uses `select_to_bitmask(Predicate)` then

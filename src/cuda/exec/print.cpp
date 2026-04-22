@@ -58,7 +58,16 @@ void write_payload(std::ostream& os, const StepPayload& payload) {
             os << "ordinals=";
             write_ordinals(os, pl.ordinals);
         } else if constexpr (std::is_same_v<T, ProjectPayload>) {
-            os << "#exprs=" << pl.exprs.size();
+            gamax::size_type n_pred = 0, n_tree = 0;
+            for (const auto& it : pl.items) {
+                if (std::holds_alternative<gamax::select::Predicate>(it)) {
+                    ++n_pred;
+                } else {
+                    ++n_tree;
+                }
+            }
+            os << "#items=" << pl.items.size()
+               << " (tree=" << n_tree << ", pred=" << n_pred << ")";
         } else if constexpr (std::is_same_v<T, FilterPayload>) {
             os << "predicate=<Predicate>";
             if (!pl.output_ordinals.empty()) {
