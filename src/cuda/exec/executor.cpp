@@ -5,6 +5,15 @@
 #include <unordered_map>
 #include <variant>
 
+#ifdef GAMAX_PHYS_DEBUG
+#include <cctype>
+#include <cuda_runtime_api.h>
+#include <iostream>
+#include <string>
+#include "exec/print.hpp"
+#include "utils/debug_print.hpp"
+#endif
+
 namespace gamax::exec {
 
 namespace {
@@ -110,6 +119,14 @@ std::unique_ptr<gamax::table> execute(
     std::unordered_map<ValueId, Slot> live;
     live.reserve(plan.values.size());
 
+#ifdef GAMAX_PHYS_DEBUG
+    // Per-execute() env-var snapshot. Parses GAMAX_PHYS_DEBUG (a comma
+    // list of StepKind names or `all`) and GAMAX_PHYS_DEBUG_ROWS. When
+    // neither names nor `all` are set, the filter admits nothing and
+    // the loop below skips the per-step print work entirely.
+    gamax::util::debug::PhysDebugFilter phys_debug;
+#endif
+
     for (gamax::size_type i = 0;
          i < static_cast<gamax::size_type>(plan.steps.size()); ++i)
     {
@@ -128,6 +145,37 @@ std::unique_ptr<gamax::table> execute(
             slot.owned = run_step(s, live, source_resolver, ctx);
             live[s.output] = std::move(slot);
         }
+
+#ifdef GAMAX_PHYS_DEBUG
+        // Debug hook — fires for *every* step (including SourceTable)
+        // when the user has enabled a matching kind via the
+        // GAMAX_PHYS_DEBUG env var. We normalise the kind name to
+        // lower-case so the matching is case-insensitive against the
+        // camel-case names returned by `step_kind_name`.
+        if (phys_debug.any_enabled()) {
+            std::string kind_lower = step_kind_name(s.kind);
+            for (auto& c : kind_lower) {
+                c = static_cast<char>(std::tolower(
+                    static_cast<unsigned char>(c)));
+            }
+            if (phys_debug.should_print(kind_lower)) {
+                // Sync the ctx stream before the device→host reads in
+                // print_table; otherwise in-flight kernels could race
+                // with the cudaMemcpys.
+                cudaStreamSynchronize(ctx.stream);
+                auto v = view_of(live[s.output]);
+                std::cerr << "[step " << i << ": "
+                          << step_kind_name(s.kind) << "] -> "
+                          << v.num_rows() << " rows x "
+                          << v.num_columns() << " cols\n";
+                gamax::util::debug::print_table(
+                    v, phys_debug.max_rows(), /*offset=*/0, std::cerr);
+                // Blank line between step blocks for readability.
+                std::cerr << "\n";
+                std::cerr.flush();
+            }
+        }
+#endif
 
         // Drop any input whose last_used_step has passed. Don't drop
         // Source views — they alias caller-owned data.

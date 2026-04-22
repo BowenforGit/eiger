@@ -5,8 +5,6 @@
 
 namespace gamax::exec {
 
-namespace {
-
 const char* step_kind_name(StepKind k) {
     switch (k) {
         case StepKind::SourceTable: return "SourceTable";
@@ -23,6 +21,8 @@ const char* step_kind_name(StepKind k) {
     }
     return "?";
 }
+
+namespace {
 
 const char* agg_name(gamax::groupby::aggregation_id a) {
     switch (a) {

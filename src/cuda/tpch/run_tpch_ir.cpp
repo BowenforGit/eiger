@@ -23,6 +23,7 @@
 #include "ir/lower_to_exec_plan.hpp"
 #include "ir/print.hpp"
 #include "ir/rules.hpp"
+#include "utils/debug_print.hpp"
 #include "memory/column.hpp"
 #include "memory/table.hpp"
 #include "phys/phys.hpp"
@@ -138,6 +139,7 @@ int main(int argc, char** argv) try {
     gamax::ir::IdGenerator gen;
     gamax::ir::QueryBuilder qb(catalog, gen);
     auto plan = build_query(args.query_id, qb);
+    auto pre_rules_plan = plan;  // keep a reference for the plan dump
     std::cout << "IR built: " << plan->output_schema.size()
               << " output columns.\n";
     if (args.print_plan) {
@@ -160,6 +162,12 @@ int main(int argc, char** argv) try {
         std::cout << "\n-- ExecPlan --\n"
                   << gamax::exec::format_exec_plan(ep) << "\n";
     }
+
+    // Env-var-driven plan dump to stderr. Self-gated: silently does
+    // nothing unless `GAMAX_PHYS_DEBUG` is non-empty or
+    // `GAMAX_DEBUG_PLAN=1`. Runs in parallel with the --print-plan flag
+    // path above, so you can use either / both.
+    gamax::util::debug::print_plans_if_debug(*pre_rules_plan, *plan, ep);
 
     // ── 3. Load sources via the TPC-H reader ─────────────────────
     gamax::tpch::tpch_params params(args.scale_factor);

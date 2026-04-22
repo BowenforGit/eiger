@@ -54,6 +54,7 @@ set(srcs
     data_gen/string_generator.cu
     utils/copying.cu
     utils/transform.cu
+    utils/debug_print.cu
     stats/stats_compute.cu
     string/string_factory.cu
     string/string_fast.cu
@@ -102,6 +103,17 @@ endif()
 add_library(gamax SHARED ${srcs})
 target_link_libraries(gamax PRIVATE common)
 target_link_libraries(gamax PRIVATE OpenMP::OpenMP_CXX)
+
+# Opt-in debug macro for the phys-layer tracer wired in
+# `src/cuda/exec/executor.cpp`. When `-DGAMAX_PHYS_DEBUG=ON` is passed
+# to cmake, the executor compiles a per-step `print_table` hook gated
+# at runtime by the `GAMAX_PHYS_DEBUG` env var (comma-separated
+# StepKind names or `all`). Off by default — zero overhead for
+# production builds.
+option(GAMAX_PHYS_DEBUG "Compile the per-step phys-layer debug printer" OFF)
+if(GAMAX_PHYS_DEBUG)
+    target_compile_definitions(gamax PUBLIC GAMAX_PHYS_DEBUG)
+endif()
 
 if(USE_ROCM)
     target_link_libraries(gamax PUBLIC cuco::cuco)
