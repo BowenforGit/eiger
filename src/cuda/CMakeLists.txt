@@ -66,6 +66,9 @@ set(srcs
     ir/lower_expr.cpp
     ir/emit.cpp
     ir/print.cpp
+    ir/lower_to_exec_plan.cpp
+    exec/executor.cpp
+    exec/print.cpp
     tpch/tpch_ir.cu
     )
     
@@ -90,6 +93,7 @@ if(USE_NVIDIA)
         expr/expr_nofuse.cu
         expr/expr_parser.cpp
         expr/expr_visualize.cpp
+        phys/phys.cu
     )
 endif()
 

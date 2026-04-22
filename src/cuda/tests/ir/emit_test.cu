@@ -466,7 +466,10 @@ TEST(IrEmit, LeftOuterJoinReportsNotImplemented) {
     EXPECT_THROW(gir::emit(j.plan(), ctx), std::runtime_error);
 }
 
-TEST(IrEmit, CrossJoinReportsNotImplemented) {
+TEST(IrEmit, CrossJoinProducesCartesianProduct) {
+    // Was previously "not yet implemented"; Phase 1.6 wired cross_join
+    // via phys::eq_join + fake-key. L has 5 rows, R has 3 rows
+    // (see make_join_fixtures) → 15 rows.
     auto f = make_join_fixtures();
     auto ctx = make_join_ctx(f);
     gir::IdGenerator gen;
@@ -474,7 +477,10 @@ TEST(IrEmit, CrossJoinReportsNotImplemented) {
     auto li = qb.scan("lineitem", {"l_partkey", "l_extendedprice"});
     auto p  = qb.scan("part",     {"p_partkey", "p_size"});
     auto j = li.cross_join(p);
-    EXPECT_THROW(gir::emit(j.plan(), ctx), std::runtime_error);
+    auto out = gir::emit(j.plan(), ctx);
+    // li has 5 rows, part has 3 rows → 15 cross-product rows.
+    EXPECT_EQ(out->num_rows(), 15);
+    EXPECT_EQ(out->num_columns(), 4);
 }
 
 TEST(IrEmit, DistinctReportsNotImplemented) {
