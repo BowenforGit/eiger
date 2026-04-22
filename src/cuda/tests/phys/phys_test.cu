@@ -145,6 +145,116 @@ TEST(PhysFilter, WithStringColumnPayload) {
     EXPECT_EQ(out->view()[1].type().id(), type_id::STRING);
 }
 
+// Selective-output overload: the predicate references ordinal 0 but
+// the consumer only wants column 1 materialized.
+TEST(PhysFilter, SelectiveOutputDropsPredicateOnlyColumn) {
+    std::vector<int32_t> a = {1, 2, 3, 4, 5};  // predicate column
+    std::vector<double>  b = {1.5, 2.5, 3.5, 4.5, 5.5};  // payload
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(mk_col(a));
+    cols.push_back(mk_col(b));
+    auto tbl = gamax::make_table(std::move(cols));
+
+    auto pred = gamax::select::Predicate::expr(
+        ExprTree::greater_than(
+            ExprTree::column(0, t(type_id::INT32)),
+            ExprTree::constant(gamax::scalar(int32_t{2}))));
+    auto out = phys::filter(
+        tbl->view(), pred, std::vector<gamax::size_type>{1}, default_ctx());
+    ASSERT_EQ(out->num_columns(), 1);
+    ASSERT_EQ(out->num_rows(), 3);
+    EXPECT_EQ(out->view()[0].type().id(), type_id::FLOAT64);
+    auto kept = gamax::copy_column_to_host<double>(out->view()[0]);
+    EXPECT_DOUBLE_EQ(kept[0], 3.5);
+    EXPECT_DOUBLE_EQ(kept[1], 4.5);
+    EXPECT_DOUBLE_EQ(kept[2], 5.5);
+}
+
+// Selective-output also drops a STRING column referenced only by the
+// predicate. Closes the most interesting case: a predicate-only STRING
+// column is expensive to gather, and pruning it should avoid the
+// gather entirely.
+TEST(PhysFilter, SelectiveOutputDropsStringPredicateColumn) {
+    std::vector<int32_t> a = {10, 20, 30, 40};  // payload
+    std::vector<std::string> s =                // predicate column
+        {"apple", "banana", "cherry", "date"};
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(mk_col(a));
+    cols.push_back(mk_string_col(s));
+    auto tbl = gamax::make_table(std::move(cols));
+
+    // Predicate: any numeric check; we keep the shape simple to
+    // verify materialization selection, not predicate expressivity.
+    auto pred = gamax::select::Predicate::expr(
+        ExprTree::less_than(
+            ExprTree::column(0, t(type_id::INT32)),
+            ExprTree::constant(gamax::scalar(int32_t{35}))));
+    auto out = phys::filter(
+        tbl->view(), pred, std::vector<gamax::size_type>{0}, default_ctx());
+    // Only column 0 materialized — no STRING column in the result.
+    ASSERT_EQ(out->num_columns(), 1);
+    ASSERT_EQ(out->num_rows(), 3);
+    EXPECT_EQ(out->view()[0].type().id(), type_id::INT32);
+    auto kept = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    EXPECT_EQ(kept[0], 10); EXPECT_EQ(kept[1], 20); EXPECT_EQ(kept[2], 30);
+}
+
+// Empty `output_ordinals` is equivalent to the 3-arg overload.
+TEST(PhysFilter, SelectiveOutputEmptyMeansAll) {
+    std::vector<int32_t> a = {1, 5, 10, 15};
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(mk_col(a));
+    auto tbl = gamax::make_table(std::move(cols));
+
+    auto pred = gamax::select::Predicate::expr(
+        ExprTree::greater_than(
+            ExprTree::column(0, t(type_id::INT32)),
+            ExprTree::constant(gamax::scalar(int32_t{7}))));
+    auto out = phys::filter(
+        tbl->view(), pred, std::vector<gamax::size_type>{}, default_ctx());
+    ASSERT_EQ(out->num_columns(), 1);
+    ASSERT_EQ(out->num_rows(), 2);
+}
+
+// 0-row input with selective output → 0-row output of the requested
+// shape. Confirms the empty-input short-circuit respects ordinals.
+TEST(PhysFilter, SelectiveOutputEmptyInput) {
+    std::vector<int32_t> a = {};
+    std::vector<double>  b = {};
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(mk_col(a));
+    cols.push_back(mk_col(b));
+    auto tbl = gamax::make_table(std::move(cols));
+
+    auto pred = gamax::select::Predicate::expr(
+        ExprTree::greater_than(
+            ExprTree::column(0, t(type_id::INT32)),
+            ExprTree::constant(gamax::scalar(int32_t{0}))));
+    auto out = phys::filter(
+        tbl->view(), pred, std::vector<gamax::size_type>{1}, default_ctx());
+    ASSERT_EQ(out->num_columns(), 1);
+    ASSERT_EQ(out->num_rows(), 0);
+    EXPECT_EQ(out->view()[0].type().id(), type_id::FLOAT64);
+}
+
+// Out-of-range ordinal → clear error.
+TEST(PhysFilter, SelectiveOutputRejectsOutOfRangeOrdinal) {
+    std::vector<int32_t> a = {1, 2, 3};
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(mk_col(a));
+    auto tbl = gamax::make_table(std::move(cols));
+
+    auto pred = gamax::select::Predicate::expr(
+        ExprTree::greater_than(
+            ExprTree::column(0, t(type_id::INT32)),
+            ExprTree::constant(gamax::scalar(int32_t{0}))));
+    EXPECT_THROW(
+        phys::filter(
+            tbl->view(), pred,
+            std::vector<gamax::size_type>{1}, default_ctx()),
+        std::runtime_error);
+}
+
 // ── project: thin wrapper around project::project ─────────────────
 
 TEST(PhysProject, ComputesExpression) {

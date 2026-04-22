@@ -99,6 +99,20 @@ table_ptr filter(gamax::table_view in,
                  gamax::select::Predicate& pred,
                  const Context& ctx);
 
+// Selective-output overload: predicate is evaluated against all of
+// `in` (so it may reference any ordinal), but only the columns listed
+// in `output_ordinals` are materialized in the result (in that order).
+// An empty `output_ordinals` is equivalent to the 3-arg overload and
+// produces every input column.
+//
+// Used by the IR-level column-pruning rule: a column the predicate
+// touches but downstream ops never consume is dropped without the
+// per-row compact/gather cost of carrying it through.
+table_ptr filter(gamax::table_view in,
+                 gamax::select::Predicate& pred,
+                 std::vector<gamax::size_type> output_ordinals,
+                 const Context& ctx);
+
 // ── Joins ─────────────────────────────────────────────────────────
 
 // Inner equi-join. `lkeys[i]` joins to `rkeys[i]`; `lkeys.size()` must

@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "ir/expr.hpp"
+#include "ir/liveness.hpp"
 #include "ir/lower_expr.hpp"
 #include "ir/schema.hpp"
 #include "operators/groupby/aggregation.hpp"
@@ -32,16 +33,28 @@ using exec::ValueId;
 
 // Walk state threaded through the recursive lowering. Owns the
 // ExecPlan under construction, the Catalog reference, a memo for
-// DAG-shared plan nodes, and the monotonic ValueId allocator.
+// DAG-shared plan nodes, the liveness analysis, and the monotonic
+// ValueId allocator.
+//
+// Invariant: each Value's `schema` reflects the EXEC-time column
+// layout (possibly pruned vs. IR's declared `output_schema`). Every
+// lowering helper that resolves a ColumnId to an ordinal reads from
+// `exec_schema(child_id)`, not from the IR child's `output_schema`,
+// so upstream pruning propagates correctly through the DAG.
 struct Lowering {
     ExecPlan plan;
     const Catalog* cat;
+    LivenessResult liveness;
     std::unordered_map<const PlanNode*, ValueId> memo;
 
     ValueId next_value(Schema schema) {
         ValueId id = static_cast<ValueId>(plan.values.size());
         plan.values.push_back(Value{id, std::move(schema), -1});
         return id;
+    }
+
+    const Schema& exec_schema(ValueId id) const {
+        return plan.values[id].schema;
     }
 
     gamax::size_type next_step_index() const {
@@ -68,6 +81,21 @@ struct Lowering {
         return idx;
     }
 };
+
+// Build an EXEC output schema by keeping only those fields of `declared`
+// whose ColumnId is live (present in `live_union`). Used by Join: the
+// IR-declared output schema is L ++ R, but if either side was pruned
+// upstream, some of those fields are no longer produced.
+Schema filter_schema_by_live(
+    const Schema& declared,
+    const std::unordered_set<ColumnId>& live_union)
+{
+    Schema out;
+    for (const auto& f : declared.fields()) {
+        if (live_union.count(f.id)) out.append(f);
+    }
+    return out;
+}
 
 // ── Per-node lowering ──────────────────────────────────────────────
 
@@ -130,23 +158,55 @@ ValueId lower_scan(const PlanNode& node, Lowering& lo) {
 
 ValueId lower_filter(const PlanNode& node, Lowering& lo) {
     auto input_id = lower_node(*node.inputs[0], lo);
-    const auto& in_schema = node.inputs[0]->output_schema;
+    const auto& in_schema = lo.exec_schema(input_id);
 
     // Build the Predicate now, once, using the default stream. String
     // scalars allocated here live inside the Predicate and persist
-    // for the plan's lifetime.
+    // for the plan's lifetime. Note: ordinals are resolved against
+    // the EXEC schema — columns referenced by the predicate are
+    // guaranteed to be live at the child's output (liveness forces
+    // it), so they're present.
     auto pred = lower_expr_to_predicate(
         node.filter_predicate, in_schema, cudaStreamDefault);
 
-    ValueId out_id = lo.next_value(node.output_schema);
+    // Column-pruning rule: drop columns the predicate touches but no
+    // downstream op consumes. Liveness tells us which ids survive past
+    // this Filter; everything else can be discarded during
+    // materialization rather than compact/gathered and then thrown
+    // away by a follow-up Reorder.
+    const auto& live = lo.liveness.at(&node);
+    std::vector<gamax::size_type> output_ordinals;
+    Schema pruned_schema;
+    output_ordinals.reserve(in_schema.size());
+    for (gamax::size_type i = 0;
+         i < static_cast<gamax::size_type>(in_schema.size()); ++i)
+    {
+        const auto& f = in_schema[i];
+        if (live.count(f.id)) {
+            output_ordinals.push_back(i);
+            pruned_schema.append(f);
+        }
+    }
+    const bool actually_pruned = (output_ordinals.size() != in_schema.size());
+
+    // If nothing was dropped, leave output_ordinals empty so the
+    // Executor takes the cheap "all-columns" filter path (no change
+    // vs. pre-rule behavior).
+    Schema out_schema = actually_pruned
+        ? std::move(pruned_schema)
+        : in_schema;  // pass-through = input's EXEC schema
+    if (!actually_pruned) output_ordinals.clear();
+
+    ValueId out_id = lo.next_value(std::move(out_schema));
     lo.push_step(StepKind::Filter, {input_id}, out_id,
-                 exec::FilterPayload{std::move(pred)});
+                 exec::FilterPayload{
+                     std::move(pred), std::move(output_ordinals)});
     return out_id;
 }
 
 ValueId lower_project(const PlanNode& node, Lowering& lo) {
     auto input_id = lower_node(*node.inputs[0], lo);
-    const auto& in_schema = node.inputs[0]->output_schema;
+    const auto& in_schema = lo.exec_schema(input_id);
 
     std::vector<gamax::expression::ExprTree> exprs;
     exprs.reserve(node.project_items.size());
@@ -154,6 +214,9 @@ ValueId lower_project(const PlanNode& node, Lowering& lo) {
         exprs.push_back(lower_expr_to_tree(it.expr, in_schema));
     }
 
+    // Project rebuilds its output from scratch (one column per item);
+    // it's independent of any upstream pruning, so the EXEC schema
+    // equals the IR's declared output_schema.
     ValueId out_id = lo.next_value(node.output_schema);
     lo.push_step(StepKind::Project, {input_id}, out_id,
                  exec::ProjectPayload{std::move(exprs)});
@@ -184,7 +247,8 @@ gamax::groupby::aggregation_id to_physical_agg(AggKind k) {
 // via column-index. Matches the shape the current emit.cpp builds
 // inline; hoisted into the ExecPlan so it's visible and reusable.
 //
-// Returns `(value_id, n_keys)`.
+// Returns `(value_id, n_keys)`. `in_schema` must be the EXEC schema of
+// the aggregate's input (i.e., the actual column layout of `input_id`).
 std::pair<ValueId, gamax::size_type> materialize_keys_and_values(
     const PlanNode& node, ValueId input_id,
     const Schema& in_schema, Lowering& lo)
@@ -252,7 +316,7 @@ std::pair<ValueId, gamax::size_type> materialize_keys_and_values(
 
 ValueId lower_aggregate(const PlanNode& node, Lowering& lo) {
     auto input_id = lower_node(*node.inputs[0], lo);
-    const auto& in_schema = node.inputs[0]->output_schema;
+    const auto& in_schema = lo.exec_schema(input_id);
 
     auto [mat_id, n_keys] =
         materialize_keys_and_values(node, input_id, in_schema, lo);
@@ -292,14 +356,16 @@ ValueId lower_aggregate(const PlanNode& node, Lowering& lo) {
 
 ValueId lower_sort(const PlanNode& node, Lowering& lo) {
     auto input_id = lower_node(*node.inputs[0], lo);
-    const auto& in_schema = node.inputs[0]->output_schema;
+    const auto& in_schema = lo.exec_schema(input_id);
 
     std::vector<gamax::phys::SortSpec> keys;
     keys.reserve(node.sort_keys.size());
     for (const auto& k : node.sort_keys) {
         keys.push_back({resolve_ordinal(in_schema, k.id), k.order});
     }
-    ValueId out_id = lo.next_value(node.output_schema);
+    // Sort preserves its input layout exactly; EXEC schema passes
+    // through (so upstream pruning flows downstream unchanged).
+    ValueId out_id = lo.next_value(in_schema);
     lo.push_step(StepKind::Sort, {input_id}, out_id,
                  exec::SortPayload{std::move(keys)});
     return out_id;
@@ -317,14 +383,16 @@ ValueId lower_limit(const PlanNode& node, Lowering& lo) {
     // the Sort's INPUT.
     const auto& sort_node = *node.inputs[0];
     auto input_id = lower_node(*sort_node.inputs[0], lo);
-    const auto& in_schema = sort_node.inputs[0]->output_schema;
+    const auto& in_schema = lo.exec_schema(input_id);
 
     std::vector<gamax::phys::SortSpec> keys;
     keys.reserve(sort_node.sort_keys.size());
     for (const auto& k : sort_node.sort_keys) {
         keys.push_back({resolve_ordinal(in_schema, k.id), k.order});
     }
-    ValueId out_id = lo.next_value(node.output_schema);
+    // TopK preserves input layout like Sort — EXEC schema passes
+    // through.
+    ValueId out_id = lo.next_value(in_schema);
     lo.push_step(StepKind::TopK, {input_id}, out_id,
                  exec::TopKPayload{std::move(keys), node.limit_n});
     return out_id;
@@ -367,67 +435,140 @@ void collect_equi_keys(const Expr& e,
                 "equi-predicates");
 }
 
-// After phys::eq_join, the physical output is
-// `[shared_key, L_non_keys..., R_non_keys...]` in the order each side's
-// non-key columns appeared. The IR's declared output_schema is
-// `[L.all_in_order, R.all_in_order]` with L's key and R's key fields
-// both referring to the single shared column. This helper computes a
-// reorder-ordinal list that maps from the physical layout back to the
-// IR-declared order.
-std::vector<gamax::size_type> compute_inner_join_reshape_ordinals(
+// Raw phys::eq_join output is `[shared_key, L_non_keys..., R_non_keys...]`
+// over L and R's EXEC schemas (post any upstream column pruning).
+// Compute the raw-output ordinal for:
+//   * an L-side column at EXEC index `i` (given the key's EXEC index).
+//   * an R-side column, using `l_non_key_count` as the R-rest starting
+//     offset (the key slot occupies raw ord 0, L's non-keys run from
+//     1 upward, then R's non-keys).
+gamax::size_type raw_pos_of_L_idx(
+    gamax::size_type i, gamax::size_type l_key_idx)
+{
+    if (i == l_key_idx) return 0;
+    gamax::size_type offset = (i < l_key_idx) ? i : i - 1;
+    return 1 + offset;
+}
+gamax::size_type raw_pos_of_R_idx(
+    gamax::size_type i, gamax::size_type r_key_idx,
+    gamax::size_type l_non_key_count)
+{
+    if (i == r_key_idx) return 0;
+    gamax::size_type offset = (i < r_key_idx) ? i : i - 1;
+    return 1 + l_non_key_count + offset;
+}
+
+// Build the raw-join EXEC schema: [shared_key_field, L_non_keys_in_L_order,
+// R_non_keys_in_R_order]. Uses EXEC L and EXEC R so that upstream
+// column pruning (e.g. a filter that dropped payload columns) flows
+// naturally through the join.
+Schema build_raw_inner_join_schema(
     const Schema& L, const Schema& R, ColumnId lkey, ColumnId rkey)
 {
-    auto L_key_idx = L.require_index(lkey);
-    auto R_key_idx = R.require_index(rkey);
-    auto l_rest_start = gamax::size_type{1};
-    auto r_rest_start =
-        l_rest_start + (static_cast<gamax::size_type>(L.size()) - 1);
-
-    auto offset_among_non_keys = [](gamax::size_type key_idx,
-                                    gamax::size_type i) {
-        return i < key_idx ? i : i - 1;
-    };
-    std::vector<gamax::size_type> out;
-    out.reserve(L.size() + R.size());
+    auto l_key_idx = L.require_index(lkey);
+    auto r_key_idx = R.require_index(rkey);
+    Schema out;
+    out.append(Field{
+        ColumnId{}, L[l_key_idx].type, L[l_key_idx].nullable,
+        L[l_key_idx].name});
     for (gamax::size_type i = 0;
          i < static_cast<gamax::size_type>(L.size()); ++i)
     {
-        out.push_back(i == L_key_idx
-            ? 0
-            : l_rest_start + offset_among_non_keys(L_key_idx, i));
+        if (i == l_key_idx) continue;
+        out.append(L[i]);
     }
     for (gamax::size_type i = 0;
          i < static_cast<gamax::size_type>(R.size()); ++i)
     {
-        out.push_back(i == R_key_idx
-            ? 0
-            : r_rest_start + offset_among_non_keys(R_key_idx, i));
+        if (i == r_key_idx) continue;
+        out.append(R[i]);
     }
     return out;
 }
 
-std::vector<gamax::size_type> compute_semi_join_reshape_ordinals(
-    const Schema& L, ColumnId lkey)
-{
-    auto L_key_idx = L.require_index(lkey);
-    std::vector<gamax::size_type> out;
-    out.reserve(L.size());
+Schema build_raw_semi_join_schema(const Schema& L, ColumnId lkey) {
+    auto l_key_idx = L.require_index(lkey);
+    Schema out;
+    out.append(Field{
+        ColumnId{}, L[l_key_idx].type, L[l_key_idx].nullable,
+        L[l_key_idx].name});
     for (gamax::size_type i = 0;
          i < static_cast<gamax::size_type>(L.size()); ++i)
     {
-        out.push_back(i == L_key_idx
-            ? 0
-            : 1 + (i < L_key_idx ? i : i - 1));
+        if (i == l_key_idx) continue;
+        out.append(L[i]);
     }
     return out;
+}
+
+// After phys::eq_join, raw output is `[shared_key, L_non_keys..., R_non_keys...]`.
+// The IR declares the join's output as L.output_schema ++ R.output_schema,
+// but upstream pruning may have dropped some fields from the EXEC L / R.
+// This helper walks IR's declared order, skipping any field whose
+// ColumnId is no longer in the EXEC side (pruned upstream), and emits
+// raw-ordinal indices in IR order. The result feeds a `phys::reorder`
+// that materializes the join output in the IR-declared-and-still-live
+// layout.
+std::pair<Schema, std::vector<gamax::size_type>>
+compute_inner_join_reshape(
+    const Schema& declared,
+    const Schema& exec_L, const Schema& exec_R,
+    ColumnId lkey, ColumnId rkey)
+{
+    auto l_key_idx = exec_L.require_index(lkey);
+    auto r_key_idx = exec_R.require_index(rkey);
+    auto l_non_key_count =
+        static_cast<gamax::size_type>(exec_L.size()) - 1;
+
+    Schema out_schema;
+    std::vector<gamax::size_type> ordinals;
+    for (const auto& f : declared.fields()) {
+        // `lkey` and `rkey` may or may not equal any declared field's
+        // ColumnId — IR assigns fresh ids per Scan, so typically they
+        // don't coincide. Detect membership via exec_L / exec_R.
+        if (auto li = exec_L.index_of(f.id); li.has_value()) {
+            ordinals.push_back(raw_pos_of_L_idx(*li, l_key_idx));
+            out_schema.append(f);
+        } else if (auto ri = exec_R.index_of(f.id); ri.has_value()) {
+            ordinals.push_back(
+                raw_pos_of_R_idx(*ri, r_key_idx, l_non_key_count));
+            out_schema.append(f);
+        }
+        // else: pruned upstream — skip.
+    }
+    return {std::move(out_schema), std::move(ordinals)};
+}
+
+std::pair<Schema, std::vector<gamax::size_type>>
+compute_semi_join_reshape(
+    const Schema& declared, const Schema& exec_L, ColumnId lkey)
+{
+    auto l_key_idx = exec_L.require_index(lkey);
+    Schema out_schema;
+    std::vector<gamax::size_type> ordinals;
+    for (const auto& f : declared.fields()) {
+        if (auto li = exec_L.index_of(f.id); li.has_value()) {
+            ordinals.push_back(raw_pos_of_L_idx(*li, l_key_idx));
+            out_schema.append(f);
+        }
+        // Semi-join's declared output is L only, so everything not in
+        // exec_L was pruned upstream.
+    }
+    return {std::move(out_schema), std::move(ordinals)};
 }
 
 ValueId lower_join(const PlanNode& node, Lowering& lo) {
     if (node.join_kind == JoinKind::Cross) {
-        // Cross join: lower children, then emit a CrossJoin step.
         auto l_id = lower_node(*node.inputs[0], lo);
         auto r_id = lower_node(*node.inputs[1], lo);
-        ValueId out_id = lo.next_value(node.output_schema);
+        // CrossJoin's EXEC output = EXEC L ++ EXEC R (both sides kept
+        // in their EXEC order). Rebuild by filtering node.output_schema
+        // to fields that survived upstream pruning.
+        std::unordered_set<ColumnId> live_union;
+        for (const auto& f : lo.exec_schema(l_id).fields()) live_union.insert(f.id);
+        for (const auto& f : lo.exec_schema(r_id).fields()) live_union.insert(f.id);
+        Schema out_schema = filter_schema_by_live(node.output_schema, live_union);
+        ValueId out_id = lo.next_value(std::move(out_schema));
         lo.push_step(StepKind::CrossJoin, {l_id, r_id}, out_id,
                      exec::CrossJoinPayload{});
         return out_id;
@@ -441,8 +582,10 @@ ValueId lower_join(const PlanNode& node, Lowering& lo) {
         lower_error("join: missing condition");
     }
 
-    const auto& left_schema  = node.inputs[0]->output_schema;
-    const auto& right_schema = node.inputs[1]->output_schema;
+    auto l_id = lower_node(*node.inputs[0], lo);
+    auto r_id = lower_node(*node.inputs[1], lo);
+    const auto& left_schema  = lo.exec_schema(l_id);
+    const auto& right_schema = lo.exec_schema(r_id);
 
     EquiKeys keys;
     collect_equi_keys(*node.join_condition, left_schema, right_schema, keys);
@@ -450,34 +593,15 @@ ValueId lower_join(const PlanNode& node, Lowering& lo) {
         not_implemented("multi-key equi-joins");
     }
 
-    auto l_id = lower_node(*node.inputs[0], lo);
-    auto r_id = lower_node(*node.inputs[1], lo);
     auto l_key_ord = resolve_ordinal(left_schema, keys.left[0]);
     auto r_key_ord = resolve_ordinal(right_schema, keys.right[0]);
 
-    // Intermediate value: raw join output in physical layout
-    // `[shared_key, L_rest..., R_rest...]` (for Inner) or
-    // `[shared_key, L_rest...]` (for Semi). Schema doesn't matter for
-    // execution (positional) but keeping something useful for the
-    // printer.
-    Schema raw_schema;
-    raw_schema.append(Field{ColumnId{}, left_schema[l_key_ord].type,
-                            left_schema[l_key_ord].nullable,
-                            left_schema[l_key_ord].name});
-    for (gamax::size_type i = 0;
-         i < static_cast<gamax::size_type>(left_schema.size()); ++i)
-    {
-        if (i == l_key_ord) continue;
-        raw_schema.append(left_schema[i]);
-    }
-    if (node.join_kind == JoinKind::Inner) {
-        for (gamax::size_type i = 0;
-             i < static_cast<gamax::size_type>(right_schema.size()); ++i)
-        {
-            if (i == r_key_ord) continue;
-            raw_schema.append(right_schema[i]);
-        }
-    }
+    // Intermediate value: raw join output in physical layout (built
+    // over EXEC schemas so upstream pruning is honored).
+    Schema raw_schema = (node.join_kind == JoinKind::Inner)
+        ? build_raw_inner_join_schema(left_schema, right_schema,
+                                      keys.left[0], keys.right[0])
+        : build_raw_semi_join_schema(left_schema, keys.left[0]);
 
     ValueId raw_id = lo.next_value(std::move(raw_schema));
     if (node.join_kind == JoinKind::Inner) {
@@ -488,14 +612,16 @@ ValueId lower_join(const PlanNode& node, Lowering& lo) {
                      exec::SemiJoinPayload{{l_key_ord}, {r_key_ord}});
     }
 
-    // Reshape raw → IR-declared order.
-    std::vector<gamax::size_type> ordinals =
-        (node.join_kind == JoinKind::Inner)
-            ? compute_inner_join_reshape_ordinals(
-                  left_schema, right_schema, keys.left[0], keys.right[0])
-            : compute_semi_join_reshape_ordinals(left_schema, keys.left[0]);
+    // Reshape raw → IR-declared order, skipping fields that were
+    // pruned upstream (their ColumnIds are no longer in EXEC L / R).
+    auto [final_schema, ordinals] = (node.join_kind == JoinKind::Inner)
+        ? compute_inner_join_reshape(
+              node.output_schema, left_schema, right_schema,
+              keys.left[0], keys.right[0])
+        : compute_semi_join_reshape(
+              node.output_schema, left_schema, keys.left[0]);
 
-    ValueId out_id = lo.next_value(node.output_schema);
+    ValueId out_id = lo.next_value(std::move(final_schema));
     lo.push_step(StepKind::Reorder, {raw_id}, out_id,
                  exec::ReorderPayload{std::move(ordinals)});
     return out_id;
@@ -529,6 +655,7 @@ exec::ExecPlan lower_to_exec_plan(const PlanPtr& root, const Catalog& cat) {
     if (!root) lower_error("null root");
     Lowering lo;
     lo.cat = &cat;
+    lo.liveness = compute_liveness(*root);
     (void)lower_node(*root, lo);
     return std::move(lo.plan);
 }

@@ -51,6 +51,12 @@ struct ProjectPayload {
 };
 struct FilterPayload {
     gamax::select::Predicate predicate;
+    // Subset of input ordinals to materialize (in that order). Empty
+    // means "all input columns" (the default, producing Filter's input
+    // schema unchanged). Set by the lowering-time column-pruning rule
+    // when some input column is touched only by the predicate and not
+    // consumed by any downstream operator.
+    std::vector<gamax::size_type> output_ordinals;
 };
 struct EqJoinPayload {
     std::vector<gamax::size_type> lkeys;

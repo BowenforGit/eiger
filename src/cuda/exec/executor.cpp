@@ -56,7 +56,11 @@ std::unique_ptr<gamax::table> run_step(
             return gamax::phys::project(input_view(0), exprs, ctx);
         } else if constexpr (std::is_same_v<T, FilterPayload>) {
             auto pred = pl.predicate;  // non-const needed
-            return gamax::phys::filter(input_view(0), pred, ctx);
+            if (pl.output_ordinals.empty()) {
+                return gamax::phys::filter(input_view(0), pred, ctx);
+            }
+            return gamax::phys::filter(
+                input_view(0), pred, pl.output_ordinals, ctx);
         } else if constexpr (std::is_same_v<T, EqJoinPayload>) {
             return gamax::phys::eq_join(
                 input_view(0), pl.lkeys,

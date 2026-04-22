@@ -61,6 +61,10 @@ void write_payload(std::ostream& os, const StepPayload& payload) {
             os << "#exprs=" << pl.exprs.size();
         } else if constexpr (std::is_same_v<T, FilterPayload>) {
             os << "predicate=<Predicate>";
+            if (!pl.output_ordinals.empty()) {
+                os << ", out=";
+                write_ordinals(os, pl.output_ordinals);
+            }
         } else if constexpr (std::is_same_v<T, EqJoinPayload>) {
             os << "lkeys="; write_ordinals(os, pl.lkeys);
             os << ", rkeys="; write_ordinals(os, pl.rkeys);

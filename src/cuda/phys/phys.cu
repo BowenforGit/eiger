@@ -83,39 +83,61 @@ gamax::column_ptr copy_any_column(
     return gamax::copy_column(col, stream);
 }
 
-// Apply a BOOL8 bitmask to every column of `in`, producing a compact
-// output table. Mirrors the heterogeneous-filter pattern from
-// `tpch_ops.cu`: build `compact_tids` once (by compacting an identity
-// id sequence under the mask) and use it for every STRING column via
-// `gather_strings`; compact numeric columns directly.
+// Apply a BOOL8 bitmask to a selected subset of columns of `in`,
+// producing a compact output table. An empty `ordinals` means "all
+// columns in their original order"; otherwise only those ordinals are
+// materialized (in that order, with repeats allowed).
+//
+// Mirrors the heterogeneous-filter pattern from `tpch_ops.cu`: build
+// `compact_tids` once (by compacting an identity id sequence under the
+// mask) and reuse it for every STRING column via `gather_strings`;
+// compact numeric columns directly. The selective-output path shares
+// the same tids — the bitmask (and thus surviving row set) is a
+// property of the input, not of which columns we materialize.
 gamax::phys::table_ptr apply_bitmask(
     gamax::table_view in,
     gamax::column_view mask,
+    const std::vector<gamax::size_type>& ordinals,  // empty = all
     cudaStream_t stream)
 {
+    const bool all_cols = ordinals.empty();
+    auto col_at = [&](gamax::size_type slot) -> gamax::size_type {
+        return all_cols ? slot : ordinals[slot];
+    };
+    const auto n_out = all_cols
+        ? static_cast<gamax::size_type>(in.num_columns())
+        : static_cast<gamax::size_type>(ordinals.size());
+
     bool any_string = false;
-    for (int i = 0; i < in.num_columns(); ++i) {
-        if (in.get_column(i).type().id() == gamax::type_id::STRING) {
+    for (gamax::size_type i = 0; i < n_out; ++i) {
+        if (in.get_column(col_at(i)).type().id() == gamax::type_id::STRING) {
             any_string = true;
             break;
         }
     }
-    if (!any_string) {
+    // Fast path: no STRING columns + all-columns output → one compact
+    // over the whole table. (A selective all-numeric output would still
+    // go through the per-column loop below since `compact` takes a
+    // whole table view.)
+    if (!any_string && all_cols) {
         return gamax::util::device::compact(in, mask, stream);
     }
 
     std::vector<gamax::column_ptr> out;
-    out.reserve(in.num_columns());
+    out.reserve(n_out);
     gamax::column_ptr compact_tids;
-    for (int i = 0; i < in.num_columns(); ++i) {
-        auto col = in.get_column(i);
+    auto ensure_tids = [&]() {
+        if (!compact_tids) {
+            auto seq = gamax::make_sequence<gamax::size_type>(
+                in.num_rows(), 0, 1, stream);
+            compact_tids = gamax::util::device::compact(
+                seq->view(), mask, stream);
+        }
+    };
+    for (gamax::size_type i = 0; i < n_out; ++i) {
+        auto col = in.get_column(col_at(i));
         if (col.type().id() == gamax::type_id::STRING) {
-            if (!compact_tids) {
-                auto seq = gamax::make_sequence<gamax::size_type>(
-                    in.num_rows(), 0, 1, stream);
-                compact_tids = gamax::util::device::compact(
-                    seq->view(), mask, stream);
-            }
+            ensure_tids();
             gamax::string_column_view sv(col, gamax::ARROW_STRING, stream);
             auto gathered = gamax::gather_strings(
                 sv, compact_tids->view(), stream);
@@ -239,18 +261,45 @@ table_ptr filter(gamax::table_view in,
                  gamax::select::Predicate& pred,
                  const Context& ctx)
 {
-    // Empty input → 0 rows of the same schema.
+    return filter(in, pred, /*output_ordinals=*/{}, ctx);
+}
+
+table_ptr filter(gamax::table_view in,
+                 gamax::select::Predicate& pred,
+                 std::vector<gamax::size_type> output_ordinals,
+                 const Context& ctx)
+{
+    const bool all_cols = output_ordinals.empty();
+    // Bounds-check ordinals eagerly: a bad ordinal here would otherwise
+    // surface only deep inside the gather path, with a confusing error.
+    for (auto o : output_ordinals) {
+        if (o < 0 || o >= in.num_columns()) {
+            phys_error("filter: output ordinal " + std::to_string(o) +
+                       " out of range for " +
+                       std::to_string(in.num_columns()) + "-column input");
+        }
+    }
+
+    // Empty input → 0 rows of the requested output schema.
     if (in.num_rows() == 0) {
         std::vector<gamax::column_ptr> cols;
-        cols.reserve(in.num_columns());
-        for (int i = 0; i < in.num_columns(); ++i) {
+        const auto n_out = all_cols
+            ? static_cast<gamax::size_type>(in.num_columns())
+            : static_cast<gamax::size_type>(output_ordinals.size());
+        cols.reserve(n_out);
+        for (gamax::size_type i = 0; i < n_out; ++i) {
+            auto ord = all_cols ? i : output_ordinals[i];
             cols.push_back(make_zero_row_column(
-                in.get_column(i).type(), ctx.stream));
+                in.get_column(ord).type(), ctx.stream));
         }
         return std::make_unique<gamax::table>(std::move(cols));
     }
+
+    // The Predicate may reference ANY ordinal of `in`, not just the
+    // ones in `output_ordinals`. select_to_bitmask runs over the full
+    // view; only the materialization is selective.
     auto mask = gamax::select::select_to_bitmask(in, pred, ctx.stream);
-    return apply_bitmask(in, mask->view(), ctx.stream);
+    return apply_bitmask(in, mask->view(), output_ordinals, ctx.stream);
 }
 
 // ── Joins ─────────────────────────────────────────────────────────
