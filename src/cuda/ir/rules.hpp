@@ -85,6 +85,28 @@ struct RuleConfig {
     // but not incorrect; flipping the knob off at that point recovers
     // the native multi-key join.
     bool split_multi_key_equi_join {true};
+
+    // Scan column pushdown. For every `Scan` node, consults liveness
+    // over the DAG and removes any `scan_columns` entry whose output
+    // ColumnId isn't consumed by any downstream operator. Narrows the
+    // Scan's `output_schema` to match.
+    //
+    // The structural counterpart to the lowering-time
+    // `prune_filter_materialization` knob: that one decides what a
+    // Filter materializes; this one decides what a Scan loads in the
+    // first place. Both use the same `compute_liveness` analysis.
+    //
+    // Ancestor `output_schema`s become formally stale after a Scan
+    // shrinks (they still list columns no longer produced). This is
+    // tolerated end-to-end: the lowering resolves every ordinal
+    // through Value schemas (i.e., what's actually produced), never
+    // through the cached IR schemas; `compute_liveness` itself is
+    // ColumnId-keyed and uses `Schema::index_of` which returns nullopt
+    // for absent ids, so stale ancestor schemas don't misroute
+    // liveness either. Printers that show IR schemas may display
+    // extra columns that no runtime step actually produces — worth
+    // flagging if it surprises a reader.
+    bool scan_column_pushdown {true};
 };
 
 // Apply all enabled rules to `root`, producing a new (possibly

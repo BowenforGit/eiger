@@ -89,10 +89,16 @@ TEST(RulesCountToSum, NoOpWhenDisabled) {
         {"o_custkey"},
         {{"n", gir::AggKind::CountAll, gir::lit(int64_t{0})}}).plan();
 
+    // Disable every other rule so we can assert CountToSum's knob
+    // in isolation — otherwise Scan-pushdown would rewrite the Scan
+    // (o_orderkey is dead after this Aggregate), changing the root
+    // pointer even when CountToSum itself doesn't fire.
     gir::RuleConfig cfg;
     cfg.rewrite_count_to_sum = false;
+    cfg.split_non_equi_join_conditions = false;
+    cfg.split_multi_key_equi_join = false;
+    cfg.scan_column_pushdown = false;
     auto rewritten = gir::apply_rules(plan, cfg);
-    // No rule applied → identical pointer (DAG-sharing invariant).
     EXPECT_EQ(rewritten.get(), plan.get());
     EXPECT_EQ(rewritten->agg_items[0].agg, gir::AggKind::CountAll);
 }
@@ -492,6 +498,271 @@ TEST(RulesSplitMultiKeyEqui, EndToEndTwoKeyInnerJoin) {
         auto out = gex::execute(ep, resolver, ctx);
         EXPECT_EQ(out->num_rows(), 1);
     }
+}
+
+// ── Scan column pushdown ─────────────────────────────────────────
+
+TEST(RulesScanPushdown, ShrinksScanToLiveColumnsOnly) {
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto o = qb.scan("orders", {"o_orderkey", "o_custkey", "o_orderdate"});
+    // Only o_orderkey is consumed downstream (filter + project).
+    auto filtered = o.filter(o.c("o_orderkey") > gir::lit(int64_t{1}));
+    auto projected = filtered.project({
+        {"k", filtered.c("o_orderkey")},
+    });
+
+    auto rewritten = gir::apply_rules(projected.plan());
+
+    // Walk down to the Scan in the rewritten tree.
+    auto node = rewritten;
+    while (node->kind != gir::NodeKind::Scan) {
+        ASSERT_FALSE(node->inputs.empty());
+        node = node->inputs[0];
+    }
+    EXPECT_EQ(node->scan_columns.size(), 1u);
+    EXPECT_EQ(node->scan_columns[0], "o_orderkey");
+}
+
+TEST(RulesScanPushdown, PreservesPredicateOnlyColumns) {
+    // Columns referenced only by a filter predicate are still live at
+    // the Scan (liveness forces them) — they must stay in scan_columns.
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto o = qb.scan("orders", {"o_orderkey", "o_custkey", "o_orderdate"});
+    auto filtered = o.filter(o.c("o_orderdate") > gir::lit(9100));
+    auto projected = filtered.project({
+        {"k", filtered.c("o_orderkey")},
+    });
+
+    auto rewritten = gir::apply_rules(projected.plan());
+
+    auto node = rewritten;
+    while (node->kind != gir::NodeKind::Scan) node = node->inputs[0];
+
+    // o_custkey is dead; o_orderkey and o_orderdate are live.
+    EXPECT_EQ(node->scan_columns.size(), 2u);
+    EXPECT_EQ(std::find(node->scan_columns.begin(), node->scan_columns.end(),
+                        "o_custkey"),
+              node->scan_columns.end());
+}
+
+TEST(RulesScanPushdown, NoOpWhenDisabled) {
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto o = qb.scan("orders", {"o_orderkey", "o_custkey", "o_orderdate"});
+    auto plan = o.project({{"k", o.c("o_orderkey")}}).plan();
+
+    gir::RuleConfig cfg;
+    cfg.scan_column_pushdown = false;
+    auto rewritten = gir::apply_rules(plan, cfg);
+
+    // With the rule off, the Scan retains all requested columns.
+    auto node = rewritten;
+    while (node->kind != gir::NodeKind::Scan) node = node->inputs[0];
+    EXPECT_EQ(node->scan_columns.size(), 3u);
+}
+
+TEST(RulesScanPushdown, LeavesAllLiveScanAlone) {
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto o = qb.scan("orders", {"o_orderkey", "o_custkey"});
+    // Project uses both → both live at Scan → no pruning.
+    auto plan = o.project({
+        {"a", o.c("o_orderkey")},
+        {"b", o.c("o_custkey")},
+    }).plan();
+
+    auto rewritten = gir::apply_rules(plan);
+    EXPECT_EQ(rewritten.get(), plan.get());
+}
+
+TEST(RulesScanPushdown, ComposesWithJoinSplit) {
+    // Multi-key join with a dead payload column on the right side.
+    // G1-rule splits the join into single-key + Filter; Scan-pushdown
+    // removes the dead payload column from the right Scan.
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto o = qb.scan("orders", {"o_orderkey", "o_custkey"});
+    auto l = qb.scan("lineitem", {"l_orderkey", "l_suppkey", "l_quantity"});
+    auto joined = o.inner_join(l,
+            (o.c("o_orderkey") == l.c("l_orderkey"))
+         && (o.c("o_custkey")  == l.c("l_suppkey")));
+    // Project only references o_orderkey + l_suppkey → l_quantity is
+    // dead after the join. Both join keys are live at the respective
+    // Scans (join condition needs them).
+    auto plan = joined.project({
+        {"ok", joined.c("o_orderkey")},
+        {"sk", joined.c("l_suppkey")},
+    }).plan();
+
+    auto rewritten = gir::apply_rules(plan);
+
+    // Walk both Scan branches.
+    std::vector<gir::PlanPtr> scans;
+    std::function<void(const gir::PlanPtr&)> visit =
+        [&](const gir::PlanPtr& n) {
+            if (n->kind == gir::NodeKind::Scan) {
+                scans.push_back(n);
+                return;
+            }
+            for (const auto& c : n->inputs) visit(c);
+        };
+    visit(rewritten);
+    ASSERT_EQ(scans.size(), 2u);
+
+    for (const auto& s : scans) {
+        if (s->scan_table == "lineitem") {
+            EXPECT_EQ(std::find(s->scan_columns.begin(),
+                                s->scan_columns.end(), "l_quantity"),
+                      s->scan_columns.end());
+        }
+    }
+}
+
+TEST(RulesScanPushdown, EndToEndProducesCorrectResult) {
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto o = qb.scan("orders", {"o_orderkey", "o_custkey", "o_orderdate"});
+    auto plan = o.filter(o.c("o_orderdate") > gir::lit(9100))
+                  .project({{"ok", o.c("o_orderkey")}}).plan();
+
+    std::vector<int64_t> ok  = {1, 2, 3, 4};
+    std::vector<int64_t> ck  = {10, 20, 30, 40};
+    std::vector<int32_t> dt  = {9000, 9100, 9200, 9300};
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(gamax::make_column_from_host(
+        ok.data(), static_cast<gamax::size_type>(ok.size())));
+    cols.push_back(gamax::make_column_from_host(
+        ck.data(), static_cast<gamax::size_type>(ck.size())));
+    cols.push_back(gamax::make_column_from_host(
+        dt.data(), static_cast<gamax::size_type>(dt.size())));
+    auto tbl = gamax::make_table(std::move(cols));
+    auto view = tbl->view();
+
+    auto rewritten = gir::apply_rules(plan);
+    auto ep = gir::lower_to_exec_plan(rewritten, cat);
+    gamax::phys::Context ctx{cudaStreamDefault};
+    gex::SourceResolver resolver =
+        [&view](const std::string&) { return view; };
+    auto out = gex::execute(ep, resolver, ctx);
+    // o_orderdate > 9100 → rows 3, 4 → o_orderkey = 3, 4.
+    ASSERT_EQ(out->num_rows(), 2);
+    ASSERT_EQ(out->num_columns(), 1);
+    auto h = gamax::copy_column_to_host<int64_t>(out->view()[0]);
+    EXPECT_EQ(h[0], 3);
+    EXPECT_EQ(h[1], 4);
+}
+
+// ── LowerOptions: prune_filter_materialization knob ──────────────
+
+TEST(LowerOptions, PruneFilterMaterializationOnEmitsOutputOrdinals) {
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto o = qb.scan("orders", {"o_orderkey", "o_custkey", "o_orderdate"});
+    // Predicate touches o_orderdate; only o_orderkey is live downstream.
+    auto filtered = o.filter(o.c("o_orderdate") > gir::lit(9100));
+    auto plan = filtered.project({{"k", filtered.c("o_orderkey")}}).plan();
+
+    // Disable all rules so Scan pushdown doesn't hide the effect.
+    gir::RuleConfig no_rules;
+    no_rules.rewrite_count_to_sum = false;
+    no_rules.split_non_equi_join_conditions = false;
+    no_rules.split_multi_key_equi_join = false;
+    no_rules.scan_column_pushdown = false;
+    auto rewritten = gir::apply_rules(plan, no_rules);
+
+    gir::LowerOptions opts;
+    opts.prune_filter_materialization = true;
+    auto ep = gir::lower_to_exec_plan(rewritten, cat, opts);
+
+    // Find the Filter step; expect non-empty output_ordinals.
+    const gex::Step* fstep = nullptr;
+    for (const auto& s : ep.steps) {
+        if (s.kind == gex::StepKind::Filter) { fstep = &s; break; }
+    }
+    ASSERT_NE(fstep, nullptr);
+    const auto& fp = std::get<gex::FilterPayload>(fstep->payload);
+    EXPECT_FALSE(fp.output_ordinals.empty());
+}
+
+TEST(LowerOptions, PruneFilterMaterializationOffPreservesAllColumns) {
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto o = qb.scan("orders", {"o_orderkey", "o_custkey", "o_orderdate"});
+    auto filtered = o.filter(o.c("o_orderdate") > gir::lit(9100));
+    auto plan = filtered.project({{"k", filtered.c("o_orderkey")}}).plan();
+
+    // Disable scan pushdown too so we can isolate the Filter behavior.
+    gir::RuleConfig no_rules;
+    no_rules.rewrite_count_to_sum = false;
+    no_rules.split_non_equi_join_conditions = false;
+    no_rules.split_multi_key_equi_join = false;
+    no_rules.scan_column_pushdown = false;
+    auto rewritten = gir::apply_rules(plan, no_rules);
+
+    gir::LowerOptions opts;
+    opts.prune_filter_materialization = false;
+    auto ep = gir::lower_to_exec_plan(rewritten, cat, opts);
+
+    const gex::Step* fstep = nullptr;
+    for (const auto& s : ep.steps) {
+        if (s.kind == gex::StepKind::Filter) { fstep = &s; break; }
+    }
+    ASSERT_NE(fstep, nullptr);
+    const auto& fp = std::get<gex::FilterPayload>(fstep->payload);
+    EXPECT_TRUE(fp.output_ordinals.empty());
+}
+
+TEST(LowerOptions, BothKnobsOffStillProducesCorrectResult) {
+    // Correctness check: turning every knob off must not break
+    // execution — it should just produce a less-optimized ExecPlan.
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto o = qb.scan("orders", {"o_orderkey", "o_custkey", "o_orderdate"});
+    auto plan = o.filter(o.c("o_orderdate") > gir::lit(9100))
+                  .project({{"k", o.c("o_orderkey")}}).plan();
+
+    std::vector<int64_t> ok  = {1, 2, 3, 4};
+    std::vector<int64_t> ck  = {10, 20, 30, 40};
+    std::vector<int32_t> dt  = {9000, 9100, 9200, 9300};
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(gamax::make_column_from_host(
+        ok.data(), static_cast<gamax::size_type>(ok.size())));
+    cols.push_back(gamax::make_column_from_host(
+        ck.data(), static_cast<gamax::size_type>(ck.size())));
+    cols.push_back(gamax::make_column_from_host(
+        dt.data(), static_cast<gamax::size_type>(dt.size())));
+    auto tbl = gamax::make_table(std::move(cols));
+    auto view = tbl->view();
+
+    gir::RuleConfig no_rules;
+    no_rules.rewrite_count_to_sum = false;
+    no_rules.split_non_equi_join_conditions = false;
+    no_rules.split_multi_key_equi_join = false;
+    no_rules.scan_column_pushdown = false;
+    auto rewritten = gir::apply_rules(plan, no_rules);
+
+    gir::LowerOptions opts;
+    opts.prune_filter_materialization = false;
+    auto ep = gir::lower_to_exec_plan(rewritten, cat, opts);
+
+    gamax::phys::Context ctx{cudaStreamDefault};
+    gex::SourceResolver resolver = [&view](const std::string&) { return view; };
+    auto out = gex::execute(ep, resolver, ctx);
+    ASSERT_EQ(out->num_rows(), 2);
+    auto h = gamax::copy_column_to_host<int64_t>(out->view()[0]);
+    EXPECT_EQ(h[0], 3);
+    EXPECT_EQ(h[1], 4);
 }
 
 TEST(RulesEngine, HonorsDagSharing) {

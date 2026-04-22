@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "ir/expr.hpp"
+#include "ir/liveness.hpp"
 
 namespace gamax::ir {
 
@@ -174,12 +175,56 @@ PlanPtr rule_split_multi_key_equi_join(PlanPtr node) {
     return filter(new_join, conjoin(std::move(rest)));
 }
 
+// ── Scan column pushdown ─────────────────────────────────────────
+//
+// Removes scan_columns entries whose output ColumnId is not live at
+// this Scan's output (i.e., no ancestor references them). Narrows the
+// Scan's output_schema to match. Does NOT rebuild ancestor
+// output_schemas — callers tolerate stale upstream schemas (see the
+// note on RuleConfig::scan_column_pushdown).
+PlanPtr rule_scan_column_pushdown(
+    PlanPtr node, const LivenessResult& liveness)
+{
+    if (node->kind != NodeKind::Scan) return node;
+
+    // Liveness is keyed by the pass-start pointer. For a Scan that
+    // hasn't been rewritten yet in this pass, this lookup hits. For
+    // a Scan produced by an earlier rule in this pass the lookup
+    // misses — return an empty set defensively, and we bail below.
+    const auto& live = liveness.at(node.get());
+    if (live.empty()) return node;  // unmapped (shouldn't happen for
+                                    // reachable Scans) or nothing live
+
+    std::vector<std::string> new_names;
+    Schema new_schema;
+    new_names.reserve(node->scan_columns.size());
+    for (size_t i = 0; i < node->scan_columns.size(); ++i) {
+        const auto& f = node->output_schema[i];
+        if (live.count(f.id)) {
+            new_names.push_back(node->scan_columns[i]);
+            new_schema.append(f);
+        }
+    }
+    if (new_schema.size() == node->scan_columns.size()) return node;
+
+    // Scan factory doesn't allow zero columns. Bail if pruning would
+    // erase everything — shouldn't happen for reachable Scans.
+    if (new_schema.size() == 0) return node;
+
+    auto result = std::make_shared<PlanNode>(*node);
+    result->scan_columns = std::move(new_names);
+    result->output_schema = std::move(new_schema);
+    return result;
+}
+
 // ── Engine ────────────────────────────────────────────────────────
 
 // Apply every enabled rule to `node` in sequence. Rules are
 // independent (target disjoint NodeKinds), so any order works; we
 // fix the order here for determinism across builds.
-PlanPtr apply_local_rules(PlanPtr node, const RuleConfig& cfg) {
+PlanPtr apply_local_rules(
+    PlanPtr node, const RuleConfig& cfg, const LivenessResult& liveness)
+{
     if (cfg.rewrite_count_to_sum)            node = rule_count_to_sum(node);
     // Order is significant here: G7 runs BEFORE the multi-key split so
     // that any non-equi residual is lifted out first. The multi-key
@@ -187,6 +232,7 @@ PlanPtr apply_local_rules(PlanPtr node, const RuleConfig& cfg) {
     // of equi clauses; G7's output satisfies that precondition.
     if (cfg.split_non_equi_join_conditions)  node = rule_split_non_equi_join(node);
     if (cfg.split_multi_key_equi_join)       node = rule_split_multi_key_equi_join(node);
+    if (cfg.scan_column_pushdown)            node = rule_scan_column_pushdown(node, liveness);
     return node;
 }
 
@@ -203,7 +249,8 @@ PlanPtr clone_with_new_inputs(
 
 class RuleEngine {
 public:
-    explicit RuleEngine(const RuleConfig& cfg) : _cfg(cfg) {}
+    RuleEngine(const RuleConfig& cfg, const LivenessResult& liveness)
+        : _cfg(cfg), _liveness(liveness) {}
 
     PlanPtr rewrite(const PlanPtr& node) {
         if (auto it = _memo.find(node.get()); it != _memo.end()) {
@@ -221,13 +268,14 @@ public:
         PlanPtr current = children_changed
             ? clone_with_new_inputs(node, std::move(new_inputs))
             : node;
-        current = apply_local_rules(std::move(current), _cfg);
+        current = apply_local_rules(std::move(current), _cfg, _liveness);
         _memo.emplace(node.get(), current);
         return current;
     }
 
 private:
     const RuleConfig& _cfg;
+    const LivenessResult& _liveness;
     std::unordered_map<const PlanNode*, PlanPtr> _memo;
 };
 
@@ -254,7 +302,12 @@ PlanPtr apply_rules(const PlanPtr& root, const RuleConfig& cfg) {
     constexpr int kMaxPasses = 8;
     PlanPtr current = root;
     for (int pass = 0; pass < kMaxPasses; ++pass) {
-        RuleEngine engine(cfg);
+        // Liveness is recomputed each pass: the tree can grow Filter
+        // wrappers between passes (G7, G1-rule), and Scan pushdown
+        // would incorrectly see live sets from the old tree if we
+        // cached across passes.
+        auto liveness = compute_liveness(*current);
+        RuleEngine engine(cfg, liveness);
         PlanPtr next = engine.rewrite(current);
         if (next.get() == current.get()) return next;
         current = next;
