@@ -111,6 +111,32 @@ struct right_shift_helper_v2 {
     }
 };
 
+// Extract the year field from an int32 date in packed YYYYMMDD format
+// (e.g. 19981201 → 1998). The input is assumed to be int32 — other
+// types are undefined behaviour by contract; we specialise on int32
+// and degrade for any other type via the same GAMAX_UNREACHABLE /
+// runtime_error pattern the shift helpers already use.
+struct year_of_helper {
+    template <typename T>
+    __host__ __device__ gamax::scalar operator()(gamax::scalar value) const {
+        return gamax::scalar(this->operator()(value.get<T>()));
+    }
+
+    template <typename T, typename std::enable_if<std::is_same<T, int32_t>::value, int>::type = 0>
+    __host__ __device__ T operator()(T value) const {
+        return value / 10000;
+    }
+
+    template <typename T, typename std::enable_if<!std::is_same<T, int32_t>::value, int>::type = 0>
+    __host__ __device__ T operator()(T /*value*/) const {
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
+        throw std::runtime_error("year_of only supports int32 (YYYYMMDD) inputs.");
+#else
+        GAMAX_UNREACHABLE("year_of only supports int32 (YYYYMMDD) inputs.");
+#endif
+    }
+};
+
 struct sqrt_helper {
     template <typename T>
     __host__ __device__ gamax::scalar operator()(gamax::scalar value) const {

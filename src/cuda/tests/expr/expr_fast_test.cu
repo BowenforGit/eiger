@@ -668,6 +668,51 @@ TEST(ExprFastTest, OperatorOverloadingComparison) {
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
+// ── YearOf: extract year from YYYYMMDD int32 date ──
+
+// Single-row-per-year coverage: each input is a different date in a
+// different year, so the output is just the year component.
+TEST(ExprFastTest, YearOfExpr) {
+    int32_t val[] = {19950101, 19951231, 19970615, 19981201};
+    auto col1 = gamax::make_column_from_host(val, 4);
+
+    std::vector<std::unique_ptr<gamax::column>> columns;
+    columns.push_back(std::move(col1));
+    auto table = gamax::make_table(std::move(columns));
+
+    auto expr = ExprTree::year_of(
+        ExprTree::column(0, gamax::data_type(gamax::type_id::INT32)));
+
+    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+
+    int32_t expected[] = {1995, 1995, 1997, 1998};
+    auto expected_col = gamax::make_column_from_host(expected, 4);
+    ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
+}
+
+// Compose year_of with a comparison — the common use case
+// (`year(o_orderdate) >= 1993`). Regression for the result flowing
+// through a downstream comparison kernel.
+TEST(ExprFastTest, YearOfInComparison) {
+    int32_t val[] = {19920101, 19930101, 19940101, 19950101};
+    auto col1 = gamax::make_column_from_host(val, 4);
+
+    std::vector<std::unique_ptr<gamax::column>> columns;
+    columns.push_back(std::move(col1));
+    auto table = gamax::make_table(std::move(columns));
+
+    // year_of(col) >= 1994
+    auto expr =
+        ExprTree::year_of(ExprTree::column(0, gamax::data_type(gamax::type_id::INT32)))
+            >= ExprTree::constant(gamax::scalar(int32_t{1994}));
+
+    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+
+    bool expected[] = {false, false, true, true};
+    auto expected_col = gamax::make_column_from_host(expected, 4);
+    ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

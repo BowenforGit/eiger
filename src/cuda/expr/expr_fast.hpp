@@ -29,6 +29,11 @@ enum ExprId {
     Sqrt,
     Log,
     Exp,
+    // Extract year from an int32 date in packed YYYYMMDD format
+    // (19981201 → 1998). Input MUST be int32; other types are UB by
+    // contract. Semantically equivalent to `column / 10000` for that
+    // encoding.
+    YearOf,
     GreaterThan,
     LessThan,
     GreaterEqual,
@@ -157,6 +162,19 @@ public:
         auto type = child.type();
         Expr e{};
         e.id = ExprId::Exp;
+        e.type = type;
+        return ExprTree(e, {std::make_shared<ExprTree>(std::move(child))});
+    }
+
+    // `year_of(date)` — year field of a YYYYMMDD int32 date. Output
+    // type mirrors the input (int32) since the year still fits.
+    // Input type is assumed to be int32 — passing anything else is
+    // undefined behaviour (the evaluator degrades to unreachable on
+    // device / runtime error on host).
+    static ExprTree year_of(ExprTree child) {
+        auto type = child.type();
+        Expr e{};
+        e.id = ExprId::YearOf;
         e.type = type;
         return ExprTree(e, {std::make_shared<ExprTree>(std::move(child))});
     }

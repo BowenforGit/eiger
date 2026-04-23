@@ -149,6 +149,16 @@ __device__ void evaluate_one(
                     op1));
             return;
         }
+        case ExprId::YearOf: {
+            auto op1 = s.load(e.operand_regs[0]);
+            s.store(
+                e.return_reg,
+                gamax::type_dispatcher(
+                    op1.type(),
+                    detail::year_of_helper{},
+                    op1));
+            return;
+        }
         case ExprId::Add: {
             auto op1 = s.load(e.operand_regs[0]);
             auto op2 = s.load(e.operand_regs[1]);
@@ -547,6 +557,15 @@ __device__ void evaluate_one(
                 s.store(e.return_reg, exp(op1));
             } else {
                 s.store(e.return_reg, static_cast<T>(exp(static_cast<double>(op1))));
+            }
+            return;
+        }
+        case ExprId::YearOf: {
+            if constexpr (!std::is_same<T, int32_t>::value) {
+                GAMAX_UNREACHABLE("year_of only supports int32 (YYYYMMDD) inputs.");
+            } else {
+                auto op1 = s.load(e.operand_regs[0]);
+                s.store(e.return_reg, op1 / 10000);
             }
             return;
         }

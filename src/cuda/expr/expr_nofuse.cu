@@ -664,7 +664,15 @@ void evaluate_one_expr(
             unary_op_launch_helper launcher;
             launcher.launch<exp_helper>(
                 expr,
-                storage, 
+                storage,
+                stream);
+            break;
+        }
+        case ExprId::YearOf: {
+            unary_op_launch_helper launcher;
+            launcher.launch<year_of_helper>(
+                expr,
+                storage,
                 stream);
             break;
         }

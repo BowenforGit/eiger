@@ -41,6 +41,7 @@ std::string expr_label(const Expr& e) {
         case ExprId::Sqrt: return "Sqrt";
         case ExprId::Log: return "Log";
         case ExprId::Exp: return "Exp";
+        case ExprId::YearOf: return "YearOf";
         case ExprId::GreaterThan: return "GreaterThan";
         case ExprId::LessThan: return "LessThan";
         case ExprId::GreaterEqual: return "GreaterEqual";
