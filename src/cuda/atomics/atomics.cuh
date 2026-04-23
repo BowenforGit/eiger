@@ -31,8 +31,17 @@ namespace atomic {
 
     template<typename T, std::enable_if_t<sizeof(T) == 8, int> = 0>
     __device__ __forceinline__ T atomic_add(T* address, T val) {
-        return atomicAdd(reinterpret_cast<unsigned long long*>(address), 
-                         static_cast<unsigned long long>(val));
+        // sm_60+ has a native atomicAdd(double*, double). Without this
+        // branch the fall-through path below truncates the double via
+        // static_cast<unsigned long long> and writes integer bytes into
+        // a double cell — SUM(FLOAT64) groupby results then read back
+        // as subnormal garbage.
+        if constexpr (std::is_same_v<T, double>) {
+            return atomicAdd(address, val);
+        } else {
+            return atomicAdd(reinterpret_cast<unsigned long long*>(address),
+                             static_cast<unsigned long long>(val));
+        }
     }
 
     template<typename T, std::enable_if_t<sizeof(T) < 4, int> = 0>
