@@ -187,10 +187,24 @@ ExprTree lower_expr_to_tree(const Expr& e, const Schema& input) {
         case ExprKind::StringOp:
             lower_error("StringOp cannot appear inside a computational "
                         "ExprTree; materialize it as a bool column first");
-        case ExprKind::FunctionCall:
+        case ExprKind::FunctionCall: {
+            // `year(date)` → `ExprTree::year_of(date)`. Paired with the
+            // DATE32 → int32-YYYYMMDD conversion in `tpch/tpch_reader.cpp`,
+            // so the child expression is guaranteed to be an int32 date.
+            // The `year_of_helper` at the evaluator layer enforces the
+            // input-type contract (int32 only); anything else degrades
+            // to `runtime_error` on host / `GAMAX_UNREACHABLE` on device.
+            if (e.function_name == "year") {
+                if (e.children.size() != 1) {
+                    lower_error("year(...) takes exactly one argument");
+                }
+                return ExprTree::year_of(
+                    lower_expr_to_tree(e.children[0], input));
+            }
             lower_error("scalar function '" + e.function_name +
                         "' has no ExprTree lowering yet "
                         "(add a rewrite rule or a physical builtin)");
+        }
     }
     lower_error("unknown ExprKind");
 }
