@@ -16,8 +16,19 @@ namespace gamax {
             cudaStream_t stream = cudaStreamDefault);
         
         namespace detail {
+            // Compute the per-left-row membership bitmask for an equi
+            // semi-join on the single-column key pair (left[0], right[0]):
+            // result[i] == true iff `left[0][i]` is found among right's
+            // keys. Exposed so `anti_join` can reuse the same hash-set
+            // build + contains pass and then negate the mask instead
+            // of compacting against it directly.
+            std::unique_ptr<gamax::column> semi_hash_membership_mask(
+                gamax::table_view left,
+                gamax::table_view right,
+                cudaStream_t stream = cudaStreamDefault);
+
             std::unique_ptr<gamax::table> semi_hash_join(
-                gamax::table_view left, 
+                gamax::table_view left,
                 gamax::table_view right,
                 gamax::join::join_hint const& hint,
                 cudaStream_t stream = cudaStreamDefault);

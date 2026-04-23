@@ -81,6 +81,7 @@ if(USE_NVIDIA)
         compress/multikey_compress.cu
         operators/groupby/groupby_partition.cu
         operators/groupby/groupby.cu
+        operators/join/anti_join.cu
         operators/join/cross_join.cu
         operators/join/materialize.cu
         operators/join/sort_merge_join.cu

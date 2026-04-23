@@ -9,6 +9,7 @@
 #include "operators/join/cross_join.hpp"
 #include "operators/join/inner_join.hpp"
 #include "operators/join/join.hpp"
+#include "operators/join/anti_join.hpp"
 #include "operators/join/semi_join.hpp"
 #include "operators/project/project.hpp"
 #include "operators/select/select.hpp"
@@ -548,13 +549,54 @@ table_ptr left_outer_join(
                     "no underlying left_outer_join operator yet");
 }
 
-table_ptr anti_join(
-    gamax::table_view, std::vector<gamax::size_type>,
-    gamax::table_view, std::vector<gamax::size_type>, const Context&)
+table_ptr anti_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
+                    gamax::table_view R, std::vector<gamax::size_type> rkeys,
+                    const Context& ctx)
 {
-    not_implemented("anti_join",
-                    "no underlying anti_join operator yet (could be "
-                    "derived from semi_join + complement)");
+    require_single_key("anti_join", lkeys, rkeys);
+
+    // Anti-join edge cases:
+    //   * R empty → no key can collide → every L row survives → return L.
+    //   * L empty → nothing to survive → return L-shaped empty table.
+    if (L.num_rows() == 0) {
+        return make_empty_semi_join_output(L, lkeys, ctx.stream);
+    }
+    if (R.num_rows() == 0) {
+        // Shape matches semi_join's output: [shared_key, L_non_keys...].
+        // Here the "shared key" is just L's key column itself (no right
+        // side intersected).
+        std::vector<gamax::column_ptr> out;
+        out.reserve(1 + L.num_columns() - lkeys.size());
+        out.push_back(deep_copy_any(L.get_column(lkeys[0]), ctx.stream));
+        for (gamax::size_type i = 0; i < L.num_columns(); ++i) {
+            if (std::find(lkeys.begin(), lkeys.end(), i) != lkeys.end()) continue;
+            out.push_back(deep_copy_any(L.get_column(i), ctx.stream));
+        }
+        return std::make_unique<gamax::table>(std::move(out));
+    }
+
+    auto L_small = build_key_plus_rowid(L, lkeys, ctx);
+    auto R_small = build_key_plus_rowid(R, rkeys, ctx);
+
+    // Anti-join in the operator layer yields the left rows (with row-id)
+    // that have no match in right. Output shape matches the [key, row_id]
+    // layout that semi_join produces, because `gamax::join::anti_join`
+    // compacts the same `L_small` table.
+    auto joined = gamax::join::anti_join(
+        L_small->view(), R_small->view(), default_join_hint(), ctx.stream);
+    auto shared_key = joined->view()[0];
+    auto l_row_id   = joined->view()[1];
+
+    // Materialise [key, L_non_keys...] by gathering L's non-key columns
+    // through l_row_id — identical materialisation shape to semi_join.
+    std::vector<gamax::column_ptr> out;
+    out.reserve(1 + L.num_columns() - lkeys.size());
+    out.push_back(deep_copy_any(shared_key, ctx.stream));
+    for (gamax::size_type i = 0; i < L.num_columns(); ++i) {
+        if (std::find(lkeys.begin(), lkeys.end(), i) != lkeys.end()) continue;
+        out.push_back(gather_any(L.get_column(i), l_row_id, ctx.stream));
+    }
+    return std::make_unique<gamax::table>(std::move(out));
 }
 
 table_ptr cross_join(gamax::table_view L, gamax::table_view R,
