@@ -61,14 +61,26 @@ gamax::ir::PlanPtr build_query(
     switch (qid) {
         case 1:  return build_q1(qb);
         case 2:  return build_q2(qb);
+        case 3:  return build_q3(qb);
         case 4:  return build_q4(qb);
+        case 5:  return build_q5(qb);
         case 6:  return build_q6(qb);
+        case 7:  return build_q7(qb);
+        case 8:  return build_q8(qb);
+        case 9:  return build_q9(qb);
         case 10: return build_q10(qb);
         case 11: return build_q11(qb);
+        case 12: return build_q12(qb);
+        case 13: return build_q13(qb);
         case 14: return build_q14(qb);
         case 15: return build_q15(qb);
+        case 16: return build_q16(qb);
+        case 17: return build_q17(qb);
         case 18: return build_q18(qb);
+        case 19: return build_q19(qb);
         case 20: return build_q20(qb);
+        case 21: return build_q21(qb);
+        case 22: return build_q22(qb);
         default:
             throw std::runtime_error(
                 "query " + std::to_string(qid) + " not wired in this runner.");
