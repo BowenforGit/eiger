@@ -6,6 +6,7 @@
 #include <string>
 
 #include "operators/groupby/groupby.hpp"
+#include "operators/join/cross_join.hpp"
 #include "operators/join/inner_join.hpp"
 #include "operators/join/join.hpp"
 #include "operators/join/semi_join.hpp"
@@ -559,55 +560,10 @@ table_ptr anti_join(
 table_ptr cross_join(gamax::table_view L, gamax::table_view R,
                      const Context& ctx)
 {
-    // Empty → empty, regardless of which side.
-    if (L.num_rows() == 0 || R.num_rows() == 0) {
-        std::vector<gamax::column_ptr> cols;
-        cols.reserve(L.num_columns() + R.num_columns());
-        for (int i = 0; i < L.num_columns(); ++i) {
-            cols.push_back(make_zero_row_column(L.get_column(i).type(), ctx.stream));
-        }
-        for (int i = 0; i < R.num_columns(); ++i) {
-            cols.push_back(make_zero_row_column(R.get_column(i).type(), ctx.stream));
-        }
-        return std::make_unique<gamax::table>(std::move(cols));
-    }
-
-    // Prepend a constant-zero int32 "fake key" to each side, eq-join
-    // on that key (all rows match all rows → Cartesian product), then
-    // drop the duplicated shared-key column. Reuses the eq_join
-    // machinery — no new physical kernel.
-    //
-    // L becomes: [fake_key(=0), L.cols...]; similarly for R.
-    // phys::eq_join output is:
-    //     [shared_key, L.cols..., R.cols...]
-    // We drop column 0 via reorder.
-    auto key_type = gamax::data_type{gamax::type_id::INT32};
-
-    std::vector<gamax::column_ptr> L_expanded_cols;
-    L_expanded_cols.reserve(L.num_columns() + 1);
-    L_expanded_cols.push_back(gamax::make_column(
-        key_type, L.num_rows(), /*clear=*/true, ctx.stream));
-    for (int i = 0; i < L.num_columns(); ++i) {
-        L_expanded_cols.push_back(
-            copy_any_column(L.get_column(i), ctx.stream));
-    }
-    auto L_expanded = std::make_unique<gamax::table>(std::move(L_expanded_cols));
-
-    std::vector<gamax::column_ptr> R_expanded_cols;
-    R_expanded_cols.reserve(R.num_columns() + 1);
-    R_expanded_cols.push_back(gamax::make_column(
-        key_type, R.num_rows(), /*clear=*/true, ctx.stream));
-    for (int i = 0; i < R.num_columns(); ++i) {
-        R_expanded_cols.push_back(
-            copy_any_column(R.get_column(i), ctx.stream));
-    }
-    auto R_expanded = std::make_unique<gamax::table>(std::move(R_expanded_cols));
-
-    auto joined = eq_join(L_expanded->view(), {0}, R_expanded->view(), {0}, ctx);
-    // joined schema: [shared_key, L.cols..., R.cols...] — drop [0].
-    std::vector<gamax::size_type> keep(joined->num_columns() - 1);
-    std::iota(keep.begin(), keep.end(), gamax::size_type{1});
-    return reorder(joined->view(), std::move(keep), ctx);
+    // Thin delegation to the dedicated operator, now living alongside
+    // the other join types under `operators/join/`. See cross_join.cu
+    // for the tuple-id-gather implementation.
+    return gamax::join::cross_join(L, R, ctx.stream);
 }
 
 // ── Aggregation ───────────────────────────────────────────────────
