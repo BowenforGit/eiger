@@ -10,11 +10,15 @@
 
 namespace gamax::exec {
 
-// Source-table resolver: given a table name from a SourceTable step,
-// returns a non-owning `table_view` into caller-owned data. The
-// returned view must outlive the `execute()` call.
-using SourceResolver =
-    std::function<gamax::table_view(const std::string&)>;
+// Source-table resolver: given a table name and the requested column
+// list from a SourceTable step, returns a non-owning `table_view` into
+// caller-owned data. The view's `k`-th column must be the column named
+// `columns[k]` — the Executor relies on this positional contract (no
+// name lookup happens after this call). The returned view must outlive
+// the `execute()` call.
+using SourceResolver = std::function<gamax::table_view(
+    const std::string& name,
+    const std::vector<std::string>& columns)>;
 
 // Walk an ExecPlan step-by-step, dispatching to `phys::*` with the
 // pre-built payloads. Returns the final step's output table.

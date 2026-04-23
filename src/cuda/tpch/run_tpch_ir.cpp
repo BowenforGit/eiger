@@ -178,7 +178,10 @@ int main(int argc, char** argv) try {
     gamax::phys::Context ctx{params.stream};
     auto t0 = std::chrono::steady_clock::now();
     gamax::exec::SourceResolver source_fn =
-        [&resolver](const std::string& name) { return resolver(name); };
+        [&resolver](const std::string& name,
+                    const std::vector<std::string>& cols) {
+            return resolver(name, cols);
+        };
     auto result = gamax::exec::execute(ep, source_fn, ctx);
     cudaStreamSynchronize(params.stream);
     auto t1 = std::chrono::steady_clock::now();

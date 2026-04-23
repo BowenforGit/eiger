@@ -53,7 +53,12 @@ void write_payload(std::ostream& os, const StepPayload& payload) {
     std::visit([&](auto&& pl) {
         using T = std::decay_t<decltype(pl)>;
         if constexpr (std::is_same_v<T, SourceTablePayload>) {
-            os << "\"" << pl.table_name << "\"";
+            os << "\"" << pl.table_name << "\" cols=[";
+            for (size_t i = 0; i < pl.columns.size(); ++i) {
+                if (i) os << ", ";
+                os << pl.columns[i];
+            }
+            os << "]";
         } else if constexpr (std::is_same_v<T, ReorderPayload>) {
             os << "ordinals=";
             write_ordinals(os, pl.ordinals);

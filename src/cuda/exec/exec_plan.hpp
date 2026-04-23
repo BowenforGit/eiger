@@ -40,8 +40,16 @@ struct Value {
 
 // ── Per-kind step payloads ────────────────────────────────────────
 
+// SourceTable emits a pinned view into caller-owned data. `columns`
+// is the list of source-table column names (catalog-qualified) the
+// resolver must surface, **in output order** — the resulting view's
+// `k`-th column must be the named column. Downstream ordinals index
+// this narrow schema, not the full catalog one. Column-pruning at
+// the scan replaces what used to be a SourceTable(full-catalog) +
+// Reorder(pick-subset) pair.
 struct SourceTablePayload {
     std::string table_name;
+    std::vector<std::string> columns;
 };
 struct ReorderPayload {
     std::vector<gamax::size_type> ordinals;

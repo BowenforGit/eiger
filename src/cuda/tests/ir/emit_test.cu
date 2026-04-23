@@ -100,12 +100,23 @@ gir::EmitContext make_ctx(const gir::Catalog& cat, const Q6Input& in) {
     gir::EmitContext ctx;
     ctx.catalog = &cat;
     ctx.stream = cudaStreamDefault;
-    ctx.resolve_table = [in_ptr = &in](const std::string& name) {
+    ctx.resolve_table = [in_ptr = &in, cat_ptr = &cat](
+                            const std::string& name,
+                            const std::vector<std::string>& cols) {
         auto it = in_ptr->by_name.find(name);
         if (it == in_ptr->by_name.end()) {
             throw std::runtime_error("unknown table: " + name);
         }
-        return it->second;
+        const auto* ct = cat_ptr->find(name);
+        std::vector<gamax::size_type> ords;
+        ords.reserve(cols.size());
+        for (const auto& c : cols) {
+            auto cit = std::find(ct->column_names.begin(),
+                                 ct->column_names.end(), c);
+            ords.push_back(static_cast<gamax::size_type>(
+                std::distance(ct->column_names.begin(), cit)));
+        }
+        return it->second.select_columns(ords);
     };
     return ctx;
 }
@@ -287,9 +298,21 @@ TEST(IrEmit, StringColumnFilterGathersAndCompactsTogether) {
     gir::EmitContext ctx;
     ctx.catalog = &cat;
     ctx.stream  = cudaStreamDefault;
-    ctx.resolve_table = [&](const std::string& name) {
-        if (name == "orders") return view;
-        throw std::runtime_error("unknown table: " + name);
+    ctx.resolve_table = [&](const std::string& name,
+                            const std::vector<std::string>& cols) {
+        if (name != "orders") {
+            throw std::runtime_error("unknown table: " + name);
+        }
+        const auto* ct = cat.find(name);
+        std::vector<gamax::size_type> ords;
+        ords.reserve(cols.size());
+        for (const auto& c : cols) {
+            auto it = std::find(ct->column_names.begin(),
+                                ct->column_names.end(), c);
+            ords.push_back(static_cast<gamax::size_type>(
+                std::distance(ct->column_names.begin(), it)));
+        }
+        return view.select_columns(ords);
     };
 
     gir::IdGenerator gen;
@@ -359,11 +382,21 @@ gir::EmitContext make_join_ctx(JoinFixtures& f) {
     gir::EmitContext ctx;
     ctx.catalog = &f.cat;
     ctx.stream = cudaStreamDefault;
-    ctx.resolve_table = [&](const std::string& name) {
+    ctx.resolve_table = [&](const std::string& name,
+                            const std::vector<std::string>& cols) {
         auto it = f.by_name.find(name);
         if (it == f.by_name.end())
             throw std::runtime_error("unknown table: " + name);
-        return it->second;
+        const auto* ct = f.cat.find(name);
+        std::vector<gamax::size_type> ords;
+        ords.reserve(cols.size());
+        for (const auto& c : cols) {
+            auto cit = std::find(ct->column_names.begin(),
+                                 ct->column_names.end(), c);
+            ords.push_back(static_cast<gamax::size_type>(
+                std::distance(ct->column_names.begin(), cit)));
+        }
+        return it->second.select_columns(ords);
     };
     return ctx;
 }

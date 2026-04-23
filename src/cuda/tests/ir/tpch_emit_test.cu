@@ -133,12 +133,22 @@ gir::EmitContext make_ctx(Fixtures& f) {
     gir::EmitContext ctx;
     ctx.catalog = &f.cat;
     ctx.stream = cudaStreamDefault;
-    ctx.resolve_table = [&f](const std::string& name) {
+    ctx.resolve_table = [&f](const std::string& name,
+                             const std::vector<std::string>& cols) {
         auto it = f.views.find(name);
         if (it == f.views.end()) {
             throw std::runtime_error("unknown table: " + name);
         }
-        return it->second;
+        const auto* ct = f.cat.find(name);
+        std::vector<gamax::size_type> ords;
+        ords.reserve(cols.size());
+        for (const auto& c : cols) {
+            auto cit = std::find(ct->column_names.begin(),
+                                 ct->column_names.end(), c);
+            ords.push_back(static_cast<gamax::size_type>(
+                std::distance(ct->column_names.begin(), cit)));
+        }
+        return it->second.select_columns(ords);
     };
     return ctx;
 }

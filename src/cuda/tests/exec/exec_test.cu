@@ -72,12 +72,25 @@ Fixture make_fixture() {
     return f;
 }
 
+// Select the requested columns out of the fixture view by name. The
+// fixture's column order matches the catalog, so name→ordinal is a
+// straight lookup against `f.cat.find("lineitem")->column_names`.
 gex::SourceResolver resolver_for(const Fixture& f) {
-    return [&f](const std::string& name) -> gamax::table_view {
+    return [&f](const std::string& name,
+                const std::vector<std::string>& cols) -> gamax::table_view {
         if (name != "lineitem") {
             throw std::runtime_error("unknown table: " + name);
         }
-        return f.view;
+        const auto* ct = f.cat.find(name);
+        std::vector<gamax::size_type> ords;
+        ords.reserve(cols.size());
+        for (const auto& c : cols) {
+            auto it = std::find(ct->column_names.begin(),
+                                ct->column_names.end(), c);
+            ords.push_back(static_cast<gamax::size_type>(
+                std::distance(ct->column_names.begin(), it)));
+        }
+        return f.view.select_columns(ords);
     };
 }
 
@@ -85,18 +98,23 @@ gex::SourceResolver resolver_for(const Fixture& f) {
 
 // ── Lowering + printer ────────────────────────────────────────────
 
-TEST(ExecLower, ScanEmitsSourceTablePlusReorder) {
+TEST(ExecLower, ScanEmitsOnlySourceTable) {
     auto f = make_fixture();
     gir::IdGenerator g;
     gir::QueryBuilder qb(f.cat, g);
     auto plan = qb.scan("lineitem", {"l_discount", "l_shipdate"}).plan();
     auto ep = gir::lower_to_exec_plan(plan, f.cat);
 
-    // Two steps: SourceTable then Reorder.
-    ASSERT_EQ(ep.steps.size(), 2u);
+    // Column-pruning-at-scan collapses Scan to a single SourceTable
+    // step whose payload carries the requested columns in order —
+    // no follow-up Reorder.
+    ASSERT_EQ(ep.steps.size(), 1u);
     EXPECT_EQ(ep.steps[0].kind, gex::StepKind::SourceTable);
-    EXPECT_EQ(ep.steps[1].kind, gex::StepKind::Reorder);
-    // Required sources registered.
+    const auto& pl = std::get<gex::SourceTablePayload>(ep.steps[0].payload);
+    EXPECT_EQ(pl.table_name, "lineitem");
+    ASSERT_EQ(pl.columns.size(), 2u);
+    EXPECT_EQ(pl.columns[0], "l_discount");
+    EXPECT_EQ(pl.columns[1], "l_shipdate");
     ASSERT_EQ(ep.required_sources.size(), 1u);
     EXPECT_EQ(ep.required_sources[0], "lineitem");
 }
@@ -111,10 +129,9 @@ TEST(ExecLower, SortPlusLimitFusesToTopK) {
                   .plan();
     auto ep = gir::lower_to_exec_plan(plan, f.cat);
 
-    // Expect: SourceTable, Reorder (Scan), TopK (fused Sort+Limit).
-    ASSERT_EQ(ep.steps.size(), 3u);
+    // With column-pruning-at-scan: SourceTable then TopK (fused Sort+Limit).
+    ASSERT_EQ(ep.steps.size(), 2u);
     EXPECT_EQ(ep.steps.back().kind, gex::StepKind::TopK);
-    // No lone Sort step — confirmed by checking no step has kind Sort.
     for (const auto& s : ep.steps) EXPECT_NE(s.kind, gex::StepKind::Sort);
 }
 
@@ -160,7 +177,7 @@ TEST(ExecPrint, ReadableOutput) {
     auto ep = gir::lower_to_exec_plan(plan, f.cat);
     auto out = gex::format_exec_plan(ep);
     EXPECT_TRUE(contains(out, "required sources: lineitem"));
-    EXPECT_TRUE(contains(out, "SourceTable(\"lineitem\")"));
+    EXPECT_TRUE(contains(out, "SourceTable(\"lineitem\" cols=[l_discount]"));
     EXPECT_TRUE(contains(out, "return v"));
 }
 
@@ -243,11 +260,21 @@ WideFixture make_wide_fixture() {
 }
 
 gex::SourceResolver wide_resolver_for(const WideFixture& f) {
-    return [&f](const std::string& name) -> gamax::table_view {
+    return [&f](const std::string& name,
+                const std::vector<std::string>& cols) -> gamax::table_view {
         if (name != "lineitem") {
             throw std::runtime_error("unknown table: " + name);
         }
-        return f.view;
+        const auto* ct = f.cat.find(name);
+        std::vector<gamax::size_type> ords;
+        ords.reserve(cols.size());
+        for (const auto& c : cols) {
+            auto it = std::find(ct->column_names.begin(),
+                                ct->column_names.end(), c);
+            ords.push_back(static_cast<gamax::size_type>(
+                std::distance(ct->column_names.begin(), it)));
+        }
+        return f.view.select_columns(ords);
     };
 }
 
@@ -368,7 +395,8 @@ TEST(ExecExecutor, NullRootOrResolverRaises) {
                  std::runtime_error);
 
     // Resolver that throws surfaces the error to the caller.
-    auto bad = [](const std::string& name) -> gamax::table_view {
+    auto bad = [](const std::string& name,
+                  const std::vector<std::string>&) -> gamax::table_view {
         throw std::runtime_error("unknown: " + name);
     };
     EXPECT_THROW(gex::execute(ep, bad, ctx), std::runtime_error);

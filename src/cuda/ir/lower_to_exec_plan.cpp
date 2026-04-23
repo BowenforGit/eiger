@@ -54,7 +54,11 @@ struct Lowering {
         return id;
     }
 
-    const Schema& exec_schema(ValueId id) const {
+    // Return-by-value: callers often hold onto the result across a
+    // subsequent `next_value` call, and next_value can grow the
+    // `plan.values` vector and invalidate any reference we returned.
+    // Copy protects all callers from that reallocation hazard.
+    Schema exec_schema(ValueId id) const {
         return plan.values[id].schema;
     }
 
@@ -103,39 +107,19 @@ Schema filter_schema_by_live(
 ValueId lower_node(const PlanNode& node, Lowering& lo);
 
 ValueId lower_scan(const PlanNode& node, Lowering& lo) {
-    // Scan → SourceTable (producing a value that aliases the caller's
-    // table_view) + Reorder (to pick and re-order the requested
-    // columns). If the requested set already matches the source in
-    // order, the Reorder is a trivial identity copy — keep it for
-    // uniformity.
+    // Scan → SourceTable directly. The payload carries the requested
+    // column names in output order, and the resolver is contractually
+    // obliged to surface those columns (no full-catalog load, no
+    // subsequent Reorder). Column-order reshuffles happen at the
+    // SourceTable boundary, not as a separate step — saves one D2D
+    // copy per source and, with a column-aware reader, avoids
+    // materialising unused columns altogether.
     const auto* cat_table = lo.cat->find(node.scan_table);
     if (!cat_table) lower_error(
         "scan: table '" + node.scan_table + "' not in catalog");
 
-    // `required_sources` is a dedup'd list for the executor to supply.
-    auto& req = lo.plan.required_sources;
-    if (std::find(req.begin(), req.end(), node.scan_table) == req.end()) {
-        req.push_back(node.scan_table);
-    }
-
-    // The SourceTable value's schema is the catalog-declared schema
-    // (positional, matching what the source table_view must have).
-    gamax::ir::Schema src_schema;
-    for (size_t i = 0; i < cat_table->column_names.size(); ++i) {
-        src_schema.append({
-            ColumnId{},  // retired at exec layer
-            cat_table->column_types[i],
-            cat_table->column_nullable[i],
-            cat_table->column_names[i],
-        });
-    }
-    ValueId src_id = lo.next_value(std::move(src_schema));
-    lo.push_step(StepKind::SourceTable, /*inputs=*/{}, src_id,
-                 exec::SourceTablePayload{node.scan_table});
-
-    // Then a Reorder to produce the requested subset in order.
-    std::vector<gamax::size_type> ordinals;
-    ordinals.reserve(node.scan_columns.size());
+    // Validate each requested column exists in the catalog so errors
+    // surface here rather than deep in the resolver.
     for (const auto& name : node.scan_columns) {
         auto it = std::find(cat_table->column_names.begin(),
                             cat_table->column_names.end(), name);
@@ -143,17 +127,23 @@ ValueId lower_scan(const PlanNode& node, Lowering& lo) {
             lower_error("scan: column '" + name + "' not in table '" +
                         node.scan_table + "'");
         }
-        ordinals.push_back(static_cast<gamax::size_type>(
-            std::distance(cat_table->column_names.begin(), it)));
     }
 
-    // Schema of the reordered value: straight copy of the IR node's
-    // declared output_schema (fresh ColumnIds there; we don't need
-    // them at this layer).
+    // `required_sources` is a dedup'd list for the executor to supply.
+    auto& req = lo.plan.required_sources;
+    if (std::find(req.begin(), req.end(), node.scan_table) == req.end()) {
+        req.push_back(node.scan_table);
+    }
+
+    // SourceTable's schema is the IR Scan's declared output_schema —
+    // one entry per requested column, in order.
     gamax::ir::Schema out_schema = node.output_schema;
     ValueId out_id = lo.next_value(std::move(out_schema));
-    lo.push_step(StepKind::Reorder, /*inputs=*/{src_id}, out_id,
-                 exec::ReorderPayload{std::move(ordinals)});
+    lo.push_step(StepKind::SourceTable, /*inputs=*/{}, out_id,
+                 exec::SourceTablePayload{
+                     node.scan_table,
+                     node.scan_columns,
+                 });
     return out_id;
 }
 
@@ -584,10 +574,15 @@ ValueId lower_join(const PlanNode& node, Lowering& lo) {
         auto r_id = lower_node(*node.inputs[1], lo);
         // CrossJoin's EXEC output = EXEC L ++ EXEC R (both sides kept
         // in their EXEC order). Rebuild by filtering node.output_schema
-        // to fields that survived upstream pruning.
+        // to fields that survived upstream pruning. `exec_schema`
+        // returns by value (see its declaration); keep the Schemas
+        // named so the range-for below doesn't iterate over a
+        // destroyed temporary's subobject.
+        auto l_schema = lo.exec_schema(l_id);
+        auto r_schema = lo.exec_schema(r_id);
         std::unordered_set<ColumnId> live_union;
-        for (const auto& f : lo.exec_schema(l_id).fields()) live_union.insert(f.id);
-        for (const auto& f : lo.exec_schema(r_id).fields()) live_union.insert(f.id);
+        for (const auto& f : l_schema.fields()) live_union.insert(f.id);
+        for (const auto& f : r_schema.fields()) live_union.insert(f.id);
         Schema out_schema = filter_schema_by_live(node.output_schema, live_union);
         ValueId out_id = lo.next_value(std::move(out_schema));
         lo.push_step(StepKind::CrossJoin, {l_id, r_id}, out_id,
@@ -605,8 +600,8 @@ ValueId lower_join(const PlanNode& node, Lowering& lo) {
 
     auto l_id = lower_node(*node.inputs[0], lo);
     auto r_id = lower_node(*node.inputs[1], lo);
-    const auto& left_schema  = lo.exec_schema(l_id);
-    const auto& right_schema = lo.exec_schema(r_id);
+    auto left_schema  = lo.exec_schema(l_id);
+    auto right_schema = lo.exec_schema(r_id);
 
     EquiKeys keys;
     collect_equi_keys(*node.join_condition, left_schema, right_schema, keys);

@@ -17,6 +17,33 @@ using gamax::type_id;
 
 namespace {
 
+// Build a SourceResolver that narrows `view` (assumed to be laid out
+// in the same column order as the catalog table named `table_name`)
+// to the caller-requested subset, preserving order.
+gex::SourceResolver make_resolver(
+    const gir::Catalog& cat,
+    const std::string& table_name,
+    const gamax::table_view& view)
+{
+    return [&cat, table_name, view](
+               const std::string& name,
+               const std::vector<std::string>& cols) -> gamax::table_view {
+        if (name != table_name) {
+            throw std::runtime_error("unknown table: " + name);
+        }
+        const auto* ct = cat.find(name);
+        std::vector<gamax::size_type> ords;
+        ords.reserve(cols.size());
+        for (const auto& c : cols) {
+            auto it = std::find(ct->column_names.begin(),
+                                ct->column_names.end(), c);
+            ords.push_back(static_cast<gamax::size_type>(
+                std::distance(ct->column_names.begin(), it)));
+        }
+        return view.select_columns(ords);
+    };
+}
+
 gir::Catalog make_catalog() {
     gir::Catalog cat;
     gir::CatalogTable t;
@@ -162,8 +189,7 @@ TEST(RulesCountToSum, EndToEndCountsOrders) {
     auto rewritten = gir::apply_rules(plan);
     auto ep = gir::lower_to_exec_plan(rewritten, cat);
     gamax::phys::Context ctx{cudaStreamDefault};
-    gex::SourceResolver resolver =
-        [&view](const std::string&) { return view; };
+    auto resolver = make_resolver(cat, "orders", view);
     auto out = gex::execute(ep, resolver, ctx);
     ASSERT_EQ(out->num_rows(), 1);
     ASSERT_EQ(out->num_columns(), 1);
@@ -303,10 +329,23 @@ TEST(RulesSplitNonEquiJoin, EndToEndMatchesHandFiltered) {
 
     auto o_view = orders->view();
     auto l_view = lineitem->view();
-    gex::SourceResolver resolver = [&](const std::string& name) {
-        if (name == "orders") return o_view;
-        if (name == "lineitem") return l_view;
-        throw std::runtime_error("unknown");
+    gex::SourceResolver resolver =
+        [&](const std::string& name,
+            const std::vector<std::string>& cols) -> gamax::table_view {
+        const gamax::table_view* src = nullptr;
+        if (name == "orders")         src = &o_view;
+        else if (name == "lineitem")  src = &l_view;
+        else throw std::runtime_error("unknown");
+        const auto* ct = cat.find(name);
+        std::vector<gamax::size_type> ords;
+        ords.reserve(cols.size());
+        for (const auto& c : cols) {
+            auto it = std::find(ct->column_names.begin(),
+                                ct->column_names.end(), c);
+            ords.push_back(static_cast<gamax::size_type>(
+                std::distance(ct->column_names.begin(), it)));
+        }
+        return src->select_columns(ords);
     };
 
     // With rules enabled, the non-equi clause moves into a Filter,
@@ -474,10 +513,23 @@ TEST(RulesSplitMultiKeyEqui, EndToEndTwoKeyInnerJoin) {
 
     auto o_view = orders->view();
     auto l_view = lineitem->view();
-    gex::SourceResolver resolver = [&](const std::string& name) {
-        if (name == "orders") return o_view;
-        if (name == "lineitem") return l_view;
-        throw std::runtime_error("unknown");
+    gex::SourceResolver resolver =
+        [&](const std::string& name,
+            const std::vector<std::string>& cols) -> gamax::table_view {
+        const gamax::table_view* src = nullptr;
+        if (name == "orders")         src = &o_view;
+        else if (name == "lineitem")  src = &l_view;
+        else throw std::runtime_error("unknown");
+        const auto* ct = cat.find(name);
+        std::vector<gamax::size_type> ords;
+        ords.reserve(cols.size());
+        for (const auto& c : cols) {
+            auto it = std::find(ct->column_names.begin(),
+                                ct->column_names.end(), c);
+            ords.push_back(static_cast<gamax::size_type>(
+                std::distance(ct->column_names.begin(), it)));
+        }
+        return src->select_columns(ords);
     };
 
     // Without any rule, lowering throws on multi-key.
@@ -649,8 +701,7 @@ TEST(RulesScanPushdown, EndToEndProducesCorrectResult) {
     auto rewritten = gir::apply_rules(plan);
     auto ep = gir::lower_to_exec_plan(rewritten, cat);
     gamax::phys::Context ctx{cudaStreamDefault};
-    gex::SourceResolver resolver =
-        [&view](const std::string&) { return view; };
+    auto resolver = make_resolver(cat, "orders", view);
     auto out = gex::execute(ep, resolver, ctx);
     // o_orderdate > 9100 → rows 3, 4 → o_orderkey = 3, 4.
     ASSERT_EQ(out->num_rows(), 2);
@@ -757,7 +808,7 @@ TEST(LowerOptions, BothKnobsOffStillProducesCorrectResult) {
     auto ep = gir::lower_to_exec_plan(rewritten, cat, opts);
 
     gamax::phys::Context ctx{cudaStreamDefault};
-    gex::SourceResolver resolver = [&view](const std::string&) { return view; };
+    auto resolver = make_resolver(cat, "orders", view);
     auto out = gex::execute(ep, resolver, ctx);
     ASSERT_EQ(out->num_rows(), 2);
     auto h = gamax::copy_column_to_host<int64_t>(out->view()[0]);

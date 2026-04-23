@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <cuda_runtime_api.h>
 
@@ -22,15 +23,17 @@ namespace gamax::ir {
 //   in source tables (both the IR and the catalog agree on the declared
 //   column order).
 // - `resolve_table`: callback returning the source table_view for a
-//   given table name. The returned view must remain alive for the
-//   duration of the emit call and must have columns in the catalog's
-//   declared order — the emitter will project to the requested subset.
+//   given table name and the list of columns the Scan requested (in
+//   output order). The returned view's `k`-th column must correspond
+//   to `columns[k]` and must outlive the emit call.
 // - Tuning hints for each operator follow the physical operators'
 //   existing option structs; defaults are fine for a first-cut run.
 struct EmitContext {
     cudaStream_t stream {cudaStreamDefault};
     const Catalog* catalog {nullptr};
-    std::function<gamax::table_view(const std::string&)> resolve_table;
+    std::function<gamax::table_view(const std::string& name,
+                                    const std::vector<std::string>& cols)>
+        resolve_table;
 
     gamax::select::select_options   select_opts;
     gamax::project::project_options project_opts;

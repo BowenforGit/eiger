@@ -138,7 +138,7 @@ std::unique_ptr<gamax::table> execute(
         if (s.kind == StepKind::SourceTable) {
             const auto& pl = std::get<SourceTablePayload>(s.payload);
             Slot slot;
-            slot.view = source_resolver(pl.table_name);
+            slot.view = source_resolver(pl.table_name, pl.columns);
             live[s.output] = std::move(slot);
         } else {
             Slot slot;
@@ -191,10 +191,19 @@ std::unique_ptr<gamax::table> execute(
 
     auto final_id = plan.steps.back().output;
     auto it = live.find(final_id);
-    if (it == live.end() || !it->second.owned) {
-        exec_error("final value missing or not owned (SourceTable as root?)");
+    if (it == live.end()) {
+        exec_error("final value missing");
     }
-    return std::move(it->second.owned);
+    if (it->second.owned) {
+        return std::move(it->second.owned);
+    }
+    // SourceTable is the only step (a pure Scan query). Materialize the
+    // aliased view into an owned table via phys::reorder with identity
+    // ordinals so the caller gets a standalone `unique_ptr<table>`.
+    auto v = it->second.view;
+    std::vector<gamax::size_type> identity(v.num_columns());
+    std::iota(identity.begin(), identity.end(), gamax::size_type{0});
+    return gamax::phys::reorder(v, std::move(identity), ctx);
 }
 
 } // namespace gamax::exec

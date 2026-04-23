@@ -16,51 +16,50 @@ namespace gamax::tpch {
 //
 // The Executor's lowering model is:
 //
-//   Scan("lineitem", {cols...}) → SourceTable("lineitem")
-//                               → Reorder(ordinals-into-full-catalog)
+//   Scan("lineitem", {cols...}) → SourceTable("lineitem", cols)
 //
-// That is, `SourceTable`'s schema is the **full catalog table**; the
-// subsequent Reorder step picks out the requested subset in order.
-// So any resolver wired to this lowering must return a `table_view`
-// containing *every* catalog-declared column of the table in the
-// catalog's declared order.
+// That is, `SourceTable`'s schema is the **scanned subset** — no
+// separate Reorder step — and the resolver must return a
+// `table_view` whose `k`-th column is `columns[k]`. Column-pruning
+// happens at the scan boundary so we never materialise unused
+// columns on GPU.
 //
-// The resolver loads each table lazily on first resolve, passing the
-// full catalog column list down to `TpchTableReader::load`. Loaded
-// tables are cached for the resolver's lifetime, so within one
-// `execute()` call a table is loaded at most once even if multiple
-// Scan nodes reference it.
-//
-// Column-pruning-at-the-Scan is a separate optimization: that will
-// make `SourceTable`'s schema the scanned-subset, so the resolver
-// only loads the columns the plan actually reads. Tracked as a
-// follow-up rule; today we trade that wasted H2D for a uniform
-// SourceTable layout.
+// Each unique (table, columns) request is loaded lazily. Re-requests
+// of the same key hit an in-resolver cache; requests for overlapping
+// but not-identical subsets benefit from `TpchTableReader`'s per-column
+// pinned cache, which avoids a second parquet read and a second H2D
+// for already-seen columns.
 class IrSourceResolver {
 public:
     IrSourceResolver(TpchTableReader& reader, const ir::Catalog& catalog)
         : _reader(&reader), _catalog(&catalog) {}
 
-    // Returns a view over the full catalog-shaped table. Keeps the
-    // underlying `gamax::table` alive for as long as this resolver
-    // object does (so the Executor's `table_view` stays valid for
-    // the entire `execute()` call).
+    // Returns a view whose `k`-th column corresponds to `columns[k]`
+    // in the named catalog table. Keeps the underlying `gamax::table`
+    // alive for the resolver's lifetime so the returned view stays
+    // valid for the entire `execute()` call.
     //
     // Call-site pattern for wiring into `exec::execute`:
     //
     //   IrSourceResolver resolver(reader, catalog);
     //   exec::SourceResolver src_fn =
-    //       [&resolver](const std::string& name) { return resolver(name); };
+    //       [&resolver](const std::string& name,
+    //                   const std::vector<std::string>& cols) {
+    //           return resolver(name, cols);
+    //       };
     //   exec::execute(plan, src_fn, ctx);
     //
     // (Direct `static_cast<SourceResolver>(resolver)` won't compile:
     // `std::function` demands a copyable functor, and this class
     // holds a `unique_ptr` cache that makes it move-only.)
-    gamax::table_view operator()(const std::string& table_name);
+    gamax::table_view operator()(
+        const std::string& table_name,
+        const std::vector<std::string>& columns);
 
 private:
     TpchTableReader* _reader;
     const ir::Catalog* _catalog;
+    // Cache key is "name|col1|col2|...": unique per requested subset.
     std::unordered_map<std::string, std::unique_ptr<gamax::table>> _cache;
 };
 
