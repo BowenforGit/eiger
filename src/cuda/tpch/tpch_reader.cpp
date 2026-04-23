@@ -1,5 +1,6 @@
 #include "tpch/tpch.hpp"
 
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <filesystem>
@@ -183,6 +184,47 @@ std::pair<std::unique_ptr<gamax::column>, PinnedColumnData> convert_decimal_to_i
     return {std::move(col), std::move(cache)};
 }
 
+// Convert days-since-1970-01-01 → int32 YYYYMMDD (e.g. 9404 → 19951001).
+// Uses C++20 <chrono> calendar types: `sys_days` is the Unix-epoch-based
+// time_point at days resolution, and `year_month_day` converts it to
+// calendar fields.
+inline int32_t days_since_epoch_to_yyyymmdd(int32_t days) {
+    using namespace std::chrono;
+    sys_days sd{std::chrono::days{days}};
+    year_month_day ymd{sd};
+    const int y = static_cast<int>(ymd.year());
+    const unsigned m = static_cast<unsigned>(ymd.month());
+    const unsigned d = static_cast<unsigned>(ymd.day());
+    return y * 10000 + static_cast<int32_t>(m) * 100 + static_cast<int32_t>(d);
+}
+
+// Convert Arrow DATE32 column → int32 YYYYMMDD. We store dates as
+// packed decimal YYYYMMDD rather than days-since-epoch so query-side
+// literals are human-readable (e.g. `lit(19951001)`) and year/month/day
+// extraction via `year_of` / similar ops is a pair of integer divides
+// instead of a conditional epoch-offset table.
+std::pair<std::unique_ptr<gamax::column>, PinnedColumnData> convert_date32_to_yyyymmdd(
+    const std::shared_ptr<arrow::Array>& array,
+    cudaStream_t stream)
+{
+    auto date_array = std::static_pointer_cast<arrow::Date32Array>(array);
+    auto num_rows = static_cast<gamax::size_type>(array->length());
+    size_t byte_size = num_rows * sizeof(int32_t);
+
+    void* pinned = nullptr;
+    cudaMallocHost(&pinned, byte_size);
+    auto* buf = static_cast<int32_t*>(pinned);
+
+    const int32_t* src = date_array->raw_values();
+    for (gamax::size_type i = 0; i < num_rows; ++i) {
+        buf[i] = days_since_epoch_to_yyyymmdd(src[i]);
+    }
+
+    auto col = gamax::make_column_from_host<int32_t>(buf, num_rows, stream);
+    PinnedColumnData cache(pinned, num_rows, gamax::data_type{gamax::type_id::INT32}, byte_size);
+    return {std::move(col), std::move(cache)};
+}
+
 // Convert Decimal128 column → double (scale != 0)
 std::pair<std::unique_ptr<gamax::column>, PinnedColumnData> convert_decimal_to_double(
     const std::shared_ptr<arrow::Array>& array,
@@ -224,6 +266,10 @@ std::pair<std::unique_ptr<gamax::column>, PinnedColumnData> arrow_array_to_gamax
         } else {
             return convert_decimal_to_double(array, decimal_type->scale(), stream);
         }
+    }
+
+    if (arrow_type->id() == arrow::Type::DATE32) {
+        return convert_date32_to_yyyymmdd(array, stream);
     }
 
     return gamax::type_dispatcher(

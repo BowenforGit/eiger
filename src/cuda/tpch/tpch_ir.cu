@@ -188,7 +188,7 @@ PlanPtr build_q1(const QueryBuilder& qb) {
     });
 
     auto filtered = projected.filter(
-        projected.c("l_shipdate") <= lit(10471));  // arbitrary cutoff
+        projected.c("l_shipdate") <= lit(19980902));  // arbitrary cutoff
 
     auto agg = filtered.aggregate(
         {"l_returnflag", "l_linestatus"},
@@ -309,8 +309,8 @@ PlanPtr build_q3(const QueryBuilder& qb) {
 
     auto c_filt = c.filter(
         string_op(StringOpKind::Equal, c.c("c_mktsegment"), {"BUILDING"}));
-    auto o_filt = o.filter(o.c("o_orderdate") < lit(9204));
-    auto l_filt = l.filter(l.c("l_shipdate")  > lit(9204));
+    auto o_filt = o.filter(o.c("o_orderdate") < lit(19950315));
+    auto l_filt = l.filter(l.c("l_shipdate")  > lit(19950315));
 
     auto co  = c_filt.inner_join(o_filt,
         c_filt.c("c_custkey") == o_filt.c("o_custkey"));
@@ -349,8 +349,8 @@ PlanPtr build_q4(const QueryBuilder& qb) {
     auto l = qb.scan("lineitem", {"l_orderkey", "l_commitdate", "l_receiptdate"});
 
     auto o_filt = o.filter(
-            (o.c("o_orderdate") >= lit(9374))
-         && (o.c("o_orderdate") <  lit(9465)));
+            (o.c("o_orderdate") >= lit(19950901))
+         && (o.c("o_orderdate") <  lit(19951201)));
     auto l_filt = l.filter(l.c("l_commitdate") < l.c("l_receiptdate"));
 
     auto semi = o_filt.left_semi_join(l_filt,
@@ -380,8 +380,8 @@ PlanPtr build_q5(const QueryBuilder& qb) {
     auto r_filt = r.filter(
         string_op(StringOpKind::Equal, r.c("r_name"), {"ASIA"}));
     auto o_filt = o.filter(
-            (o.c("o_orderdate") >= lit(9131))
-         && (o.c("o_orderdate") <  lit(9496)));
+            (o.c("o_orderdate") >= lit(19950101))
+         && (o.c("o_orderdate") <  lit(19960101)));
 
     // region ⋈ nation ⋈ supplier ⋈ customer ⋈ orders ⋈ lineitem,
     // with the customer/supplier both keyed into the same nation.
@@ -412,8 +412,8 @@ PlanPtr build_q6(const QueryBuilder& qb) {
         {"l_shipdate", "l_extendedprice", "l_discount", "l_quantity"});
     auto plan = li
         .filter(
-            li.c("l_shipdate") >= lit(9131)
-         && li.c("l_shipdate") <  lit(9496)
+            li.c("l_shipdate") >= lit(19950101)
+         && li.c("l_shipdate") <  lit(19960101)
          && li.c("l_discount") >= lit(0.05)
          && li.c("l_discount") <= lit(0.07)
          && li.c("l_quantity") <  lit(24.0))
@@ -445,8 +445,8 @@ PlanPtr build_q7(const QueryBuilder& qb) {
         string_op(StringOpKind::In, n2.c("n_name"), {"FRANCE", "GERMANY"}));
 
     auto l_filt = l.filter(
-            (l.c("l_shipdate") >= lit(9131))
-         && (l.c("l_shipdate") <= lit(9861)));
+            (l.c("l_shipdate") >= lit(19950101))
+         && (l.c("l_shipdate") <= lit(19961231)));
 
     // supplier ⋈ n1  (supp side)
     auto s_n1 = s.inner_join(n1_filt,
@@ -521,8 +521,8 @@ PlanPtr build_q8(const QueryBuilder& qb) {
         string_op(StringOpKind::Equal, p.c("p_type"),
                   {"ECONOMY ANODIZED STEEL"}));
     auto o_filt = o.filter(
-            (o.c("o_orderdate") >= lit(9131))
-         && (o.c("o_orderdate") <= lit(9861)));
+            (o.c("o_orderdate") >= lit(19950101))
+         && (o.c("o_orderdate") <= lit(19961231)));
 
     // region ⋈ n1 ⋈ customer ⋈ orders ⋈ lineitem ⋈ part,
     // with supplier ⋈ n2 joined on s_nationkey.
@@ -632,8 +632,8 @@ PlanPtr build_q10(const QueryBuilder& qb) {
     auto n = qb.scan("nation", {"n_nationkey", "n_name"});
 
     auto o_filt = o.filter(
-            (o.c("o_orderdate") >= lit(9374))
-         && (o.c("o_orderdate") <  lit(9465)));
+            (o.c("o_orderdate") >= lit(19950901))
+         && (o.c("o_orderdate") <  lit(19951201)));
     auto l_filt = l.filter(
         string_op(StringOpKind::Equal, l.c("l_returnflag"), {"R"}));
 
@@ -730,8 +730,8 @@ PlanPtr build_q12(const QueryBuilder& qb) {
                       {"MAIL", "SHIP"})
          && (l.c("l_commitdate") < l.c("l_receiptdate"))
          && (l.c("l_shipdate")   < l.c("l_commitdate"))
-         && (l.c("l_receiptdate") >= lit(8766))
-         && (l.c("l_receiptdate") <  lit(9131)));
+         && (l.c("l_receiptdate") >= lit(19940101))
+         && (l.c("l_receiptdate") <  lit(19950101)));
     auto joined = o.inner_join(l_filt,
         o.c("o_orderkey") == l_filt.c("l_orderkey"));
 
@@ -788,8 +788,8 @@ PlanPtr build_q14(const QueryBuilder& qb) {
     auto p = qb.scan("part", {"p_partkey", "p_type"});
 
     auto l_filt = l.filter(
-            (l.c("l_shipdate") >= lit(9374))
-         && (l.c("l_shipdate") <  lit(9404)));
+            (l.c("l_shipdate") >= lit(19950901))
+         && (l.c("l_shipdate") <  lit(19951001)));
     auto joined = l_filt.inner_join(p,
         l_filt.c("l_partkey") == p.c("p_partkey"));
 
@@ -830,8 +830,8 @@ PlanPtr build_q15(const QueryBuilder& qb) {
     auto l = qb.scan("lineitem",
         {"l_suppkey", "l_extendedprice", "l_discount", "l_shipdate"});
     auto l_filt = l.filter(
-            (l.c("l_shipdate") >= lit(9131))
-         && (l.c("l_shipdate") <  lit(9221)));
+            (l.c("l_shipdate") >= lit(19950101))
+         && (l.c("l_shipdate") <  lit(19950401)));
     auto revenue_body = l_filt.project({
         {"supplier_no", l_filt.c("l_suppkey")},
         {"rev", l_filt.c("l_extendedprice") *
@@ -1042,8 +1042,8 @@ PlanPtr build_q20(const QueryBuilder& qb) {
     auto l_sub = qb.scan("lineitem",
         {"l_partkey", "l_suppkey", "l_quantity", "l_shipdate"});
     auto l_filt = l_sub.filter(
-            (l_sub.c("l_shipdate") >= lit(9131))
-         && (l_sub.c("l_shipdate") <  lit(9496)));
+            (l_sub.c("l_shipdate") >= lit(19950101))
+         && (l_sub.c("l_shipdate") <  lit(19960101)));
     auto qty = l_filt.aggregate(
         {"l_partkey", "l_suppkey"},
         {{"sum_qty", AggKind::Sum, l_filt.c("l_quantity")}});
