@@ -13,6 +13,7 @@ const char* step_kind_name(StepKind k) {
         case StepKind::Filter:      return "Filter";
         case StepKind::EqJoin:      return "EqJoin";
         case StepKind::SemiJoin:    return "SemiJoin";
+        case StepKind::AntiJoin:    return "AntiJoin";
         case StepKind::CrossJoin:   return "CrossJoin";
         case StepKind::ScalarAgg:   return "ScalarAgg";
         case StepKind::GroupBy:     return "GroupBy";
@@ -83,6 +84,9 @@ void write_payload(std::ostream& os, const StepPayload& payload) {
             os << "lkeys="; write_ordinals(os, pl.lkeys);
             os << ", rkeys="; write_ordinals(os, pl.rkeys);
         } else if constexpr (std::is_same_v<T, SemiJoinPayload>) {
+            os << "lkeys="; write_ordinals(os, pl.lkeys);
+            os << ", rkeys="; write_ordinals(os, pl.rkeys);
+        } else if constexpr (std::is_same_v<T, AntiJoinPayload>) {
             os << "lkeys="; write_ordinals(os, pl.lkeys);
             os << ", rkeys="; write_ordinals(os, pl.rkeys);
         } else if constexpr (std::is_same_v<T, CrossJoinPayload>) {

@@ -81,6 +81,14 @@ struct SemiJoinPayload {
     std::vector<gamax::size_type> lkeys;
     std::vector<gamax::size_type> rkeys;
 };
+// LEFT ANTI JOIN — output schema is identical to SemiJoin (L only); only
+// the underlying kernel differs (keep L rows whose key has NO match on
+// R). Keeping a distinct payload type rather than a flag on SemiJoin so
+// `std::visit` dispatch at the executor cleanly picks the right phys op.
+struct AntiJoinPayload {
+    std::vector<gamax::size_type> lkeys;
+    std::vector<gamax::size_type> rkeys;
+};
 struct CrossJoinPayload {};
 struct ScalarAggPayload {
     std::vector<gamax::phys::AggSpec> specs;
@@ -107,6 +115,7 @@ using StepPayload = std::variant<
     FilterPayload,
     EqJoinPayload,
     SemiJoinPayload,
+    AntiJoinPayload,
     CrossJoinPayload,
     ScalarAggPayload,
     GroupByPayload,
@@ -117,7 +126,7 @@ using StepPayload = std::variant<
 // and for printing, without needing std::visit everywhere.
 enum class StepKind {
     SourceTable, Reorder, Project, Filter,
-    EqJoin, SemiJoin, CrossJoin,
+    EqJoin, SemiJoin, AntiJoin, CrossJoin,
     ScalarAgg, GroupBy,
     Sort, TopK,
 };

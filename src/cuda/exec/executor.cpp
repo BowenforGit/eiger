@@ -78,6 +78,10 @@ std::unique_ptr<gamax::table> run_step(
             return gamax::phys::semi_join(
                 input_view(0), pl.lkeys,
                 input_view(1), pl.rkeys, ctx);
+        } else if constexpr (std::is_same_v<T, AntiJoinPayload>) {
+            return gamax::phys::anti_join(
+                input_view(0), pl.lkeys,
+                input_view(1), pl.rkeys, ctx);
         } else if constexpr (std::is_same_v<T, CrossJoinPayload>) {
             return gamax::phys::cross_join(
                 input_view(0), input_view(1), ctx);

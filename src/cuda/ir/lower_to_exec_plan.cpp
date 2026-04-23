@@ -590,9 +590,10 @@ ValueId lower_join(const PlanNode& node, Lowering& lo) {
         return out_id;
     }
     if (node.join_kind != JoinKind::Inner
-        && node.join_kind != JoinKind::LeftSemi)
+        && node.join_kind != JoinKind::LeftSemi
+        && node.join_kind != JoinKind::LeftAnti)
     {
-        not_implemented("join kind (only Inner / LeftSemi / Cross wired today)");
+        not_implemented("join kind (only Inner / LeftSemi / LeftAnti / Cross wired today)");
     }
     if (!node.join_condition) {
         lower_error("join: missing condition");
@@ -612,6 +613,15 @@ ValueId lower_join(const PlanNode& node, Lowering& lo) {
     auto l_key_ord = resolve_ordinal(left_schema, keys.left[0]);
     auto r_key_ord = resolve_ordinal(right_schema, keys.right[0]);
 
+    // LeftSemi and LeftAnti share the same output shape — only L's
+    // columns in L's order, with the key first. They differ only in
+    // the membership predicate (keep-if-match vs keep-if-no-match),
+    // which is the kernel's job. Use the same raw-schema builder and
+    // reshape function for both; pick the step kind based on join kind.
+    const bool is_semi_or_anti =
+        node.join_kind == JoinKind::LeftSemi
+     || node.join_kind == JoinKind::LeftAnti;
+
     // Intermediate value: raw join output in physical layout (built
     // over EXEC schemas so upstream pruning is honored).
     Schema raw_schema = (node.join_kind == JoinKind::Inner)
@@ -623,9 +633,12 @@ ValueId lower_join(const PlanNode& node, Lowering& lo) {
     if (node.join_kind == JoinKind::Inner) {
         lo.push_step(StepKind::EqJoin, {l_id, r_id}, raw_id,
                      exec::EqJoinPayload{{l_key_ord}, {r_key_ord}});
-    } else {
+    } else if (node.join_kind == JoinKind::LeftSemi) {
         lo.push_step(StepKind::SemiJoin, {l_id, r_id}, raw_id,
                      exec::SemiJoinPayload{{l_key_ord}, {r_key_ord}});
+    } else {
+        lo.push_step(StepKind::AntiJoin, {l_id, r_id}, raw_id,
+                     exec::AntiJoinPayload{{l_key_ord}, {r_key_ord}});
     }
 
     // Reshape raw → IR-declared order, skipping fields that were
@@ -636,6 +649,7 @@ ValueId lower_join(const PlanNode& node, Lowering& lo) {
               keys.left[0], keys.right[0])
         : compute_semi_join_reshape(
               node.output_schema, left_schema, keys.left[0]);
+    (void)is_semi_or_anti;
 
     ValueId out_id = lo.next_value(std::move(final_schema));
     lo.push_step(StepKind::Reorder, {raw_id}, out_id,
