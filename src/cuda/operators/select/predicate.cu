@@ -63,7 +63,15 @@ gamax::column_ptr evaluate_predicate(
         }
 
         case PredicateNodeType::STRING_IN: {
-            throw std::runtime_error("string_in predicate is not yet implemented");
+            gamax::string_column_view str_col(
+                table.get_column(pred.string_cid()), pred.string_impl(), stream);
+            std::vector<gamax::string_scalar_view> views;
+            views.reserve(pred.string_values().size());
+            for (const auto& s : pred.string_values()) {
+                views.push_back(s->view());
+            }
+            return gamax::in_multiple(
+                str_col, views, stream, pred.string_options());
         }
 
         case PredicateNodeType::AND: {

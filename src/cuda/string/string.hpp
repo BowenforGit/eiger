@@ -89,6 +89,26 @@ column_ptr contains_multiple_bitmask(
     string_op_options options = {}
 );
 
+// `x IN (p0, p1, ...)` — true iff `x` exactly equals any of the
+// supplied patterns. Mirrors `contains_multiple`'s interface and
+// shares its shared-memory pattern staging (`multi_pattern_helper`
+// in string_fast.cu); the inner kernel loop is a length-pre-check +
+// full-string compare, short-circuiting on the first match.
+column_ptr in_multiple(
+    gamax::string_column_view in,
+    const std::vector<gamax::string_scalar_view>& patterns,
+    cudaStream_t stream = cudaStreamDefault,
+    string_op_options options = {}
+);
+
+column_ptr in_multiple_bitmask(
+    gamax::string_column_view in,
+    const std::vector<gamax::string_scalar_view>& patterns,
+    gamax::column_view const& mask,
+    cudaStream_t stream = cudaStreamDefault,
+    string_op_options options = {}
+);
+
 column_ptr argsort_strings(
     gamax::string_column_view in,
     gamax::sort_order order,

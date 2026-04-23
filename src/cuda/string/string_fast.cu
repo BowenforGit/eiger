@@ -456,6 +456,49 @@ __global__ void contains_kmp_kernel(
     }
 }
 
+// `IN (p0, p1, ...)` predicate: result is true iff the row equals ANY
+// pattern. Reuses `multi_pattern_helper` to stage patterns in shared
+// memory, same as `contains_multiple_kernel`, but the inner loop is a
+// length-pre-check + full-string compare rather than a substring scan
+// — a short-circuit OR, not the sequenced AND of contains_multiple.
+template<int kAlignAt=4>
+__global__ void in_multiple_kernel(
+    string_column_view col,
+    const string_scalar_view* patterns,
+    int num_patterns,
+    mutable_column_view out,
+    const bool* __restrict__ mask)
+{
+    __shared__ char pattern_buffer[kMaxNumPatterns][kMaxPatternLen];
+    __shared__ int pattern_sizes[kMaxNumPatterns];
+
+    multi_pattern_helper<kAlignAt> mph(patterns, num_patterns, pattern_buffer, pattern_sizes);
+
+    string_col_impl_t impl(col);
+
+    bool* out_data = out.data<bool>();
+
+    for(size_type idx = blockIdx.x * blockDim.x + threadIdx.x;
+        idx < col.size();
+        idx += blockDim.x * gridDim.x)
+    {
+        if(mask && !mask[idx]) { out_data[idx] = false; continue; }
+        auto str = impl.viewAt(idx);
+        const char* str_ptr = str.data();
+        const auto str_len = str.size();
+
+        bool any_match = false;
+        for(int p = 0; p < num_patterns; ++p) {
+            if(mph.pattern_size(p) != str_len) continue;
+            if(mph.compare(p, str_ptr)) {
+                any_match = true;
+                break;
+            }
+        }
+        out_data[idx] = any_match;
+    }
+}
+
 // TODO: Optimize with alignment-aware pattern_helper
 template<int kAlignAt=4>
 __global__ void contains_multiple_kernel(
@@ -467,7 +510,7 @@ __global__ void contains_multiple_kernel(
 {
     __shared__ char pattern_buffer[kMaxNumPatterns][kMaxPatternLen];
     __shared__ int pattern_sizes[kMaxNumPatterns];
-    
+
     multi_pattern_helper<kAlignAt> mph(patterns, num_patterns, pattern_buffer, pattern_sizes);
 
     string_col_impl_t impl(col);
@@ -653,6 +696,23 @@ struct ContainsMultipleLauncher {
     }
 };
 
+struct InMultipleLauncher {
+    template<int /*CG, ignored*/, int kAlignAt>
+    static void launch(
+        string_column_view in,
+        const string_scalar_view* patterns,
+        int num_patterns,
+        mutable_column_view out,
+        const bool* mask,
+        cudaStream_t stream)
+    {
+        constexpr int block_size = 256;
+        const int grid_size = (in.size() + block_size - 1) / block_size;
+        in_multiple_kernel<kAlignAt><<<grid_size, block_size, 0, stream>>>(in, patterns, num_patterns, out, mask);
+        cudaStreamSynchronize(stream);
+    }
+};
+
 } // namespace
 
 column_ptr equal(
@@ -698,6 +758,15 @@ column_ptr contains_multiple(
     string_op_options options)
 {
     return contains_multiple_bitmask(in, patterns, column_view{}, stream, options);
+}
+
+column_ptr in_multiple(
+    gamax::string_column_view in,
+    const std::vector<gamax::string_scalar_view>& patterns,
+    cudaStream_t stream,
+    string_op_options options)
+{
+    return in_multiple_bitmask(in, patterns, column_view{}, stream, options);
 }
 
 // --- Masked overloads ---
@@ -853,11 +922,62 @@ column_ptr contains_multiple_bitmask(
                     cudaMemcpyHostToDevice, stream);
     
     dispatch_string_ops<ContainsMultipleLauncher>(
-        options, in, reinterpret_cast<const gamax::string_scalar_view*>(d_patterns.data()), 
+        options, in, reinterpret_cast<const gamax::string_scalar_view*>(d_patterns.data()),
         static_cast<int>(patterns.size()), out->mutable_view(), has_mask ? mask.data<bool>() : nullptr, stream);
-    
+
     cudaStreamSynchronize(stream);
-    
+
+    return out;
+}
+
+column_ptr in_multiple_bitmask(
+    gamax::string_column_view in,
+    const std::vector<gamax::string_scalar_view>& patterns,
+    gamax::column_view const& mask,
+    cudaStream_t stream,
+    string_op_options options)
+{
+    const bool has_mask = mask.size() > 0;
+    if(has_mask) {
+        if(mask.type().id() != gamax::type_id::BOOL8) {
+            throw std::runtime_error("Mask must be of type BOOL8");
+        }
+        if(mask.size() != in.size()) {
+            throw std::runtime_error("Mask size must match input column size");
+        }
+    }
+
+    // Empty pattern list: `x IN ()` is definitionally false (SQL
+    // semantics). Preserve the mask when present — rows filtered out
+    // upstream stay false rather than getting re-admitted.
+    if(patterns.empty()) {
+        auto out = gamax::make_column(
+            gamax::data_type{gamax::type_id::BOOL8},
+            in.size());
+        cudaMemsetAsync(out->mutable_view().data<bool>(), 0, in.size() * sizeof(bool), stream);
+        cudaStreamSynchronize(stream);
+        return out;
+    }
+
+    if(patterns.size() > kMaxNumPatterns) {
+        throw std::runtime_error("Too many patterns. Maximum supported: " + std::to_string(kMaxNumPatterns));
+    }
+
+    auto out = gamax::make_column(
+        gamax::data_type{gamax::type_id::BOOL8},
+        in.size());
+
+    // Copy pattern views to device (same shape as contains_multiple_bitmask).
+    gamax::device_buffer d_patterns(patterns.size() * sizeof(string_scalar_view));
+    cudaMemcpyAsync(d_patterns.data(), patterns.data(), patterns.size() * sizeof(string_scalar_view),
+                    cudaMemcpyHostToDevice, stream);
+
+    dispatch_string_ops<InMultipleLauncher>(
+        options, in, reinterpret_cast<const gamax::string_scalar_view*>(d_patterns.data()),
+        static_cast<int>(patterns.size()), out->mutable_view(), has_mask ? mask.data<bool>() : nullptr, stream);
+
+    cudaStreamSynchronize(stream);
+
     return out;
 }
 } // namespace gamax
