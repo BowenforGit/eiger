@@ -14,8 +14,11 @@
 
 #include "memory/column.hpp"
 #include "memory/mem_manager.hpp"
+#include "string/string.hpp"
+#include "string/string_column.hpp"
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
+#include "utils/sequence.cuh"
 #include "cub_wrapper.cuh"
 
 namespace gamax {
@@ -188,24 +191,58 @@ namespace {
     }
 
     std::unique_ptr<gamax::table> compact(
-        gamax::table_view input, 
-        gamax::column_view mask, 
-        cudaStream_t stream) 
+        gamax::table_view input,
+        gamax::column_view mask,
+        cudaStream_t stream)
     {
         if(input.num_columns() == 0) {
             throw std::runtime_error("compact: input table must have at least one column");
         }
 
-        auto res = std::make_unique<gamax::table>();
-
-        for(gamax::size_type i = 0; i < input.num_columns(); i++) {
-            if(i == 0) {
-                res->add_column(compact(input[i], mask, stream));
-            } else {
-                res->add_column(compact(input[i], mask, res->num_rows(), stream));
+        // STRING columns can't go through the numeric column-`compact`
+        // (its `type_dispatcher` excludes STRING). If the input contains
+        // any STRING column, mirror `phys::apply_bitmask`: compact an
+        // identity tid sequence once, then route numeric columns through
+        // gather + STRING columns through `gather_strings`. For pure
+        // numeric input we keep the original faster two-phase path that
+        // avoids recomputing the mask's popcount.
+        bool any_string = false;
+        for (gamax::size_type i = 0; i < input.num_columns(); ++i) {
+            if (input[i].type().id() == gamax::type_id::STRING) {
+                any_string = true;
+                break;
             }
         }
-        
+
+        auto res = std::make_unique<gamax::table>();
+
+        if (!any_string) {
+            for(gamax::size_type i = 0; i < input.num_columns(); i++) {
+                if(i == 0) {
+                    res->add_column(compact(input[i], mask, stream));
+                } else {
+                    res->add_column(compact(input[i], mask, res->num_rows(), stream));
+                }
+            }
+            return res;
+        }
+
+        // Mixed path: materialise surviving tids once, then gather each column.
+        auto seq = gamax::make_sequence<gamax::size_type>(
+            input.num_rows(), 0, 1, stream);
+        auto compact_tids = compact(seq->view(), mask, stream);
+        auto map_view = compact_tids->view();
+
+        for(gamax::size_type i = 0; i < input.num_columns(); i++) {
+            auto col = input[i];
+            if (col.type().id() == gamax::type_id::STRING) {
+                gamax::string_column_view sv(col, gamax::ARROW_STRING, stream);
+                auto gathered = gamax::gather_strings(sv, map_view, stream);
+                res->add_column(std::unique_ptr<gamax::column>(std::move(gathered)));
+            } else {
+                res->add_column(gather(map_view, col, stream));
+            }
+        }
         return res;
     }
 
