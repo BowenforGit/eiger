@@ -547,15 +547,24 @@ PlanPtr build_q8(const QueryBuilder& qb) {
             joined.c("l_extendedprice") * (lit(1.0) - joined.c("l_discount"))},
         {"nation", joined.c("n_name")},
     });
-    // sum(case when nation = 'BRAZIL' then volume else 0) / sum(volume)
-    auto with_case = projected.project({
+    // Pre-split the StringOp (nation = 'BRAZIL') into a BOOL8 column so
+    // the subsequent CASE body is purely numeric — same pattern Q12
+    // and Q14 use.
+    auto with_is_brazil = projected.project({
         {"o_year", projected.c("o_year")},
         {"volume", projected.c("volume")},
+        {"is_brazil",
+            string_op(StringOpKind::Equal,
+                      projected.c("nation"), {"BRAZIL"})},
+    });
+    // sum(case when nation = 'BRAZIL' then volume else 0) / sum(volume)
+    auto with_case = with_is_brazil.project({
+        {"o_year", with_is_brazil.c("o_year")},
+        {"volume", with_is_brazil.c("volume")},
         {"brazil_volume",
             case_when(
-                string_op(StringOpKind::Equal,
-                          projected.c("nation"), {"BRAZIL"}),
-                projected.c("volume"),
+                with_is_brazil.c("is_brazil"),
+                with_is_brazil.c("volume"),
                 lit(0.0))},
     });
     auto agg = with_case.aggregate(
@@ -735,16 +744,26 @@ PlanPtr build_q12(const QueryBuilder& qb) {
     auto joined = o.inner_join(l_filt,
         o.c("o_orderkey") == l_filt.c("l_orderkey"));
 
-    auto is_high = [&](const PlanBuilder& b) {
-        return string_op(StringOpKind::Equal, b.c("o_orderpriority"),
-                         {"1-URGENT"})
-            || string_op(StringOpKind::Equal, b.c("o_orderpriority"),
-                         {"2-HIGH"});
-    };
-    auto with_flags = joined.project({
+    // First Project materialises `is_high` as a BOOL8 column — the
+    // top-level-StringOp-as-Project-item path supported by gap #10.
+    // Second Project's CASE bodies then use it as a pure ColRef, so
+    // the StringOp never appears inside a computational ExprTree.
+    auto with_is_high = joined.project({
         {"l_shipmode", joined.c("l_shipmode")},
-        {"high", case_when(is_high(joined), lit(int64_t{1}), lit(int64_t{0}))},
-        {"low",  case_when(is_high(joined), lit(int64_t{0}), lit(int64_t{1}))},
+        {"is_high",
+            string_op(StringOpKind::Equal, joined.c("o_orderpriority"),
+                      {"1-URGENT"})
+         || string_op(StringOpKind::Equal, joined.c("o_orderpriority"),
+                      {"2-HIGH"})},
+    });
+    auto with_flags = with_is_high.project({
+        {"l_shipmode", with_is_high.c("l_shipmode")},
+        {"high",
+            case_when(with_is_high.c("is_high"),
+                      lit(int64_t{1}), lit(int64_t{0}))},
+        {"low",
+            case_when(with_is_high.c("is_high"),
+                      lit(int64_t{0}), lit(int64_t{1}))},
     });
     auto agg = with_flags.aggregate(
         {"l_shipmode"},
