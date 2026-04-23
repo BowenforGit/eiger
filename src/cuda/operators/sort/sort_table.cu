@@ -164,14 +164,14 @@ namespace {
         
         auto sort_key_col_view = table.get_column(sort_key_index);
         gamax::string_column_view sort_key_str_view(sort_key_col_view, gamax::ARROW_STRING, stream);
-        
+
         // Step 1: argsort_strings to get sorted indices A (returns size_type)
         auto sorted_indices_A = gamax::argsort_strings(sort_key_str_view, sort_order, stream);
-        
+
         // Step 2: Create index column B (0 to N-1) using RidType and sort with A
         auto indices_B = gamax::make_sequence<RidType>(num_rows, 0, 1, stream);
         auto [sorted_A, sorted_B] = sort_column_pair(
-            sorted_indices_A->view(), indices_B->view(), 0, -1, 
+            sorted_indices_A->view(), indices_B->view(), 0, -1,
             gamax::sort_order::ASCENDING, nullptr, 0, stream);
         
         // Classify columns
@@ -187,13 +187,18 @@ namespace {
         }
         
         std::vector<std::unique_ptr<gamax::column>> sorted_columns(num_cols);
-        
-        // Use sorted_B for numeric columns, sorted_indices_A for string columns
+
+        // Numeric columns go through sort_column_pair using the
+        // RidType-typed sorted_B. String columns are handled separately
+        // below with sorted_indices_A (size_type), since `gather_strings`
+        // expects a size_type gather map — passing an int32 RidType-map
+        // would read past the buffer end.
+        std::vector<gamax::size_type> empty_string_indices;
         apply_sorted_indices_to_columns(
-            table, sorted_B->view(), numeric_col_indices, string_col_indices,
+            table, sorted_B->view(), numeric_col_indices, empty_string_indices,
             sorted_columns, stream);
-        
-        // Overwrite the string columns with gathering using original sorted_indices_A
+
+        // Gather the string columns using the size_type sorted_indices_A.
         for (auto col_idx : string_col_indices) {
             auto col_view = table.get_column(col_idx);
             gamax::string_column_view str_view(col_view, gamax::ARROW_STRING, stream);
