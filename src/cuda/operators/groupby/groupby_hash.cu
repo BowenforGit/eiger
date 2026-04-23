@@ -15,6 +15,7 @@
 #include "operators/groupby/groupby.hpp"
 #include "operators/groupby/aggregation.hpp"
 #include "operators/groupby/agg_func.cuh"
+#include "operators/join/materialize.hpp"
 #include "types/data_type.hpp"
 #include "types/sentinel.hpp"
 #include "agg_helper.cuh"
@@ -36,14 +37,19 @@ namespace {
         }
     }
 
+    // For each input row, decide its group id and record the row index
+    // that became the group's "leader" (first inserter). The leader_tid
+    // column, trimmed to num_groups after this kernel, is later used as
+    // a gather map to materialise the output key columns — side-steps
+    // writing keys inline (which fails for STRING, since STRING output
+    // columns need precomputed offsets before writing).
     template<typename Set>
     __global__ void compute_groupid_kernel(
         Set set_ref,
-        gamax::experimental::table_device_view keys_in,
-        gamax::experimental::mutable_table_device_view keys_out,
         const gamax::size_type num_items,
         gamax::size_type* __restrict__ sparse_group_ids,
         gamax::size_type* __restrict__ group_ids_loc,
+        gamax::size_type* __restrict__ leader_tid,
         gamax::size_type* __restrict__ num_groups)
     {
         int64_t const loop_stride = gridDim.x * blockDim.x;
@@ -51,16 +57,17 @@ namespace {
 
         while (idx < num_items) {
             auto [iter, is_new_key] = set_ref.insert_and_find(idx);
-            
+
             if (is_new_key) {
                 gamax::size_type gid = gamax::atomic::atomic_add(num_groups, static_cast<gamax::size_type>(1));
                 sparse_group_ids[idx] = gid;
-                // Copy all key columns to output
-                gamax::copy_row(keys_in, keys_out, idx, gid);
-            } 
+                // Leader tid is indexed by gid — unique per thread in
+                // the is_new_key branch, so no race.
+                leader_tid[gid] = static_cast<gamax::size_type>(idx);
+            }
 
             group_ids_loc[idx] = *iter;
-            
+
             idx += loop_stride;
         }
     }
@@ -171,7 +178,17 @@ namespace {
         }
     }
 
-    // Multi-key groupby implementation
+    // Multi-key groupby implementation.
+    //
+    // Output layout: [key_cols..., agg_cols...]. Key columns are
+    // produced by gathering the input key columns through a leader-tid
+    // map — one size_type per group, recording the first input row that
+    // inserted each group. This side-steps writing keys inside
+    // `compute_groupid_kernel` (which fails for STRING, since STRING
+    // output columns require precomputed offsets). Numeric keys pay
+    // the same gather cost; the benefit is a single uniform code path
+    // that `simple_materialize` already dispatches correctly for STRING
+    // via `gather_strings`.
     std::unique_ptr<gamax::table> hash_groupby_multi_key(
         gamax::table_view key,
         gamax::table_view val,
@@ -185,38 +202,25 @@ namespace {
 
         auto d_agg_req_buf = std::make_unique<gamax::device_buffer>(sizeof(gamax::groupby::aggregation_request) * agg_requests.size(), false);
         cudaMemcpy(d_agg_req_buf->data(), agg_requests.data(), d_agg_req_buf->size(), cudaMemcpyHostToDevice);
-        
-        // Create result columns for ALL key columns first, then aggregation results
-        std::vector<std::unique_ptr<gamax::column>> final_columns;
-        for(gamax::size_type i = 0; i < num_key_cols; i++) {
-            final_columns.push_back(
-                gamax::make_column(
-                    key.get_column(i).type(), 
-                    estimated_num_groups, 
-                    false));
-        }
+
+        // Pre-allocate only the aggregation result columns — the kernels
+        // need these as output buffers. Key columns are materialised
+        // after we know num_groups, via a leader-tid gather; see below.
+        std::vector<std::unique_ptr<gamax::column>> agg_result_cols;
         for(const auto& agg : agg_requests) {
-            final_columns.push_back(
+            agg_result_cols.push_back(
                 gamax::make_column(
-                    gamax::groupby::agg_output_data_type(agg.agg_kind, val.get_column(agg.column_index).type()), 
+                    gamax::groupby::agg_output_data_type(agg.agg_kind, val.get_column(agg.column_index).type()),
                     estimated_num_groups));
         }
-        auto res = std::make_unique<gamax::table>(std::move(final_columns));
-        
+        auto agg_result_table = std::make_unique<gamax::table>(std::move(agg_result_cols));
+
         constexpr double load_factor = 0.25;
         gamax::size_type constexpr empty_key_sentinel = gamax::sentinel<gamax::size_type>();
-        auto cuco_allocator = *get_thrust_allocator<cuco::pair<gamax::size_type, gamax::size_type>>(stream);   
+        auto cuco_allocator = *get_thrust_allocator<cuco::pair<gamax::size_type, gamax::size_type>>(stream);
 
         // Create device views for keys
         auto key_device_view = key.device_view(stream);
-        
-        // Build output keys table view (only key columns from result)
-        std::vector<gamax::mutable_column_view> res_key_col_views;
-        for(gamax::size_type i = 0; i < num_key_cols; i++) {
-            res_key_col_views.push_back(res->get_column(i).mutable_view());
-        }
-        gamax::mutable_table_view res_keys_view(res_key_col_views);
-        auto res_keys_device_view = res_keys_view.device_view(stream);
 
         // Create the hash set using row-based equality and hashing
         auto set = cuco::static_set{estimated_num_groups,
@@ -226,68 +230,73 @@ namespace {
                                 cuco::linear_probing<1, gamax::row_hasher>{gamax::row_hasher{*key_device_view}},
                                 cuco::thread_scope_device,
                                 cuco::storage<1>{},
-                                cuco_allocator, 
+                                cuco_allocator,
                                 stream
                                 };
         auto set_ref = set.ref(cuco::insert_and_find);
 
         auto sparse_group_ids = gamax::make_idx_column(input_num_rows, false);
         auto groupid_loc = gamax::make_idx_column(input_num_rows, false);
+        // leader_tid[gid] = input-row index of the first inserter for gid.
+        // Sized at estimated_num_groups (upper bound on distinct groups),
+        // trimmed to num_groups post-kernel before use as a gather map.
+        auto leader_tid = gamax::make_idx_column(estimated_num_groups, false);
         auto d_num_groups = gamax::make_idx_column(1, true);
 
         compute_groupid_kernel<<<num_tb(input_num_rows, 256), 256, 0, stream>>>(
-            set_ref, 
-            *key_device_view, 
-            *res_keys_device_view,
-            input_num_rows, 
-            sparse_group_ids->data<gamax::size_type>(), 
-            groupid_loc->data<gamax::size_type>(), 
+            set_ref,
+            input_num_rows,
+            sparse_group_ids->data<gamax::size_type>(),
+            groupid_loc->data<gamax::size_type>(),
+            leader_tid->data<gamax::size_type>(),
             d_num_groups->data<gamax::size_type>());
 
             gamax::size_type num_groups;
             cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
             cudaStreamSynchronize(stream);
 
-            // Create a view of only the aggregation result columns (after key columns)
+            // Aggregation side — unchanged shape, but the result table
+            // now holds only agg cols (no key cols), so column indices
+            // are 0..num_aggs-1 instead of num_key_cols..num_key_cols+num_aggs-1.
             std::vector<gamax::mutable_column_view> agg_result_col_views;
             for(gamax::size_type i = 0; i < agg_requests.size(); i++) {
-                agg_result_col_views.push_back(res->get_column(num_key_cols + i).mutable_view());
+                agg_result_col_views.push_back(agg_result_table->get_column(i).mutable_view());
             }
             gamax::mutable_table_view agg_results_view(agg_result_col_views);
             auto agg_res_device_view = agg_results_view.device_view(stream);
 
             auto val_view = val.device_view(stream);
 
-            initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *agg_res_device_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
-            
+            initialize_aggregation<<<num_tb(agg_result_table->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *agg_res_device_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
+
             // Calculate shared memory size with 8-byte alignment padding between aggregation buffers
             auto compute_aligned_smem_bytes = [&](gamax::size_type n_groups) -> std::size_t {
                 std::size_t total_bytes = 0;
                 for(gamax::size_type i = 0; i < agg_requests.size(); i++) {
-                    total_bytes += n_groups * gamax::size_of(res->get_column(num_key_cols + i).type());
+                    total_bytes += n_groups * gamax::size_of(agg_result_table->get_column(i).type());
                     // Add alignment padding for next buffer (align to 8 bytes)
                     total_bytes = (total_bytes + 7) & ~std::size_t(7);
                 }
                 return total_bytes;
             };
-            
+
             // Estimate bytes per group (with alignment overhead)
             std::size_t agg_bytes_per_group = compute_aligned_smem_bytes(1);
-            
+
             const std::size_t max_shared_mem_size = static_cast<std::size_t>(gamax::max_smem_bytes());
-            /* When the number of groups becomes larger, 
-            it is no longer efficient to aggregate in SMEM 
+            /* When the number of groups becomes larger,
+            it is no longer efficient to aggregate in SMEM
             even though it goes not go beyond SMEM's capacity.
             Experimentally, we found 2048 to be the threshold */
             const auto smem_groups = std::min(max_shared_mem_size / agg_bytes_per_group, 16384UL);
 
             if(num_groups > smem_groups) {
                  compute_aggregation<<<num_tb(input_num_rows, 1024), 1024, 0, stream>>>(
-                    *val_view, 
-                    *agg_res_device_view, 
-                    sparse_group_ids->data<gamax::size_type>(), 
-                    groupid_loc->data<gamax::size_type>(), 
-                    static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()), 
+                    *val_view,
+                    *agg_res_device_view,
+                    sparse_group_ids->data<gamax::size_type>(),
+                    groupid_loc->data<gamax::size_type>(),
+                    static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()),
                     agg_requests.size());
             } else {
                 const std::size_t sm_bytes = compute_aligned_smem_bytes(num_groups);
@@ -300,20 +309,37 @@ namespace {
                 int maxActiveBlocks;
                 cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxActiveBlocks, agg_fn, 1024, 0);
                 agg_fn<<<SM_COUNT*maxActiveBlocks, 1024, sm_bytes, stream>>>(
-                    *val_view, 
-                    *agg_res_device_view, 
+                    *val_view,
+                    *agg_res_device_view,
                     num_groups,
-                    sparse_group_ids->data<gamax::size_type>(), 
-                    groupid_loc->data<gamax::size_type>(), 
-                    static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()), 
+                    sparse_group_ids->data<gamax::size_type>(),
+                    groupid_loc->data<gamax::size_type>(),
+                    static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()),
                     agg_requests.size());
                 CHECK_LAST_CUDA_ERROR();
             }
 
             cudaStreamSynchronize(stream);
 
-            res->set_rows(num_groups);
-            return res;
+            agg_result_table->set_rows(num_groups);
+
+            // Trim leader_tid to num_groups and use it as a gather map to
+            // materialise the output key columns. `simple_materialize`
+            // dispatches STRING→gather_strings, numeric→util::device::gather.
+            leader_tid->set_size(num_groups);
+            auto leader_view = leader_tid->view();
+
+            std::vector<std::unique_ptr<gamax::column>> final_columns;
+            final_columns.reserve(num_key_cols + agg_requests.size());
+            for(gamax::size_type i = 0; i < num_key_cols; i++) {
+                final_columns.push_back(gamax::join::detail::simple_materialize(
+                    key.get_column(i), leader_view, stream));
+            }
+            // release_column leaves a nullptr in place; walk forward.
+            for(gamax::size_type i = 0; i < static_cast<gamax::size_type>(agg_requests.size()); i++) {
+                final_columns.push_back(agg_result_table->release_column(i));
+            }
+            return std::make_unique<gamax::table>(std::move(final_columns));
     }
 } // unnamed namespace
 

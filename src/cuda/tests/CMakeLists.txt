@@ -13,6 +13,7 @@ set(testSources
     groupby/groupby_sort_test.cu
     groupby/groupby_hash_test.cu
     groupby/groupby_multikeys_test.cu
+    groupby/groupby_string_test.cu
     compress/dictionary_encode_dict_ready_test.cu
     aggregate/aggregate_test.cu
     sort/sort_partition_test.cu

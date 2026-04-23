@@ -61,7 +61,9 @@ gamax::ir::PlanPtr build_query(
     switch (qid) {
         case 1:  return build_q1(qb);
         case 2:  return build_q2(qb);
+        case 4:  return build_q4(qb);
         case 6:  return build_q6(qb);
+        case 10: return build_q10(qb);
         case 11: return build_q11(qb);
         case 14: return build_q14(qb);
         case 15: return build_q15(qb);

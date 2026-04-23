@@ -615,7 +615,11 @@ table_ptr group_by(gamax::table_view keys,
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.reserve(specs.size());
     for (const auto& s : specs) requests.emplace_back(s.column, s.agg);
-    gamax::groupby::groupby_hint hint;  // defaults; tune later
+    gamax::groupby::groupby_hint hint;
+    // SKF (smart-key-fusion) left OFF for now. The `groupby_noskf` path
+    // combined with the new STRING→HASH / multi-col→HASH routing in
+    // `auto_select_groupby_algo` is sufficient to cover STRING and
+    // mixed keys; enabling SKF is an independent perf question.
     return gamax::groupby::groupby(
         keys, values, requests, hint, ctx.stream);
 }

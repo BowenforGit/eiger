@@ -65,19 +65,40 @@ void compute_avg_from_sum(
 }
 
 void auto_select_groupby_algo(
-    gamax::table_view key, 
+    gamax::table_view key,
     gamax::groupby::groupby_hint& hint,
     cudaStream_t stream)
 {
-    if(hint.groupby_algo != gamax::groupby::AUTO_ALGO || key.num_columns() != 1) {
-        // Currently, only auto-select for single-column keys
+    if(hint.groupby_algo != gamax::groupby::AUTO_ALGO) return;
+
+    // STRING keys → HASH. Only the hash path has STRING-aware
+    // row_hasher / row_equal; sort and partition assume trivially
+    // comparable numeric keys. This check runs first so `compute_ndv_approx`
+    // below (which uses the STRING-unaware type_dispatcher) never sees a
+    // STRING column.
+    for(gamax::size_type i = 0; i < key.num_columns(); i++) {
+        if(key.get_column(i).type().id() == gamax::type_id::STRING) {
+            hint.groupby_algo = gamax::groupby::HASH;
+            return;
+        }
+    }
+
+    // Multi-col numeric keys → HASH. If the caller wanted SKF's key
+    // fusion, they already ran it in `groupby()` top-level, and by
+    // the time we see multi-col here it means either SKF is disabled
+    // or compression gave up (bit budget). The cardinality heuristic
+    // below requires a single column; HASH is the safe functional
+    // default for multi-col — a multi-col partition heuristic would
+    // need an NDV estimator we don't have.
+    if(key.num_columns() != 1) {
+        hint.groupby_algo = gamax::groupby::HASH;
         return;
     }
 
     auto est_groups = gamax::stats::compute_ndv_approx(
         key.get_column(0),
         stream).get<gamax::size_type>();
-    
+
 
     bool is_4_byte_key = (gamax::size_of(key.get_column(0).type()) == 4);
 
@@ -229,9 +250,15 @@ std::unique_ptr<gamax::table> groupby_noskf(
         count_col_view = internal_result->get_column(num_key_cols + count_col_internal_idx).view();
     }
     
-    // Add all key columns from internal result
+    // Move key columns out of internal_result rather than deep_copy
+    // them — internal_result is discarded at function return anyway,
+    // and `column::deep_copy` uses `size_of(type)` which doesn't
+    // handle STRING. `release_column` leaves nullptr in the vector;
+    // the only subsequent reads from internal_result are into agg
+    // cols (indices ≥ num_key_cols), so the nullptrs we leave here
+    // aren't touched.
     for (gamax::size_type k = 0; k < num_key_cols; ++k) {
-        final_columns.push_back(internal_result->get_column(k).deep_copy(stream));
+        final_columns.push_back(internal_result->release_column(k));
     }
     
     gamax::size_type num_groups = final_columns[0]->size();

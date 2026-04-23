@@ -43,12 +43,12 @@ struct element_hash_functor {
     __device__ std::size_t operator()(gamax::column_view& col, gamax::size_type idx) const {
         gamax::string_column_view str_col(col, ARROW_STRING);
         arrow_string_col_impl str_impl(str_col);
-        
+
         auto str_view = str_impl.viewAt(idx);
-        
+
         cuco::default_hash_function<char> hasher{};
         return hasher.compute_hash(
-            reinterpret_cast<std::byte const*>(str_view.data()), 
+            reinterpret_cast<std::byte const*>(str_view.data()),
             str_view.size());
     }
 };
@@ -94,41 +94,10 @@ struct row_hasher {
     }
 };
 
-// ============================================================================
-// Row copy utilities
-// ============================================================================
-
-// Functor to copy a single element from source column to destination column
-struct copy_element_functor {
-    gamax::size_type src_idx;
-    gamax::size_type dst_idx;
-    const void* src_data;
-    void* dst_data;
-
-    template<typename T, std::enable_if_t<!std::is_same_v<T, gamax::string_type_tag>, int> = 0>
-    __device__ void operator()() const {
-        const T* typed_src = static_cast<const T*>(src_data);
-        T* typed_dst = static_cast<T*>(dst_data);
-        typed_dst[dst_idx] = typed_src[src_idx];
-    }
-};
-
-// Copy a row from source table to destination table (non-string columns only)
-// For tables with string columns, use copy_row_with_strings instead
-template<typename SrcTableView>
-__device__ void copy_row(
-    SrcTableView const& src_table,
-    gamax::experimental::mutable_table_device_view& dst_table,
-    gamax::size_type src_row_idx,
-    gamax::size_type dst_row_idx)
-{
-    for(gamax::size_type col = 0; col < src_table.num_columns(); col++) {
-        auto src_col = src_table.get_column(col);
-        auto dst_col = dst_table.get_column(col);
-        
-        copy_element_functor functor{src_row_idx, dst_row_idx, src_col.data(), dst_col.data()};
-        gamax::type_dispatcher(src_col.type(), functor);
-    }
-}
+// Row-copy helpers used to live here; they were numeric-only (`type_dispatcher`
+// has no STRING case) and their only caller — the hash-groupby insert kernel —
+// now records a leader-tid per new group and materialises key columns via
+// `join::detail::simple_materialize` after the kernel returns, so STRING keys
+// work uniformly. See `operators/groupby/groupby_hash.cu::compute_groupid_kernel`.
 
 } // namespace gamax
