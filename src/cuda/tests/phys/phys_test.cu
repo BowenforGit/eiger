@@ -354,9 +354,11 @@ TEST(PhysSemiJoin, KeepsLeftOnly) {
     EXPECT_EQ(out->num_rows(), 2);
 }
 
-// ── Outer / Anti joins: still declared-but-not-implemented ────────
+// ── Outer join: still declared-but-not-implemented ────────────────
+// Anti-join is now wired end-to-end (see tests/join/anti_join_test.cu
+// and phys::anti_join); only left_outer_join remains unimplemented.
 
-TEST(PhysJoins, OuterAndAntiStillThrow) {
+TEST(PhysJoins, OuterJoinStillThrows) {
     std::vector<int32_t> a = {1};
     std::vector<gamax::column_ptr> cols;
     cols.push_back(mk_col(a));
@@ -368,8 +370,6 @@ TEST(PhysJoins, OuterAndAntiStillThrow) {
     auto R = gamax::make_table(std::move(cols2));
 
     EXPECT_THROW(phys::left_outer_join(L->view(), {0}, R->view(), {0}, default_ctx()),
-                 std::runtime_error);
-    EXPECT_THROW(phys::anti_join(L->view(), {0}, R->view(), {0}, default_ctx()),
                  std::runtime_error);
 }
 

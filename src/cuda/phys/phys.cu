@@ -186,18 +186,21 @@ table_ptr project(gamax::table_view in,
                   std::vector<ProjectItem>& items,
                   const Context& ctx)
 {
-    // Per-item classification. Four kinds:
+    // Per-item classification. Five kinds:
     //   * Predicate        → select_to_bitmask (BOOL8 out)
     //   * ExprTree ColRef  → copy_any_column   (STRING-safe)
     //   * Computed ExprTree→ batched project::project
+    //   * Substring        → gamax::substring  (STRING out)
     //   * (empty input is a separate branch below)
-    enum class Kind { Predicate, ColRef, Computed };
+    enum class Kind { Predicate, ColRef, Computed, Substring };
     const auto n = static_cast<gamax::size_type>(items.size());
     std::vector<Kind> kinds(n, Kind::Computed);
     std::vector<gamax::expression::ExprTree> computed;
     for (gamax::size_type i = 0; i < n; ++i) {
         if (std::holds_alternative<gamax::select::Predicate>(items[i])) {
             kinds[i] = Kind::Predicate;
+        } else if (std::holds_alternative<SubstringItem>(items[i])) {
+            kinds[i] = Kind::Substring;
         } else {
             auto& e = std::get<gamax::expression::ExprTree>(items[i]);
             if (e.is_column_ref()) {
@@ -210,7 +213,8 @@ table_ptr project(gamax::table_view in,
     }
 
     // Empty input → 0 rows of each item's declared output type.
-    // Predicate items always produce BOOL8.
+    // Predicate items always produce BOOL8; Substring items always
+    // produce STRING.
     if (in.num_rows() == 0) {
         std::vector<gamax::column_ptr> cols;
         cols.reserve(n);
@@ -218,6 +222,9 @@ table_ptr project(gamax::table_view in,
             if (kinds[i] == Kind::Predicate) {
                 cols.push_back(make_zero_row_column(
                     gamax::data_type{gamax::type_id::BOOL8}, ctx.stream));
+            } else if (kinds[i] == Kind::Substring) {
+                cols.push_back(make_zero_row_column(
+                    gamax::data_type{gamax::type_id::STRING}, ctx.stream));
             } else {
                 auto& e = std::get<gamax::expression::ExprTree>(items[i]);
                 cols.push_back(make_zero_row_column(e.type(), ctx.stream));
@@ -257,6 +264,17 @@ table_ptr project(gamax::table_view in,
                 // request order. remove_column(0) keeps head-taking
                 // semantics deterministic.
                 out.push_back(computed_tbl->remove_column(0));
+                break;
+            }
+            case Kind::Substring: {
+                auto& si = std::get<SubstringItem>(items[i]);
+                gamax::string_column_view src_view(
+                    in.get_column(si.src_col),
+                    gamax::ARROW_STRING,
+                    ctx.stream);
+                auto r = gamax::substring(
+                    src_view, si.sql_offset, si.length, ctx.stream);
+                out.push_back(std::unique_ptr<gamax::column>(std::move(r)));
                 break;
             }
         }

@@ -50,6 +50,7 @@ if(USE_NVIDIA)
         string/string_test.cu
         string/string_contains_multiple_test.cu
         string/string_in_test.cu
+        string/string_substring_test.cu
         string/string_sort_test.cu
         sort/sort_table_test.cu
         sort/topk_table_test.cu

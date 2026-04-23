@@ -261,7 +261,109 @@ namespace {
             gather_map.size(),
             stream,
             ARROW_STRING);
-    }     
+    }
 
-    
+    namespace {
+        __global__ void substring_kernel(
+            const char* in_data,
+            const gamax::size_type* in_offsets,
+            char* out_data,
+            const gamax::size_type* out_offsets,
+            gamax::size_type start,
+            gamax::size_type n)
+        {
+            gamax::size_type idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= n) return;
+
+            const auto out_start = out_offsets[idx];
+            const auto out_end   = out_offsets[idx + 1];
+            const auto out_len   = out_end - out_start;
+            if (out_len <= 0) return;
+
+            const auto in_start = in_offsets[idx] + start;
+            char* out_ptr = out_data + out_start;
+            const char* in_ptr = in_data + in_start;
+            for (gamax::size_type i = 0; i < out_len; ++i) {
+                out_ptr[i] = in_ptr[i];
+            }
+        }
+    } // namespace
+
+    string_column_ptr substring(
+        gamax::string_column_view in,
+        gamax::size_type sql_offset,
+        gamax::size_type length,
+        cudaStream_t stream)
+    {
+        // SQL offsets ≤ 0 are clamped to 1 (SQL-92 behavior is
+        // implementation-defined; TPC-H only uses 1-based positive
+        // offsets, so we don't bother emulating negative-offset
+        // semantics). Negative length is an error.
+        if (length < 0) {
+            throw std::runtime_error("substring: negative length");
+        }
+        const gamax::size_type start = sql_offset > 0 ? (sql_offset - 1) : 0;
+        const auto n = in.size();
+
+        using string_col_impl_t = typename id_to_string_impl<ARROW_STRING>::string_col_impl;
+        using buffer_index_type = typename string_col_impl_t::header_entry_type::buffer_offset_type;
+
+        const buffer_index_type* in_offsets =
+            reinterpret_cast<const buffer_index_type*>(in.meta());
+
+        // Output string lengths: clamp against remaining row width and
+        // the caller-provided `length`.
+        auto out_strlen = gamax::make_column<buffer_index_type>(n, stream);
+        auto itr = thrust::make_counting_iterator<gamax::size_type>(0);
+        thrust::transform(
+            thrust::cuda::par(*get_thrust_allocator()).on(stream),
+            itr, itr + n,
+            out_strlen->template data<buffer_index_type>(),
+            [in_offsets, start, length] __device__ (gamax::size_type idx) {
+                const auto row_len = in_offsets[idx + 1] - in_offsets[idx];
+                if (start >= row_len) return static_cast<buffer_index_type>(0);
+                const auto avail = row_len - start;
+                return static_cast<buffer_index_type>(
+                    avail < length ? avail : length);
+            });
+
+        auto out_offsets = gamax::util::device::prefix_sum(
+            out_strlen->view(),
+            gamax::prefix_sum_options::INCLUSIVE_PAD_ZERO,
+            gamax::data_type{type_to_id<buffer_index_type>()},
+            stream);
+
+        gamax::size_type total_bytes = 0;
+        cudaMemcpyAsync(
+            &total_bytes,
+            out_offsets->data<buffer_index_type>() + n,
+            sizeof(buffer_index_type),
+            cudaMemcpyDeviceToHost,
+            stream);
+        cudaStreamSynchronize(stream);
+
+        gamax::device_buffer out_data(total_bytes, false, stream);
+        char* out_data_ptr = reinterpret_cast<char*>(out_data.data());
+        const buffer_index_type* out_offsets_ptr =
+            out_offsets->data<buffer_index_type>();
+        const char* in_data_ptr = in.template data<char>();
+
+        if (n > 0) {
+            constexpr int block_size = 256;
+            const int num_blocks = static_cast<int>((n + block_size - 1) / block_size);
+            substring_kernel<<<num_blocks, block_size, 0, stream>>>(
+                in_data_ptr, in_offsets,
+                out_data_ptr, out_offsets_ptr,
+                start, n);
+        }
+
+        cudaStreamSynchronize(stream);
+        return gamax::make_string_column(
+            std::move(out_data),
+            std::move(out_offsets->buffer()),
+            n,
+            stream,
+            ARROW_STRING);
+    }
+
 } // namespace gamax

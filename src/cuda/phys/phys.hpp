@@ -83,17 +83,31 @@ table_ptr reorder(gamax::table_view in,
 
 // ── Computation ───────────────────────────────────────────────────
 
-// Per-item projection. Each item is either a computed/ColRef
-// `ExprTree` (evaluated through the existing numeric expression
-// evaluator) or a `Predicate` (evaluated through `select_to_bitmask`
-// to produce a BOOL8 column). Output schema matches the `items`
-// vector positionally. The predicate path is the vehicle for
-// StringOp-based columns (e.g. `p_type LIKE 'PROMO%'`) living
-// at the top of a ProjectItem — StringOps nested inside a numeric
-// computational context are still rejected upstream at lowering time.
+// Substring projection: produces a STRING column by slicing
+// `[sql_offset, sql_offset + length)` out of `src_col`. `sql_offset`
+// is 1-based (SQL convention); non-positive offsets are clamped to 1.
+// Offsets and lengths are constants pinned at plan time — per-row
+// dynamic bounds are not wired today (neither TPC-H Q22 nor any
+// currently-supported query needs them).
+struct SubstringItem {
+    gamax::size_type src_col;
+    gamax::size_type sql_offset;
+    gamax::size_type length;
+};
+
+// Per-item projection. Each item is one of:
+//   * computed / ColRef `ExprTree` (numeric expression evaluator)
+//   * `Predicate`                  (→ BOOL8 column via select_to_bitmask)
+//   * `SubstringItem`              (→ STRING column via gamax::substring)
+// Output schema matches the `items` vector positionally. The predicate
+// path is the vehicle for StringOp-based columns (e.g. `p_type LIKE
+// 'PROMO%'`) living at the top of a ProjectItem — StringOps nested
+// inside a numeric computational context are still rejected upstream
+// at lowering time.
 using ProjectItem = std::variant<
     gamax::expression::ExprTree,
-    gamax::select::Predicate>;
+    gamax::select::Predicate,
+    SubstringItem>;
 table_ptr project(gamax::table_view in,
                   std::vector<ProjectItem>& items,
                   const Context& ctx);

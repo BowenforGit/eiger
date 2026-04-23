@@ -109,6 +109,17 @@ column_ptr in_multiple_bitmask(
     string_op_options options = {}
 );
 
+// SQL SUBSTRING(str FROM offset FOR length). `sql_offset` is 1-based,
+// matching the SQL convention the IR builders hand us (e.g.
+// `substring(c_phone, 1, 2)` takes the first two characters). Rows
+// whose effective start is past the end of the input produce an
+// empty string. `length` clamps to the remaining row width.
+string_column_ptr substring(
+    gamax::string_column_view in,
+    gamax::size_type sql_offset,
+    gamax::size_type length,
+    cudaStream_t stream = cudaStreamDefault);
+
 column_ptr argsort_strings(
     gamax::string_column_view in,
     gamax::sort_order order,

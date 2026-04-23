@@ -203,18 +203,48 @@ ValueId lower_project(const PlanNode& node, Lowering& lo) {
     auto input_id = lower_node(*node.inputs[0], lo);
     const auto& in_schema = lo.exec_schema(input_id);
 
-    // Dispatch per item: items that contain a StringOp anywhere go
-    // through `lower_expr_to_predicate` (which emits a Predicate the
-    // Project step evaluates via select_to_bitmask); everything else
-    // goes through `lower_expr_to_tree`. The StringOp must sit at a
-    // position that `lower_expr_to_predicate` accepts — practically
-    // that means a BOOL8-producing subtree. A StringOp nested inside a
-    // numeric computational ExprTree (e.g. inside a CASE body) is
-    // still rejected; builders must pre-split such items.
+    // Dispatch per item:
+    //   * `substring(col, offset_lit, length_lit)` → SubstringItem
+    //     variant (produces a STRING column via gamax::substring).
+    //     We lower it before the StringOp/ExprTree branches because
+    //     its FunctionCall has no ExprTree form (STRING output).
+    //   * items that contain a StringOp anywhere → lower_expr_to_predicate
+    //     (Predicate evaluated via select_to_bitmask → BOOL8).
+    //   * everything else → lower_expr_to_tree. StringOps nested inside
+    //     a numeric ExprTree (e.g. inside a CASE body) are still rejected;
+    //     builders must pre-split those.
     std::vector<gamax::phys::ProjectItem> items;
     items.reserve(node.project_items.size());
     for (const auto& it : node.project_items) {
-        if (expr_contains_string_op(it.expr)) {
+        const auto& e = it.expr;
+        if (e.kind == ExprKind::FunctionCall && e.function_name == "substring") {
+            if (e.children.size() != 3) {
+                lower_error("substring(...) takes exactly three arguments");
+            }
+            if (e.children[0].kind != ExprKind::ColRef ||
+                e.children[0].type.id() != gamax::type_id::STRING) {
+                lower_error("substring: first argument must be a STRING ColRef");
+            }
+            if (e.children[1].kind != ExprKind::Literal ||
+                e.children[2].kind != ExprKind::Literal) {
+                lower_error("substring: offset and length must be integer literals");
+            }
+            auto get_int = [](const Expr& lit) -> int64_t {
+                return std::visit([](auto&& v) -> int64_t {
+                    using V = std::decay_t<decltype(v)>;
+                    if constexpr (std::is_same_v<V, int64_t>) return v;
+                    else if constexpr (std::is_same_v<V, bool>) return v ? 1 : 0;
+                    else lower_error("substring: offset/length literal must be integer");
+                }, lit.literal);
+            };
+            const int64_t sql_offset = get_int(e.children[1]);
+            const int64_t length     = get_int(e.children[2]);
+            auto ordinal = resolve_ordinal(in_schema, e.children[0].col_ref);
+            items.emplace_back(gamax::phys::SubstringItem{
+                ordinal,
+                static_cast<gamax::size_type>(sql_offset),
+                static_cast<gamax::size_type>(length)});
+        } else if (expr_contains_string_op(it.expr)) {
             items.emplace_back(lower_expr_to_predicate(
                 it.expr, in_schema, cudaStreamDefault));
         } else {
