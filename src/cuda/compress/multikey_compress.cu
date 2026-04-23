@@ -232,10 +232,13 @@ column_ptr multikey_compress_impl(
     
     const int max_bits = options.max_fused_key_bits;
 
-    // Step 1: Check if all keys are fusion-compatible
+    // Step 1: Check if all keys are fusion-compatible. Use the
+    // "all types" dispatcher so STRING columns reach the functor's
+    // STRING specialization (which returns false) instead of throwing
+    // from the narrower numeric-only dispatcher.
     for (gamax::size_type k = 0; k < num_cols; ++k) {
         auto col = table.get_column(k);
-        bool compatible = gamax::type_dispatcher(col.type(), is_fusion_compatible_functor{});
+        bool compatible = gamax::type_dispatcher_all(col.type(), is_fusion_compatible_functor{});
         if (!compatible) {
             return nullptr;
         }
