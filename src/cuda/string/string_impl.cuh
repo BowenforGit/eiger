@@ -426,16 +426,22 @@ public:
     string_column_impl(Header header_impl, Buffer buffer_impl)
         : header_impl_(header_impl), buffer_impl_(buffer_impl) {}
     
-    // TODO: use the const_cast is not elegant, find a better way
+    // `col.data()` / `col.data<void>()` runs `_data + _offset * size_of(_type)`
+    // unconditionally; `size_of(STRING)` dispatches through the numeric
+    // `type_dispatcher`, which lacks a STRING case and traps on device.
+    // Use `col.data<char>()`: templated data<T>() just does pointer+offset
+    // with T=char (1 byte), skipping size_of entirely. STRING columns
+    // always have _offset=0 today, so the byte arithmetic is correct.
     __host__ __device__ __forceinline__
     string_column_impl(gamax::string_column_view const& col)
-        : header_impl_(static_cast<typename Header::header_entry_type*>(const_cast<void*>(col.meta()))), 
-          buffer_impl_(static_cast<char*>(const_cast<void*>(col.data())), col.size()) {}
-    
+        : header_impl_(const_cast<typename Header::header_entry_type*>(
+                           static_cast<const typename Header::header_entry_type*>(col.meta()))),
+          buffer_impl_(const_cast<char*>(col.template data<char>()), col.size()) {}
+
     __host__ __device__ __forceinline__
     string_column_impl(gamax::mutable_string_column_view const& col)
-        : header_impl_(static_cast<typename Header::header_entry_type*>(col.meta())), 
-          buffer_impl_(static_cast<char*>(col.data()), col.size()) {}
+        : header_impl_(static_cast<typename Header::header_entry_type*>(col.meta())),
+          buffer_impl_(col.template data<char>(), col.size()) {}
     
     static constexpr LengthType max_inlined_len() noexcept {
         return Header::header_entry_type::max_inlined_len();
