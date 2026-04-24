@@ -97,8 +97,8 @@ namespace {
     struct prefix_sum_impl {
         template <typename T, typename U>
         void operator()(
-        gamax::column_view const& input, 
-        gamax::mutable_column_view output, 
+        gamax::column_view const& input,
+        gamax::mutable_column_view output,
         gamax::prefix_sum_options option,
         cudaStream_t stream)
         {
@@ -110,6 +110,24 @@ namespace {
             auto itr_in = thrust::make_transform_iterator(
                 in_ptr,
                 [] __host__ __device__ (T val) { return static_cast<U>(val); });
+
+            // Empty-input short-circuit. thrust/CUB's scan determines
+            // temp-storage sizes via a CUDA call, which on some
+            // cuda/thrust version combinations reports
+            // `cudaErrorInvalidDevice` when the range is 0 elements
+            // — the bug that surfaced downstream of an empty join
+            // result in Q10 before the builder was fixed. Handling
+            // n==0 here covers every caller (gather_strings,
+            // string_factory, sort offsets) without them having to
+            // guard individually. INCLUSIVE_PAD_ZERO still owes a
+            // single zero in out[0]; the other options produce a
+            // 0-length output and there's nothing to write.
+            if (n == 0) {
+                if (option == INCLUSIVE_PAD_ZERO) {
+                    cudaMemsetAsync(out_ptr, 0, sizeof(U), stream);
+                }
+                return;
+            }
 
             switch(option) {
                 case INCLUSIVE:
