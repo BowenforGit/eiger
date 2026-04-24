@@ -378,6 +378,23 @@ PlanPtr build_q4(const QueryBuilder& qb) {
 // Six-way join (customer, orders, lineitem, supplier, nation, region)
 // with region name filter and order-date range. Group by n_name.
 // Sort desc by revenue.
+//
+// Join order matters a lot here. Joining rns (region⋈nation⋈supplier)
+// against customer on nationkey produces a Cartesian-ish intermediate:
+// at SF10 with ASIA's 5 nations, rns has ~20k rows (4k suppliers/
+// nation) and customer has ~60k rows/nation, so rns ⋈ customer on
+// nationkey is ~1.2B rows — enough to OOM a 94 GiB pool. Instead we
+// build the two sides of the foreign-key chain independently:
+//
+//   dim side: region ⋈ nation ⋈ supplier           (20k rows)
+//   fact side: customer ⋈ orders_filt ⋈ lineitem   (~9M at SF10)
+//
+// and bridge them with a multi-key equi-join on
+// (l_suppkey == s_suppkey) ∧ (c_nationkey == s_nationkey). G1-rule
+// splits that into single-key on suppkey (supplier PK, so the
+// intermediate is bounded by the fact side) plus a post-filter on
+// the nationkey equality. Peak intermediate at SF10 ≈ 1.8M rows,
+// three orders of magnitude below the old plan.
 PlanPtr build_q5(const QueryBuilder& qb) {
     auto c = qb.scan("customer", {"c_custkey", "c_nationkey"});
     auto o = qb.scan("orders",
@@ -394,17 +411,26 @@ PlanPtr build_q5(const QueryBuilder& qb) {
             (o.c("o_orderdate") >= lit(19940101))
          && (o.c("o_orderdate") <  lit(19950101)));
 
-    // region ⋈ nation ⋈ supplier ⋈ customer ⋈ orders ⋈ lineitem,
-    // with the customer/supplier both keyed into the same nation.
+    // Dimension side: region ⋈ nation ⋈ supplier filtered to ASIA.
     auto rn  = r_filt.inner_join(n,
         r_filt.c("r_regionkey") == n.c("n_regionkey"));
     auto rns = rn.inner_join(s, rn.c("n_nationkey") == s.c("s_nationkey"));
-    auto rnsc = rns.inner_join(c, rns.c("n_nationkey") == c.c("c_nationkey"));
-    auto rnsco = rnsc.inner_join(o_filt,
-        rnsc.c("c_custkey") == o_filt.c("o_custkey"));
-    auto joined = rnsco.inner_join(l,
-            (rnsco.c("o_orderkey") == l.c("l_orderkey"))
-         && (rnsco.c("s_suppkey")  == l.c("l_suppkey")));  // multi-key
+
+    // Fact side: customer ⋈ orders_filt ⋈ lineitem. c_custkey is
+    // unique on customer; o_orderkey is unique on orders — both join
+    // outputs stay close to the smaller side's cardinality.
+    auto co  = c.inner_join(o_filt,
+        c.c("c_custkey") == o_filt.c("o_custkey"));
+    auto col = co.inner_join(l,
+        co.c("o_orderkey") == l.c("l_orderkey"));
+
+    // Bridge: multi-key equi-join binding the fact side's supplier
+    // and its customer's nation to the dimension side's Asian
+    // supplier's nation. G1-rule splits into suppkey-first + post-
+    // filter on nationkey.
+    auto joined = col.inner_join(rns,
+            (col.c("l_suppkey")   == rns.c("s_suppkey"))
+         && (col.c("c_nationkey") == rns.c("s_nationkey")));
 
     auto projected = joined.project({
         {"n_name", joined.c("n_name")},
