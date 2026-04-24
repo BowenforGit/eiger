@@ -12,6 +12,7 @@
 #include <arrow/api.h>
 #include <arrow/io/file.h>
 #include <parquet/arrow/reader.h>
+#include <parquet/properties.h>
 
 #include "memory/column.hpp"
 #include "memory/table.hpp"
@@ -421,34 +422,56 @@ std::unique_ptr<gamax::column> string_column_from_pinned_cache(
 }
 
 // ---------------------------------------------------------------------------
-// Read a Parquet file into an Arrow Table
+// Open a Parquet file and build a column-projecting, thread-parallel
+// FileReader. Pre-buffering is on by default in ArrowReaderProperties;
+// we just flip use_threads so per-column decode runs on the Arrow CPU
+// thread pool. The reader keeps the file open and the footer parsed, so
+// subsequent ReadTable calls with different column index subsets are
+// cheap.
 // ---------------------------------------------------------------------------
-std::shared_ptr<arrow::Table> read_parquet_file(const std::string& file_path) {
+struct OpenedParquet {
+    std::unique_ptr<parquet::arrow::FileReader> reader;
+    std::shared_ptr<arrow::Schema> schema;
+};
+
+OpenedParquet open_parquet_for_projection(const std::string& file_path) {
     auto maybe_infile = arrow::io::ReadableFile::Open(file_path);
     if (!maybe_infile.ok()) {
         throw std::runtime_error(
             "Failed to open Parquet file '" + file_path + "': " +
             maybe_infile.status().ToString());
     }
-    auto infile = *maybe_infile;
 
-    auto maybe_reader = parquet::arrow::OpenFile(infile, arrow::default_memory_pool());
-    if (!maybe_reader.ok()) {
+    parquet::ArrowReaderProperties arrow_props(/*use_threads=*/true);
+
+    parquet::arrow::FileReaderBuilder builder;
+    auto st = builder.Open(*maybe_infile);
+    if (!st.ok()) {
         throw std::runtime_error(
-            "Failed to create Parquet reader for '" + file_path + "': " +
-            maybe_reader.status().ToString());
+            "FileReaderBuilder::Open failed for '" + file_path + "': " +
+            st.ToString());
     }
-    auto& reader = *maybe_reader;
+    builder.memory_pool(arrow::default_memory_pool());
+    builder.properties(arrow_props);
 
-    std::shared_ptr<arrow::Table> table;
-    auto status = reader->ReadTable(&table);
-    if (!status.ok()) {
+    std::unique_ptr<parquet::arrow::FileReader> reader;
+    st = builder.Build(&reader);
+    if (!st.ok()) {
         throw std::runtime_error(
-            "Failed to read Parquet file '" + file_path + "': " +
-            status.ToString());
+            "FileReaderBuilder::Build failed for '" + file_path + "': " +
+            st.ToString());
+    }
+    reader->set_use_threads(true);
+
+    std::shared_ptr<arrow::Schema> schema;
+    st = reader->GetSchema(&schema);
+    if (!st.ok()) {
+        throw std::runtime_error(
+            "Failed to read schema from '" + file_path + "': " +
+            st.ToString());
     }
 
-    return table;
+    return OpenedParquet{std::move(reader), std::move(schema)};
 }
 
 // ---------------------------------------------------------------------------
@@ -478,10 +501,17 @@ std::string get_tpch_data_dir(gamax::size_type scale_factor) {
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
-// TpchTableReader::Impl — holds the Arrow Table cache + pinned column cache
+// TpchTableReader::Impl — holds per-table Parquet readers + per-column
+// pinned-host caches. The Parquet reader is opened lazily on first access
+// and retained so subsequent loads for the same table only pay for the
+// columns not yet cached.
 // ---------------------------------------------------------------------------
 struct TpchTableReader::Impl {
-    std::unordered_map<std::string, std::shared_ptr<arrow::Table>> table_cache;
+    struct TableHandle {
+        std::unique_ptr<parquet::arrow::FileReader> reader;
+        std::shared_ptr<arrow::Schema> schema;
+    };
+    std::unordered_map<std::string, TableHandle> table_handles;
     std::unordered_map<std::string, PinnedColumnData> pinned_column_cache;
     std::unordered_map<std::string, PinnedStringColumnData> pinned_string_column_cache;
 };
@@ -500,83 +530,115 @@ TpchTableReader& TpchTableReader::operator=(TpchTableReader&&) noexcept = defaul
 
 // ---------------------------------------------------------------------------
 // TpchTableReader::load
+//
+// Strategy: the per-column pinned cache is the source of truth. On a
+// load() call we first emit cache hits, then batch all *distinct*
+// uncached columns into a single `ReadTable({indices}, &tbl)` Parquet
+// read. That read is column-projecting (skips decode of untouched
+// columns) and parallel (use_threads was set on the reader). Because a
+// TPC-H query typically touches a small subset of lineitem, this turns
+// a ~2.4 GiB full decode into a few-hundred-MiB projected decode on
+// the first call.
 // ---------------------------------------------------------------------------
 std::unique_ptr<gamax::table> TpchTableReader::load(
     const std::string& table_name,
     std::vector<std::string> column_names)
 {
-    std::string data_dir = get_tpch_data_dir(params_.scale_factor);
-
-    // Ensure Arrow table is cached (needed for cold-path column conversion)
-    auto table_cache_it = impl_->table_cache.find(table_name);
-    if (table_cache_it == impl_->table_cache.end()) {
+    // Lazily open + cache the Parquet reader for this table.
+    auto handle_it = impl_->table_handles.find(table_name);
+    if (handle_it == impl_->table_handles.end()) {
+        std::string data_dir = get_tpch_data_dir(params_.scale_factor);
         std::string file_path = data_dir + "/" + table_name + ".parquet";
-        std::cout << "[TpchTableReader] Loading Parquet file: " << file_path << std::endl;
-        auto arrow_table = read_parquet_file(file_path);
-        std::cout << "[TpchTableReader] Loaded table '" << table_name
-                  << "': " << arrow_table->num_rows() << " rows, "
-                  << arrow_table->num_columns() << " columns" << std::endl;
-        table_cache_it = impl_->table_cache.emplace(table_name, std::move(arrow_table)).first;
+        std::cout << "[TpchTableReader] Opening Parquet file: " << file_path << std::endl;
+        auto op = open_parquet_for_projection(file_path);
+        Impl::TableHandle h{std::move(op.reader), std::move(op.schema)};
+        handle_it = impl_->table_handles.emplace(table_name, std::move(h)).first;
     }
+    const auto& handle = handle_it->second;
 
-    const auto& arrow_table = table_cache_it->second;
+    std::vector<std::unique_ptr<gamax::column>> gpu_columns(column_names.size());
 
-    std::vector<std::unique_ptr<gamax::column>> gpu_columns;
-    gpu_columns.reserve(column_names.size());
-
-    for (const auto& col_name : column_names) {
-        std::string cache_key = table_name + "." + col_name;
-
-        // Hot path: check scalar column cache first, then string column cache
+    // Partition: cache hits vs. missing (dedup'd by column name, since
+    // a caller could legitimately request the same column twice).
+    std::unordered_map<std::string, std::vector<size_t>> missing;
+    for (size_t i = 0; i < column_names.size(); ++i) {
+        std::string cache_key = table_name + "." + column_names[i];
         auto pinned_it = impl_->pinned_column_cache.find(cache_key);
         if (pinned_it != impl_->pinned_column_cache.end()) {
-            gpu_columns.push_back(column_from_pinned_cache(pinned_it->second, params_.stream));
+            gpu_columns[i] = column_from_pinned_cache(pinned_it->second, params_.stream);
             continue;
         }
-        auto str_pinned_it = impl_->pinned_string_column_cache.find(cache_key);
-        if (str_pinned_it != impl_->pinned_string_column_cache.end()) {
-            gpu_columns.push_back(string_column_from_pinned_cache(str_pinned_it->second, params_.stream));
+        auto str_it = impl_->pinned_string_column_cache.find(cache_key);
+        if (str_it != impl_->pinned_string_column_cache.end()) {
+            gpu_columns[i] = string_column_from_pinned_cache(str_it->second, params_.stream);
             continue;
         }
+        missing[column_names[i]].push_back(i);
+    }
 
-        // Cold path: convert from Arrow and populate pinned cache
-        int col_idx = arrow_table->schema()->GetFieldIndex(col_name);
-        if (col_idx < 0) {
-            std::string available;
-            for (int i = 0; i < arrow_table->schema()->num_fields(); ++i) {
-                if (i > 0) available += ", ";
-                available += arrow_table->schema()->field(i)->name();
+    if (!missing.empty()) {
+        // Resolve requested names → Parquet schema indices. If any name
+        // doesn't exist, fail early with the list of available columns.
+        std::vector<int> col_indices;
+        std::vector<std::string> ordered_missing;
+        col_indices.reserve(missing.size());
+        ordered_missing.reserve(missing.size());
+        for (const auto& kv : missing) {
+            const std::string& name = kv.first;
+            int idx = handle.schema->GetFieldIndex(name);
+            if (idx < 0) {
+                std::string available;
+                for (int i = 0; i < handle.schema->num_fields(); ++i) {
+                    if (i > 0) available += ", ";
+                    available += handle.schema->field(i)->name();
+                }
+                throw std::runtime_error(
+                    "Column '" + name + "' not found in table '" + table_name + "'. "
+                    "Available columns: " + available);
             }
+            col_indices.push_back(idx);
+            ordered_missing.push_back(name);
+        }
+
+        std::shared_ptr<arrow::Table> projected;
+        auto st = handle.reader->ReadTable(col_indices, &projected);
+        if (!st.ok()) {
             throw std::runtime_error(
-                "Column '" + col_name + "' not found in table '" + table_name + "'. "
-                "Available columns: " + available);
+                "Parquet ReadTable (projected) failed for table '" +
+                table_name + "': " + st.ToString());
         }
 
-        auto arrow_col = arrow_table->column(col_idx);
-        auto arrow_type = arrow_table->schema()->field(col_idx)->type();
-        auto flat_array = flatten_chunked_array(arrow_col);
+        for (size_t mi = 0; mi < ordered_missing.size(); ++mi) {
+            const std::string& name = ordered_missing[mi];
+            const std::string cache_key = table_name + "." + name;
+            auto chunked = projected->column(static_cast<int>(mi));
+            auto arrow_type = projected->schema()->field(static_cast<int>(mi))->type();
+            auto flat_array = flatten_chunked_array(chunked);
+            const auto& positions = missing.at(name);
 
-        // String columns use a separate cache and produce string_column objects
-        if (arrow_type->id() == arrow::Type::STRING) {
-            auto str_cache = convert_arrow_string_to_pinned(flat_array);
-            auto gpu_col = string_column_from_pinned_cache(str_cache, params_.stream);
-            impl_->pinned_string_column_cache.emplace(cache_key, std::move(str_cache));
-            gpu_columns.push_back(std::move(gpu_col));
-            continue;
+            if (arrow_type->id() == arrow::Type::STRING) {
+                auto str_cache = convert_arrow_string_to_pinned(flat_array);
+                for (size_t pos : positions) {
+                    gpu_columns[pos] = string_column_from_pinned_cache(str_cache, params_.stream);
+                }
+                impl_->pinned_string_column_cache.emplace(cache_key, std::move(str_cache));
+            } else if (arrow_type->id() == arrow::Type::LARGE_STRING) {
+                auto str_cache = convert_arrow_large_string_to_pinned(flat_array);
+                for (size_t pos : positions) {
+                    gpu_columns[pos] = string_column_from_pinned_cache(str_cache, params_.stream);
+                }
+                impl_->pinned_string_column_cache.emplace(cache_key, std::move(str_cache));
+            } else {
+                auto [first_gpu, pinned_cache] = arrow_array_to_gamax_column_cached(
+                    flat_array, arrow_type, params_.stream);
+                gpu_columns[positions[0]] = std::move(first_gpu);
+                for (size_t k = 1; k < positions.size(); ++k) {
+                    gpu_columns[positions[k]] =
+                        column_from_pinned_cache(pinned_cache, params_.stream);
+                }
+                impl_->pinned_column_cache.emplace(cache_key, std::move(pinned_cache));
+            }
         }
-        if (arrow_type->id() == arrow::Type::LARGE_STRING) {
-            auto str_cache = convert_arrow_large_string_to_pinned(flat_array);
-            auto gpu_col = string_column_from_pinned_cache(str_cache, params_.stream);
-            impl_->pinned_string_column_cache.emplace(cache_key, std::move(str_cache));
-            gpu_columns.push_back(std::move(gpu_col));
-            continue;
-        }
-
-        auto [gpu_col, pinned_cache] = arrow_array_to_gamax_column_cached(
-            flat_array, arrow_type, params_.stream);
-
-        impl_->pinned_column_cache.emplace(cache_key, std::move(pinned_cache));
-        gpu_columns.push_back(std::move(gpu_col));
     }
 
     cudaStreamSynchronize(params_.stream);
