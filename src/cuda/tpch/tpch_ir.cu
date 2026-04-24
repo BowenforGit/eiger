@@ -1135,39 +1135,76 @@ PlanPtr build_q20(const QueryBuilder& qb) {
 
 // ── Q21: Suppliers Who Kept Orders Waiting ─────────────────────────
 //
-// Both EXISTS (at least one other supplier on the order) and NOT
-// EXISTS (no other supplier shipped late) — lowered as left_semi_join
-// and left_anti_join. Uses three independent scans of lineitem (l1,
-// l2, l3), each getting fresh ColumnIds so the conditions are
-// unambiguous.
+// Canonical Q21 has two correlated subqueries whose match predicates
+// each carry a `<>` non-equi residual against the outer row:
+//
+//   EXISTS     (l2 | l2.l_orderkey  = l1.l_orderkey
+//                 AND l2.l_suppkey <> l1.l_suppkey)
+//   NOT EXISTS (l3 | l3.l_orderkey  = l1.l_orderkey
+//                 AND l3.l_suppkey <> l1.l_suppkey
+//                 AND l3.l_receiptdate > l3.l_commitdate)
+//
+// gamax's semi / anti joins require pure equi conditions, so
+// lowering these directly hits `join: condition must be a
+// conjunction of column equi-predicates`. But the `<>` residuals
+// are algebraically absorbable: for a fixed l1.l_orderkey, the
+// residual "there is some OTHER suppkey on this order" is equivalent
+// to "the distinct-suppkey count on this order is > 1", an
+// order-wide aggregate condition that does not depend on which
+// supplier l1 is. We precompute it once, then the membership check
+// becomes a pure equi-semi-join on l_orderkey — the same trick
+// Maximus uses (their Q21 in tpch_queries.cpp).
+//
+// The parallel rewrite for NOT EXISTS: "no OTHER failed supplier on
+// this order" ⟺ "all failed lineitems on this order have the same
+// suppkey" ⟺ "distinct-suppkey count over FAILED lineitems of this
+// order is == 1" (since l1 is itself a failed lineitem, that sole
+// suppkey is l1.suppkey).
+//
+// Two independent `count_distinct(l_suppkey) group by l_orderkey`
+// aggregates — one over all lineitem (EXISTS), one over failed
+// lineitem (NOT EXISTS) — produce the order-side membership sets,
+// and the main `failed` relation is whittled down via two
+// equi-semi-joins on l_orderkey. No non-equi anywhere in the plan.
 PlanPtr build_q21(const QueryBuilder& qb) {
-    auto l1 = qb.scan("lineitem",
+    auto l_all  = qb.scan("lineitem", {"l_orderkey", "l_suppkey"});
+    auto l_main = qb.scan("lineitem",
         {"l_orderkey", "l_suppkey", "l_commitdate", "l_receiptdate"});
-    auto l2 = qb.scan("lineitem", {"l_orderkey", "l_suppkey"});
-    auto l3 = qb.scan("lineitem",
-        {"l_orderkey", "l_suppkey", "l_commitdate", "l_receiptdate"});
-    auto s  = qb.scan("supplier", {"s_suppkey", "s_name", "s_nationkey"});
-    auto o  = qb.scan("orders",   {"o_orderkey", "o_orderstatus"});
-    auto n  = qb.scan("nation",   {"n_nationkey", "n_name"});
+    auto s = qb.scan("supplier", {"s_suppkey", "s_name", "s_nationkey"});
+    auto o = qb.scan("orders",   {"o_orderkey", "o_orderstatus"});
+    auto n = qb.scan("nation",   {"n_nationkey", "n_name"});
 
-    auto l1_late = l1.filter(
-        l1.c("l_receiptdate") > l1.c("l_commitdate"));
+    // Failed lineitems (l1_late in the spec).
+    auto failed = l_main.filter(
+        l_main.c("l_receiptdate") > l_main.c("l_commitdate"));
+
+    // EXISTS rewrite: orders with > 1 distinct supplier.
+    auto supp_per_order = l_all.aggregate(
+        {"l_orderkey"},
+        {{"n_supp", AggKind::CountDistinct, l_all.c("l_suppkey")}});
+    auto multi_supp = supp_per_order.filter(
+        supp_per_order.c("n_supp") > lit(int64_t{1}));
+
+    // NOT EXISTS rewrite: orders with exactly 1 distinct failed
+    // supplier (which — since l1 itself is failed on this order —
+    // must be l1.suppkey).
+    auto failed_supp_per_order = failed.aggregate(
+        {"l_orderkey"},
+        {{"n_failed_supp", AggKind::CountDistinct,
+          failed.c("l_suppkey")}});
+    auto only_one_failed = failed_supp_per_order.filter(
+        failed_supp_per_order.c("n_failed_supp") == lit(int64_t{1}));
+
+    // Equi-semi-joins — no non-equi residuals, lowering is happy.
+    auto in_multi = failed.left_semi_join(multi_supp,
+        failed.c("l_orderkey") == multi_supp.c("l_orderkey"));
+    auto surviving = in_multi.left_semi_join(only_one_failed,
+        in_multi.c("l_orderkey") == only_one_failed.c("l_orderkey"));
+
     auto o_f = o.filter(
         string_op(StringOpKind::Equal, o.c("o_orderstatus"), {"F"}));
     auto n_f = n.filter(
         string_op(StringOpKind::Equal, n.c("n_name"), {"SAUDI ARABIA"}));
-
-    // EXISTS l2: another supplier shipped for the same order.
-    auto with_other = l1_late.left_semi_join(l2,
-            (l1_late.c("l_orderkey") == l2.c("l_orderkey"))
-         && (l1_late.c("l_suppkey") != l2.c("l_suppkey")));
-
-    // NOT EXISTS l3: no other supplier shipped late on the same order.
-    auto l3_late = l3.filter(
-        l3.c("l_receiptdate") > l3.c("l_commitdate"));
-    auto surviving = with_other.left_anti_join(l3_late,
-            (with_other.c("l_orderkey") == l3_late.c("l_orderkey"))
-         && (with_other.c("l_suppkey") != l3_late.c("l_suppkey")));
 
     auto j1 = surviving.inner_join(s,
         surviving.c("l_suppkey") == s.c("s_suppkey"));
