@@ -931,10 +931,16 @@ PlanPtr build_q16(const QueryBuilder& qb) {
            || (p.c("p_size") == lit(3))
            || (p.c("p_size") == lit(36))
            || (p.c("p_size") == lit(9)) ));
+    // Spec predicate is `s_comment LIKE '%Customer%Complaints%'`.
+    // That's sequenced — "Customer" must appear before "Complaints"
+    // — which a simple `Contains("Customer") && Contains("Complaints")`
+    // doesn't enforce (a comment containing the two substrings in
+    // the wrong order would false-match). `ContainsMultiple` lowers
+    // to `gamax::contains_multiple`, whose kernel scans patterns
+    // left-to-right non-overlapping, which is exactly LIKE's shape.
     auto s_bad = s.filter(
-            string_op(StringOpKind::Contains, s.c("s_comment"), {"Customer"})
-         && string_op(StringOpKind::Contains, s.c("s_comment"),
-                      {"Complaints"}));
+        string_op(StringOpKind::ContainsMultiple, s.c("s_comment"),
+                  {"Customer", "Complaints"}));
 
     // partsupp LEFT ANTI JOIN suppliers-with-bad-comments on ps_suppkey.
     auto ps_clean = ps.left_anti_join(s_bad,

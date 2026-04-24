@@ -234,7 +234,7 @@ Expr string_op(StringOpKind op, Expr col, std::vector<std::string> values) {
         type_error(std::string("string_op: column operand must be STRING, got ")
                    + type_name(col.type.id()));
     }
-    const bool multi = (op == StringOpKind::ContainsAny)
+    const bool multi = (op == StringOpKind::ContainsMultiple)
                     || (op == StringOpKind::In);
     if (!multi && values.size() != 1) {
         type_error("string_op: single-value operator requires exactly one needle");

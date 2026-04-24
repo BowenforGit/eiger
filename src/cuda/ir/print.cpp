@@ -63,7 +63,7 @@ const char* string_op_name(StringOpKind op) {
         case StringOpKind::Startswith:   return "startswith";
         case StringOpKind::Endswith:     return "endswith";
         case StringOpKind::Contains:     return "contains";
-        case StringOpKind::ContainsAny:  return "contains_any";
+        case StringOpKind::ContainsMultiple: return "contains_multiple";
         case StringOpKind::In:           return "str_in";
     }
     return "?";

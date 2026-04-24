@@ -204,6 +204,25 @@ TEST(IrLowerExpr, StringOpLeavesReferenceOrdinal) {
     EXPECT_EQ(p.string_cid(), 1);  // ordinal 1 in this schema
 }
 
+TEST(IrLowerExpr, ContainsMultipleLowersToStringContainsMultiple) {
+    // `StringOpKind::ContainsMultiple` is the IR-level name for LIKE-
+    // style `%p1%p2%...%` patterns; it must lower to the
+    // `STRING_CONTAINS_MULTIPLE` predicate kind so the phys layer
+    // reaches `gamax::contains_multiple` (which enforces sequenced
+    // non-overlapping match, unlike a naive AND of Contains leaves).
+    // Q16's supplier-comment filter relies on this mapping.
+    auto b = make_schema({t(type_id::INT32), t(type_id::STRING)});
+    auto s = gir::col_ref(b.ids[1], t(type_id::STRING), false);
+    auto p = gir::lower_expr_to_predicate(
+        gir::string_op(gir::StringOpKind::ContainsMultiple, std::move(s),
+                       {"Customer", "Complaints"}),
+        b.schema);
+    EXPECT_EQ(p.type(),
+              gamax::select::PredicateNodeType::STRING_CONTAINS_MULTIPLE);
+    EXPECT_EQ(p.string_cid(), 1);
+    ASSERT_EQ(p.string_values().size(), 2u);
+}
+
 int main(int argc, char** argv) {
     testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

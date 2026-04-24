@@ -134,7 +134,7 @@ Predicate lower_string_op_leaf(
         case StringOpKind::Contains:
             return Predicate::string_contains(
                 cid, make_shared_string_scalar(e.string_values.front(), stream));
-        case StringOpKind::ContainsAny:
+        case StringOpKind::ContainsMultiple:
             return Predicate::string_contains_multiple(
                 cid, make_string_scalar_vec(e.string_values, stream));
         case StringOpKind::In:

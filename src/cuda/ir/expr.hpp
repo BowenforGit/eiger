@@ -32,7 +32,7 @@ enum class CompareOp { Eq, Ne, Lt, Le, Gt, Ge };
 enum class LogicalOp { And, Or };
 enum class UnaryOp   { Not };
 enum class StringOpKind {
-    Equal, Startswith, Endswith, Contains, ContainsAny, In,
+    Equal, Startswith, Endswith, Contains, ContainsMultiple, In,
 };
 
 // Literal value carried by an Expr of kind Literal.
@@ -68,7 +68,7 @@ struct Expr {
     LogicalOp     logical_op {LogicalOp::And};        // BinLogical
     UnaryOp       unary_op   {UnaryOp::Not};          // Unary
     StringOpKind  string_op  {StringOpKind::Equal};   // StringOp
-    std::vector<std::string> string_values;           // StringOp (In/ContainsAny)
+    std::vector<std::string> string_values;           // StringOp (In/ContainsMultiple)
     std::string   function_name;                      // FunctionCall
 };
 
@@ -109,7 +109,7 @@ Expr case_when(Expr cond, Expr then_, Expr else_);
 
 // String operation. `col` is the string column being matched; `values`
 // supplies the needle(s) (one for Equal/Startswith/Endswith/Contains,
-// possibly many for ContainsAny/In). Result is BOOL8.
+// possibly many for ContainsMultiple/In). Result is BOOL8.
 Expr string_op(StringOpKind op, Expr col, std::vector<std::string> values);
 
 // Name-tagged scalar function call. The IR tracks the `name` (e.g.
