@@ -93,6 +93,10 @@ PlanBuilder PlanBuilder::left_anti_join(
 PlanBuilder PlanBuilder::cross_join(const PlanBuilder& right) const {
     return PlanBuilder(gamax::ir::cross_join(_plan, right._plan), _gen);
 }
+PlanBuilder PlanBuilder::concat(const PlanBuilder& other) const {
+    return PlanBuilder(
+        gamax::ir::concat({_plan, other._plan}, *_gen), _gen);
+}
 
 PlanBuilder QueryBuilder::scan(
     std::string table, std::vector<std::string> columns) const

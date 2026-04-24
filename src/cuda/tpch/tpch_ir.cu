@@ -828,24 +828,62 @@ PlanPtr build_q12(const QueryBuilder& qb) {
 
 // ── Q13: Customer Distribution ─────────────────────────────────────
 //
-// Two-level aggregation with a LEFT OUTER JOIN that carries a filter
-// on the right side (part of the join condition, not a separate
-// filter — customers without matching orders survive).
+// Canonical Q13 has a LEFT OUTER JOIN with a filter embedded in its
+// ON clause — each customer survives with c_count=0 if no matching
+// order exists. gamax's phys layer has no outer join and no NULLs,
+// so we rewrite at the builder level:
+//
+//   orders_clean = orders where NOT LIKE '%special%requests%'  (RHS-only
+//                  filter → safe to hoist out of the outer-join ON
+//                  for LEFT OUTER; DuckDB does the same rewrite.)
+//
+//   matched = customer ⋈_inner orders_clean on c_custkey == o_custkey
+//           -> group by c_custkey, count_all → per-customer c_count
+//
+//   unmatched = customer ⟕_anti orders_clean on c_custkey == o_custkey
+//             -> project(c_custkey, c_count = 0)
+//
+//   concat(matched, unmatched) → one (c_custkey, c_count) row per
+//   customer, with c_count=0 for those who had no qualifying order.
+//
+//   histogram = group by c_count, count_all as custdist
+//
+// The aggregation is pushed *below* the concat so the union of the
+// two branches is 1.5M rows at SF10 rather than tens of millions.
+// See .claude/outer-join-for-q13.md for the design doc.
 PlanPtr build_q13(const QueryBuilder& qb) {
     auto c = qb.scan("customer", {"c_custkey"});
-    auto o = qb.scan("orders", {"o_orderkey", "o_custkey", "o_comment"});
+    auto o = qb.scan("orders", {"o_custkey", "o_comment"});
 
-    // The "not like '%...%'" predicate is part of the join condition so
-    // outer-join nulls aren't introduced by filter pushdown.
-    auto joined = c.left_outer_join(o,
-            (c.c("c_custkey") == o.c("o_custkey"))
-         && !string_op(StringOpKind::Contains, o.c("o_comment"),
-                       {"special"}));
+    // The spec's LIKE pattern is `%special%requests%` — both tokens
+    // in order. `ContainsMultiple` matches the spec exactly; the
+    // previous builder used a single-pattern `Contains("special")`
+    // which overmatched on SF1 (comments with "special" but not
+    // "requests" were wrongly filtered out).
+    auto o_clean = o.filter(
+        !string_op(StringOpKind::ContainsMultiple, o.c("o_comment"),
+                   {"special", "requests"}));
 
-    auto per_cust = joined.aggregate(
+    // Matched branch: inner join + group-by customer → per-customer
+    // order count. G4a rewrites CountAll → Sum(lit(1)) at apply_rules
+    // time.
+    auto matched_join = c.inner_join(o_clean,
+        c.c("c_custkey") == o_clean.c("o_custkey"));
+    auto matched = matched_join.aggregate(
         {"c_custkey"},
-        {{"c_count", AggKind::Count, joined.c("o_orderkey")}});
-    auto histogram = per_cust.aggregate(
+        {{"c_count", AggKind::CountAll, lit(int64_t{0})}});
+
+    // Unmatched branch: anti-join + project a zero c_count column.
+    auto unmatched_join = c.left_anti_join(o_clean,
+        c.c("c_custkey") == o_clean.c("o_custkey"));
+    auto unmatched = unmatched_join.project({
+        {"c_custkey", unmatched_join.c("c_custkey")},
+        {"c_count",   lit(int64_t{0})},
+    });
+
+    auto all_customers = matched.concat(unmatched);
+
+    auto histogram = all_customers.aggregate(
         {"c_count"},
         {{"custdist", AggKind::CountAll, lit(int64_t{0})}});
     return histogram.sort({desc("custdist"), desc("c_count")}).plan();

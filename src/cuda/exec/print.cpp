@@ -18,6 +18,7 @@ const char* step_kind_name(StepKind k) {
         case StepKind::ScalarAgg:   return "ScalarAgg";
         case StepKind::GroupBy:     return "GroupBy";
         case StepKind::Distinct:    return "Distinct";
+        case StepKind::Concat:      return "Concat";
         case StepKind::Sort:        return "Sort";
         case StepKind::TopK:        return "TopK";
     }
@@ -113,6 +114,8 @@ void write_payload(std::ostream& os, const StepPayload& payload) {
             os << "]";
         } else if constexpr (std::is_same_v<T, DistinctPayload>) {
             os << "keys="; write_ordinals(os, pl.key_ordinals);
+        } else if constexpr (std::is_same_v<T, ConcatPayload>) {
+            // N-ary inputs already on Step::inputs; no extra payload.
         } else if constexpr (std::is_same_v<T, SortPayload>) {
             os << "keys=[";
             for (size_t i = 0; i < pl.keys.size(); ++i) {

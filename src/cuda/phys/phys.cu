@@ -17,6 +17,7 @@
 #include "operators/sort/sort.hpp"
 #include "string/string.hpp"
 #include "string/string_column.hpp"
+#include "types/type_dispatcher.hpp"
 #include "utils/copying.hpp"
 #include "utils/transform.hpp"
 
@@ -700,6 +701,179 @@ table_ptr distinct(gamax::table_view keys,
     }
     gamax::groupby::groupby_hint hint;
     return gamax::groupby::hash::distinct(keys, hint, ctx.stream);
+}
+
+// ── Concat (SQL UNION ALL) ────────────────────────────────────────
+namespace {
+
+// Numeric per-type column concat. Every `cols[k]` has the same gamax
+// numeric type; output is a new column of sum-size with the k-th
+// input's bytes memcpy'd into the correct slot.
+struct concat_numeric_impl {
+    template <typename T>
+    gamax::column_ptr operator()(
+        const std::vector<gamax::column_view>& cols,
+        cudaStream_t stream) const
+    {
+        gamax::size_type total = 0;
+        for (const auto& c : cols) total += c.size();
+        auto out = gamax::make_column<T>(total, false, stream);
+        gamax::size_type offset = 0;
+        for (const auto& c : cols) {
+            if (c.size() > 0) {
+                cudaMemcpyAsync(
+                    out->template data<T>() + offset,
+                    c.data<T>(),
+                    static_cast<size_t>(c.size()) * sizeof(T),
+                    cudaMemcpyDeviceToDevice,
+                    stream);
+            }
+            offset += c.size();
+        }
+        return out;
+    }
+};
+
+// Offsets-shift kernel for STRING concat. Fills
+// out_offsets[range_lo .. range_hi) with in_offsets[1 .. range_hi-range_lo+1]
+// each shifted by `byte_shift`. range_lo is always >= 1 because the
+// first output offset (0) is written separately.
+__global__ void concat_string_offsets_kernel(
+    const gamax::size_type* __restrict__ in_offsets,
+    gamax::size_type n_in_rows,
+    gamax::size_type range_lo,
+    gamax::size_type byte_shift,
+    gamax::size_type* __restrict__ out_offsets)
+{
+    const auto idx = static_cast<gamax::size_type>(blockIdx.x) * blockDim.x
+                   + static_cast<gamax::size_type>(threadIdx.x);
+    if (idx >= n_in_rows) return;
+    // Write out_offsets[range_lo + idx] = in_offsets[idx + 1] + byte_shift.
+    out_offsets[range_lo + idx] = in_offsets[idx + 1] + byte_shift;
+}
+
+// STRING column concat via Arrow INT64 offsets. One byte buffer
+// formed by memcpy'ing each input's data buffer in order; one offsets
+// buffer built incrementally with a per-input kernel launch that
+// shifts each input's offsets[1..N_k+1] by the bytes-so-far. Out[0]
+// is set to 0 once via cudaMemset.
+gamax::column_ptr concat_strings_impl(
+    const std::vector<gamax::column_view>& cols,
+    cudaStream_t stream)
+{
+    // First pass: unpack host-side [data_ptr, meta_ptr] helpers and
+    // learn each input's byte count (offsets[N_k]).
+    std::vector<gamax::string_column_view> svs;
+    svs.reserve(cols.size());
+    std::vector<gamax::size_type> input_bytes(cols.size(), 0);
+    gamax::size_type total_rows = 0;
+    gamax::size_type total_bytes = 0;
+    for (size_t k = 0; k < cols.size(); ++k) {
+        svs.emplace_back(cols[k], gamax::ARROW_STRING, stream);
+        const auto n = cols[k].size();
+        total_rows += n;
+        if (n > 0) {
+            // offsets[n] is the byte count; D2H one int64.
+            const auto* meta =
+                static_cast<const gamax::size_type*>(svs[k].meta());
+            cudaMemcpyAsync(&input_bytes[k],
+                meta + n,
+                sizeof(gamax::size_type),
+                cudaMemcpyDeviceToHost,
+                stream);
+        }
+    }
+    cudaStreamSynchronize(stream);
+    for (auto b : input_bytes) total_bytes += b;
+
+    // Output buffers: data (total_bytes), meta ((total_rows + 1) *
+    // sizeof int64).
+    gamax::device_buffer out_data(
+        static_cast<size_t>(total_bytes), false, stream);
+    gamax::device_buffer out_meta(
+        static_cast<size_t>(total_rows + 1) * sizeof(gamax::size_type),
+        false, stream);
+    auto* out_off_ptr = static_cast<gamax::size_type*>(out_meta.data());
+
+    // First output offset is always zero.
+    cudaMemsetAsync(out_off_ptr, 0, sizeof(gamax::size_type), stream);
+
+    // Per-input pass: bytes + shifted offsets.
+    gamax::size_type row_cursor = 0;
+    gamax::size_type byte_cursor = 0;
+    for (size_t k = 0; k < cols.size(); ++k) {
+        const auto n = cols[k].size();
+        if (n == 0) continue;
+        // Data bytes.
+        cudaMemcpyAsync(
+            static_cast<char*>(out_data.data()) + byte_cursor,
+            svs[k].data<char>(),
+            static_cast<size_t>(input_bytes[k]),
+            cudaMemcpyDeviceToDevice,
+            stream);
+        // Offsets[1..n+1] shifted by byte_cursor, written to
+        // out_off_ptr[row_cursor+1 .. row_cursor+n+1].
+        constexpr int block = 256;
+        const auto grid = static_cast<int>((n + block - 1) / block);
+        concat_string_offsets_kernel<<<grid, block, 0, stream>>>(
+            static_cast<const gamax::size_type*>(svs[k].meta()),
+            n,
+            row_cursor + 1,
+            byte_cursor,
+            out_off_ptr);
+        row_cursor += n;
+        byte_cursor += input_bytes[k];
+    }
+
+    auto out_str = std::make_unique<gamax::string_column>(
+        std::move(out_data),
+        std::move(out_meta),
+        total_rows,
+        gamax::ARROW_STRING);
+    return std::unique_ptr<gamax::column>(std::move(out_str));
+}
+
+} // namespace
+
+table_ptr concat(std::vector<gamax::table_view> inputs,
+                 const Context& ctx)
+{
+    if (inputs.empty()) {
+        throw std::runtime_error("phys::concat: empty inputs");
+    }
+    const auto ncols = inputs[0].num_columns();
+    for (size_t k = 1; k < inputs.size(); ++k) {
+        if (inputs[k].num_columns() != ncols) {
+            throw std::runtime_error(
+                "phys::concat: input column count mismatch");
+        }
+    }
+
+    std::vector<gamax::column_ptr> out_cols;
+    out_cols.reserve(ncols);
+    for (int c = 0; c < ncols; ++c) {
+        // Assemble per-column views across inputs.
+        std::vector<gamax::column_view> slice;
+        slice.reserve(inputs.size());
+        const auto type = inputs[0].get_column(c).type();
+        for (size_t k = 0; k < inputs.size(); ++k) {
+            auto col = inputs[k].get_column(c);
+            if (!(col.type() == type)) {
+                throw std::runtime_error(
+                    "phys::concat: input " + std::to_string(k) +
+                    " column " + std::to_string(c) + " type mismatch");
+            }
+            slice.push_back(col);
+        }
+        if (type.id() == gamax::type_id::STRING) {
+            out_cols.push_back(concat_strings_impl(slice, ctx.stream));
+        } else {
+            out_cols.push_back(gamax::type_dispatcher(
+                type, concat_numeric_impl{}, slice, ctx.stream));
+        }
+    }
+    cudaStreamSynchronize(ctx.stream);
+    return std::make_unique<gamax::table>(std::move(out_cols));
 }
 
 // ── Ordering ──────────────────────────────────────────────────────

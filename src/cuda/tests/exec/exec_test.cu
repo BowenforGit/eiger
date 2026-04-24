@@ -421,6 +421,44 @@ TEST(ExecExecutor, DistinctEndToEndYieldsUniqueKeys) {
     EXPECT_EQ(out->num_columns(), 1);
 }
 
+TEST(ExecLower, ConcatLowersToConcatStep) {
+    // Two same-shape Scans concatenated: last step is Concat with 2
+    // inputs; output Value schema matches the IR factory's
+    // fresh-ids policy (at this level just asserting column count /
+    // type shape — IDs are validated by the IR factory test).
+    auto f = make_fixture();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(f.cat, g);
+    auto left  = qb.scan("lineitem", {"l_shipdate"});
+    auto right = qb.scan("lineitem", {"l_shipdate"});
+    auto plan  = left.concat(right).plan();
+    auto ep = gir::lower_to_exec_plan(plan, f.cat);
+
+    ASSERT_FALSE(ep.steps.empty());
+    const auto& last = ep.steps.back();
+    EXPECT_EQ(last.kind, gex::StepKind::Concat);
+    EXPECT_EQ(last.inputs.size(), 2u);
+    EXPECT_EQ(ep.values[last.output].schema.size(), 1u);
+}
+
+TEST(ExecExecutor, ConcatEndToEndProducesUnionAll) {
+    // End-to-end union-all: each branch is a scan (no filter), so
+    // the output row count = sum of source sizes. Exactly one
+    // column (l_shipdate).
+    auto f = make_fixture();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(f.cat, g);
+    auto left  = qb.scan("lineitem", {"l_shipdate"});
+    auto right = qb.scan("lineitem", {"l_shipdate"});
+    auto plan  = left.concat(right).plan();
+    auto ep = gir::lower_to_exec_plan(plan, f.cat);
+    gamax::phys::Context ctx{cudaStreamDefault};
+    auto out = gex::execute(ep, resolver_for(f), ctx);
+    // Fixture's lineitem has 4 rows; union-all with itself → 8.
+    EXPECT_EQ(out->num_rows(), 8);
+    EXPECT_EQ(out->num_columns(), 1);
+}
+
 TEST(ExecExecutor, NullRootOrResolverRaises) {
     auto f = make_fixture();
     gir::IdGenerator g;

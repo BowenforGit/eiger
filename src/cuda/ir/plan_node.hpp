@@ -30,6 +30,7 @@ enum class NodeKind {
     Limit,
     Join,
     Distinct,
+    Concat,
 };
 
 // Join variants observed across TPC-H. Inner/LeftOuter are standard;
@@ -221,5 +222,17 @@ PlanPtr cross_join(PlanPtr left, PlanPtr right);
 //     `DISTINCT ON (subset) keep all cols` is not expressible under
 //     this factory; add a separate entry point when a caller needs it.
 PlanPtr distinct(PlanPtr input, std::vector<ColumnId> keys = {});
+
+// Vertical N-ary concatenation (SQL UNION ALL, once a frontend
+// exposes it; today's only caller is build_q13's LEFT OUTER JOIN
+// rewrite). Every input must have identical column counts and
+// positionally matching types; nullability is OR'd across inputs.
+// Output column names come from inputs[0]; output ColumnIds are
+// freshly allocated so downstream references don't accidentally
+// alias any specific input's ids. Throws on empty-inputs vector,
+// arity mismatch, or type mismatch.
+PlanPtr concat(
+    std::vector<PlanPtr> inputs,
+    IdGenerator& gen = IdGenerator::default_instance());
 
 } // namespace gamax::ir

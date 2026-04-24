@@ -108,6 +108,14 @@ std::unique_ptr<gamax::table> run_step(
             auto v = input_view(0);
             return gamax::phys::distinct(
                 v.select_columns(pl.key_ordinals), ctx);
+        } else if constexpr (std::is_same_v<T, ConcatPayload>) {
+            // N-ary: one view per input ValueId on Step::inputs.
+            std::vector<gamax::table_view> views;
+            views.reserve(s.inputs.size());
+            for (size_t i = 0; i < s.inputs.size(); ++i) {
+                views.push_back(input_view(i));
+            }
+            return gamax::phys::concat(std::move(views), ctx);
         } else if constexpr (std::is_same_v<T, SortPayload>) {
             return gamax::phys::sort(input_view(0), pl.keys, ctx);
         } else if constexpr (std::is_same_v<T, TopKPayload>) {

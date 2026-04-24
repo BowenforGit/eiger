@@ -107,6 +107,10 @@ struct GroupByPayload {
 struct DistinctPayload {
     std::vector<gamax::size_type> key_ordinals;
 };
+// Concat (SQL UNION ALL) has no payload — the N input ValueIds live
+// on `Step::inputs` and the phys op walks them in order. The output
+// schema is implied by the step's output Value.
+struct ConcatPayload {};
 struct SortPayload {
     std::vector<gamax::phys::SortSpec> keys;
 };
@@ -127,6 +131,7 @@ using StepPayload = std::variant<
     ScalarAggPayload,
     GroupByPayload,
     DistinctPayload,
+    ConcatPayload,
     SortPayload,
     TopKPayload>;
 
@@ -135,7 +140,7 @@ using StepPayload = std::variant<
 enum class StepKind {
     SourceTable, Reorder, Project, Filter,
     EqJoin, SemiJoin, AntiJoin, CrossJoin,
-    ScalarAgg, GroupBy, Distinct,
+    ScalarAgg, GroupBy, Distinct, Concat,
     Sort, TopK,
 };
 

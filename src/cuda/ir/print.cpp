@@ -350,6 +350,9 @@ void write_node_line(
             }
             os << ")";
             return;
+        case NodeKind::Concat:
+            os << "Concat(#inputs=" << n.inputs.size() << ")";
+            return;
     }
     os << "<?node?>";
 }

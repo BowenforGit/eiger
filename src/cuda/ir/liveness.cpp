@@ -150,6 +150,26 @@ std::vector<ColumnSet> child_live_sets(
             return { std::move(child) };
         }
 
+        case NodeKind::Concat: {
+            // Concat's output ColumnIds are freshly allocated (fresh
+            // IDs live only at this node's output). To translate
+            // live_out into what each child needs, we map positionally:
+            // if output.col[i].id is live, then inputs[k].col[i].id
+            // must be live for every k. The output and inputs have
+            // identical arity by factory invariant.
+            const auto& out = node.output_schema;
+            std::vector<ColumnSet> per_input(
+                node.inputs.size(), ColumnSet{});
+            for (size_t i = 0; i < out.size(); ++i) {
+                if (!live_out.count(out[i].id)) continue;
+                for (size_t k = 0; k < node.inputs.size(); ++k) {
+                    per_input[k].insert(
+                        node.inputs[k]->output_schema[i].id);
+                }
+            }
+            return per_input;
+        }
+
         case NodeKind::Join: {
             // Split live_out into the parts contributed by each side
             // (IDs from left_schema stay on the left, from right_schema

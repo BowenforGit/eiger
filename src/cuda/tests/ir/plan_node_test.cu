@@ -407,6 +407,71 @@ TEST(IrPlanNode, DistinctProperSubsetNarrowsSchemaToKeysInCallerOrder) {
     EXPECT_EQ(d->output_schema[1].name, "l_shipdate");
 }
 
+// ── Concat ───────────────────────────────────────────────────────
+
+TEST(IrPlanNode, ConcatRejectsEmptyInputsVector) {
+    std::vector<gir::PlanPtr> empty;
+    EXPECT_THROW(gir::concat(std::move(empty)), std::runtime_error);
+}
+
+TEST(IrPlanNode, ConcatSingleInputIsIdentityInShape) {
+    // 1-input concat is legal; the output schema matches the sole
+    // input's, modulo fresh ColumnIds.
+    gir::IdGenerator gen;
+    auto cat = make_tpch_catalog();
+    auto s = gir::scan(cat, "lineitem", {"l_shipdate", "l_discount"}, gen);
+    auto c = gir::concat({s}, gen);
+    ASSERT_EQ(c->kind, gir::NodeKind::Concat);
+    ASSERT_EQ(c->output_schema.size(), 2u);
+    EXPECT_EQ(c->output_schema[0].type, t(type_id::INT32));
+    EXPECT_EQ(c->output_schema[1].type, t(type_id::FLOAT64));
+    // Fresh ids — must differ from the Scan's ids.
+    EXPECT_NE(c->output_schema[0].id, s->output_schema[0].id);
+    EXPECT_NE(c->output_schema[1].id, s->output_schema[1].id);
+}
+
+TEST(IrPlanNode, ConcatBinaryTakesNamesFromFirstInput) {
+    gir::IdGenerator gen;
+    auto cat = make_tpch_catalog();
+    auto a = gir::scan(cat, "lineitem", {"l_shipdate", "l_discount"}, gen);
+    auto b = gir::scan(cat, "lineitem", {"l_shipdate", "l_discount"}, gen);
+    auto c = gir::concat({a, b}, gen);
+    ASSERT_EQ(c->output_schema.size(), 2u);
+    // Same names as the first input.
+    EXPECT_EQ(c->output_schema[0].name, "l_shipdate");
+    EXPECT_EQ(c->output_schema[1].name, "l_discount");
+    // Fresh ids differ from both inputs.
+    EXPECT_NE(c->output_schema[0].id, a->output_schema[0].id);
+    EXPECT_NE(c->output_schema[0].id, b->output_schema[0].id);
+}
+
+TEST(IrPlanNode, ConcatRejectsArityMismatch) {
+    gir::IdGenerator gen;
+    auto cat = make_tpch_catalog();
+    auto a = gir::scan(cat, "lineitem", {"l_shipdate"}, gen);
+    auto b = gir::scan(cat, "lineitem", {"l_shipdate", "l_discount"}, gen);
+    EXPECT_THROW(gir::concat({a, b}, gen), std::runtime_error);
+}
+
+TEST(IrPlanNode, ConcatRejectsTypeMismatch) {
+    gir::IdGenerator gen;
+    auto cat = make_tpch_catalog();
+    auto a = gir::scan(cat, "lineitem", {"l_shipdate"}, gen);   // INT32
+    auto b = gir::scan(cat, "lineitem", {"l_discount"}, gen);   // FLOAT64
+    EXPECT_THROW(gir::concat({a, b}, gen), std::runtime_error);
+}
+
+TEST(IrPlanNode, ConcatThreeWayWorks) {
+    gir::IdGenerator gen;
+    auto cat = make_tpch_catalog();
+    auto a = gir::scan(cat, "lineitem", {"l_shipdate"}, gen);
+    auto b = gir::scan(cat, "lineitem", {"l_shipdate"}, gen);
+    auto d = gir::scan(cat, "lineitem", {"l_shipdate"}, gen);
+    auto c = gir::concat({a, b, d}, gen);
+    ASSERT_EQ(c->output_schema.size(), 1u);
+    ASSERT_EQ(c->inputs.size(), 3u);
+}
+
 TEST(IrPlanNode, DistinctRejectsUnknownKey) {
     gir::IdGenerator gen;
     auto cat = make_tpch_catalog();

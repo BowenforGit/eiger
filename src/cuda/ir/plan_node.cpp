@@ -356,4 +356,52 @@ PlanPtr distinct(PlanPtr input, std::vector<ColumnId> keys) {
     return node;
 }
 
+PlanPtr concat(std::vector<PlanPtr> inputs, IdGenerator& gen) {
+    if (inputs.empty()) plan_error("concat: must have at least one input");
+    for (size_t i = 0; i < inputs.size(); ++i) {
+        if (!inputs[i]) {
+            plan_error("concat: input " + std::to_string(i) + " is null");
+        }
+    }
+    // Schema compatibility is strict on arity and type. Names are
+    // taken from the first input; nullability is OR'd across every
+    // input. See plan_node.hpp for the factory's full contract.
+    const auto& first = inputs[0]->output_schema;
+    const auto ncols = first.size();
+    for (size_t i = 1; i < inputs.size(); ++i) {
+        const auto& s = inputs[i]->output_schema;
+        if (s.size() != ncols) {
+            plan_error("concat: input " + std::to_string(i) +
+                       " has " + std::to_string(s.size()) +
+                       " columns; expected " + std::to_string(ncols));
+        }
+        for (size_t c = 0; c < ncols; ++c) {
+            if (!(s[c].type == first[c].type)) {
+                plan_error("concat: input " + std::to_string(i) +
+                           " column " + std::to_string(c) +
+                           " type mismatch");
+            }
+        }
+    }
+
+    Schema out;
+    for (size_t c = 0; c < ncols; ++c) {
+        Field f;
+        f.id = gen.next();             // fresh id per output col
+        f.type = first[c].type;
+        f.nullable = false;
+        for (const auto& in : inputs) {
+            if (in->output_schema[c].nullable) { f.nullable = true; break; }
+        }
+        f.name = first[c].name;
+        out.append(std::move(f));
+    }
+
+    auto node = std::make_shared<PlanNode>();
+    node->kind = NodeKind::Concat;
+    node->inputs = std::move(inputs);
+    node->output_schema = std::move(out);
+    return node;
+}
+
 } // namespace gamax::ir

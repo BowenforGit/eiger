@@ -427,6 +427,44 @@ ValueId lower_sort(const PlanNode& node, Lowering& lo) {
     return out_id;
 }
 
+// Lower NodeKind::Concat → StepKind::Concat. All inputs are
+// recursively lowered first; their EXEC schemas must all have the
+// same column count and positionally-matching types (the IR factory
+// enforces this, and we re-check here because post-rules passes
+// could conceivably break the invariant).
+//
+// The output Value's EXEC schema carries the IR's declared output
+// schema — which uses fresh ColumnIds per the factory's policy (see
+// plan_node.cpp::concat). Every downstream consumer resolves against
+// those fresh ids.
+ValueId lower_concat(const PlanNode& node, Lowering& lo) {
+    std::vector<ValueId> input_ids;
+    input_ids.reserve(node.inputs.size());
+    for (const auto& in : node.inputs) {
+        input_ids.push_back(lower_node(*in, lo));
+    }
+    // Sanity check on EXEC schemas after any pruning / rewrites.
+    const auto& ref = lo.exec_schema(input_ids[0]);
+    for (size_t k = 1; k < input_ids.size(); ++k) {
+        const auto& s = lo.exec_schema(input_ids[k]);
+        if (s.size() != ref.size()) {
+            lower_error("concat: input " + std::to_string(k) +
+                        " has different column count after lowering");
+        }
+        for (size_t c = 0; c < s.size(); ++c) {
+            if (!(s[c].type == ref[c].type)) {
+                lower_error("concat: input " + std::to_string(k) +
+                            " column " + std::to_string(c) +
+                            " type mismatch after lowering");
+            }
+        }
+    }
+    ValueId out_id = lo.next_value(node.output_schema);
+    lo.push_step(StepKind::Concat, std::move(input_ids), out_id,
+                 exec::ConcatPayload{});
+    return out_id;
+}
+
 // Lower NodeKind::Distinct → StepKind::Distinct with a sparse
 // `key_ordinals` payload. The EXEC output schema is the narrow
 // keys-only subset when `distinct_keys` is a proper subset of the
@@ -757,6 +795,7 @@ ValueId lower_node(const PlanNode& node, Lowering& lo) {
         case NodeKind::Limit:     id = lower_limit(node, lo);     break;
         case NodeKind::Join:      id = lower_join(node, lo);      break;
         case NodeKind::Distinct:  id = lower_distinct(node, lo); break;
+        case NodeKind::Concat:    id = lower_concat(node, lo);   break;
     }
     lo.memo[&node] = id;
     return id;

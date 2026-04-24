@@ -197,6 +197,16 @@ table_ptr group_by(gamax::table_view keys,
 table_ptr distinct(gamax::table_view keys,
                    const Context& ctx);
 
+// Vertical concatenation (UNION ALL). All inputs must have identical
+// column counts and positionally matching types (caller ensures at
+// lowering time; asserts here). Output row count = sum of input row
+// counts; output column order matches inputs[0]. Numeric columns are
+// produced by a direct memcpy per input; STRING columns get the byte
+// buffer concatenated with a per-input offset shift applied to the
+// offsets array.
+table_ptr concat(std::vector<gamax::table_view> inputs,
+                 const Context& ctx);
+
 // ── Ordering ──────────────────────────────────────────────────────
 
 table_ptr sort(gamax::table_view in,

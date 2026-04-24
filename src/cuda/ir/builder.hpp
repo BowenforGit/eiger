@@ -65,6 +65,11 @@ public:
     PlanBuilder left_anti_join(const PlanBuilder& right, Expr on) const;
     PlanBuilder cross_join(const PlanBuilder& right) const;
 
+    // Vertical concatenation (UNION ALL). Binary sugar: `a.concat(b)`
+    // = `concat({a, b})`. For N-ary, call the free function
+    // `gamax::ir::concat({a, b, c, ...})` directly.
+    PlanBuilder concat(const PlanBuilder& other) const;
+
 private:
     // Resolves `name` within `_plan->output_schema` to its ColumnId or
     // throws. Factored out because multiple methods need it.
