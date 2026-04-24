@@ -130,7 +130,7 @@ TEST(RulesCountToSum, NoOpWhenDisabled) {
     EXPECT_EQ(rewritten->agg_items[0].agg, gir::AggKind::CountAll);
 }
 
-TEST(RulesCountToSum, LeavesCountDistinctAlone) {
+TEST(RulesCountToSum, LeavesCountDistinctAloneWhenOnlyG4aIsEnabled) {
     auto cat = make_catalog();
     gir::IdGenerator g;
     gir::QueryBuilder qb(cat, g);
@@ -139,7 +139,16 @@ TEST(RulesCountToSum, LeavesCountDistinctAlone) {
         {"o_custkey"},
         {{"n", gir::AggKind::CountDistinct, o.c("o_orderkey")}}).plan();
 
-    auto rewritten = gir::apply_rules(plan);
+    // Disable the CountDistinct-specific rewrite so we can assert G4a
+    // (rewrite_count_to_sum) doesn't touch CountDistinct on its own —
+    // that's the separate rewrite_count_distinct rule's job.
+    gir::RuleConfig cfg;
+    cfg.rewrite_count_distinct = false;
+    cfg.split_non_equi_join_conditions = false;
+    cfg.split_multi_key_equi_join = false;
+    cfg.scan_column_pushdown = false;
+    auto rewritten = gir::apply_rules(plan, cfg);
+    EXPECT_EQ(rewritten.get(), plan.get());
     EXPECT_EQ(rewritten->agg_items[0].agg, gir::AggKind::CountDistinct);
 }
 
@@ -814,6 +823,118 @@ TEST(LowerOptions, BothKnobsOffStillProducesCorrectResult) {
     auto h = gamax::copy_column_to_host<int64_t>(out->view()[0]);
     EXPECT_EQ(h[0], 3);
     EXPECT_EQ(h[1], 4);
+}
+
+// ── rewrite_count_distinct ───────────────────────────────────────
+
+TEST(RulesCountDistinct, RewritesSingleAggCountDistinctToDistinctPlusCount) {
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto o = qb.scan("orders", {"o_orderkey", "o_custkey"});
+    auto plan = o.aggregate(
+        {"o_custkey"},
+        {{"n", gir::AggKind::CountDistinct, o.c("o_orderkey")}}).plan();
+
+    // Isolate the CountDistinct rule so we can see its immediate
+    // output shape (Aggregate(CountAll) over Distinct) without G4a's
+    // subsequent CountAll → Sum(lit(1)) rewrite collapsing it.
+    gir::RuleConfig cfg;
+    cfg.rewrite_count_to_sum = false;
+    cfg.split_non_equi_join_conditions = false;
+    cfg.split_multi_key_equi_join = false;
+    cfg.scan_column_pushdown = false;
+    auto rewritten = gir::apply_rules(plan, cfg);
+
+    ASSERT_EQ(rewritten->kind, gir::NodeKind::Aggregate);
+    ASSERT_EQ(rewritten->agg_items.size(), 1u);
+    EXPECT_EQ(rewritten->agg_items[0].agg, gir::AggKind::CountAll);
+    ASSERT_EQ(rewritten->inputs.size(), 1u);
+    EXPECT_EQ(rewritten->inputs[0]->kind, gir::NodeKind::Distinct);
+    // Distinct's keys are K ∪ {x} = {o_custkey, o_orderkey}.
+    EXPECT_EQ(rewritten->inputs[0]->distinct_keys.size(), 2u);
+}
+
+TEST(RulesCountDistinct, PreservesOriginalAggregateOutputId) {
+    // The outer CountAll must emit the original CountDistinct's
+    // ColumnId so ancestor nodes (Sort, Project) still resolve.
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto o = qb.scan("orders", {"o_orderkey", "o_custkey"});
+    auto orig = o.aggregate(
+        {"o_custkey"},
+        {{"n", gir::AggKind::CountDistinct, o.c("o_orderkey")}}).plan();
+    const auto orig_agg_id = orig->output_schema.back().id;
+
+    auto rewritten = gir::apply_rules(orig);
+    EXPECT_EQ(rewritten->output_schema.back().id, orig_agg_id);
+}
+
+TEST(RulesCountDistinct, ComposesWithG4aInSinglePass) {
+    // CountDistinct rule emits CountAll; G4a then rewrites CountAll
+    // → Sum(lit(1)) on the same apply_local_rules call.
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto o = qb.scan("orders", {"o_orderkey", "o_custkey"});
+    auto plan = o.aggregate(
+        {"o_custkey"},
+        {{"n", gir::AggKind::CountDistinct, o.c("o_orderkey")}}).plan();
+
+    auto rewritten = gir::apply_rules(plan);
+    ASSERT_EQ(rewritten->kind, gir::NodeKind::Aggregate);
+    ASSERT_EQ(rewritten->agg_items.size(), 1u);
+    // G4a must have turned the emitted CountAll into Sum(lit(1)).
+    EXPECT_EQ(rewritten->agg_items[0].agg, gir::AggKind::Sum);
+}
+
+TEST(RulesCountDistinct, LeavesMultiAggAggregateAlone) {
+    // Narrow scope: only single-agg CountDistinct fires. Mixed agg
+    // sets pass through untouched and will fail at lowering (tested
+    // separately in test_emit / run_tpch_ir error paths).
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto l = qb.scan("lineitem", {"l_orderkey", "l_quantity"});
+    auto plan = l.aggregate(
+        {"l_orderkey"},
+        {
+            {"n",  gir::AggKind::CountDistinct, l.c("l_quantity")},
+            {"sq", gir::AggKind::Sum,           l.c("l_quantity")},
+        }).plan();
+
+    gir::RuleConfig cfg;
+    cfg.rewrite_count_to_sum = false;
+    cfg.split_non_equi_join_conditions = false;
+    cfg.split_multi_key_equi_join = false;
+    cfg.scan_column_pushdown = false;
+    auto rewritten = gir::apply_rules(plan, cfg);
+    EXPECT_EQ(rewritten.get(), plan.get());
+    ASSERT_EQ(rewritten->agg_items.size(), 2u);
+    EXPECT_EQ(rewritten->agg_items[0].agg, gir::AggKind::CountDistinct);
+    EXPECT_EQ(rewritten->agg_items[1].agg, gir::AggKind::Sum);
+}
+
+TEST(RulesCountDistinct, LeavesNonColRefBodyAlone) {
+    auto cat = make_catalog();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(cat, g);
+    auto l = qb.scan("lineitem", {"l_orderkey", "l_quantity"});
+    // CountDistinct over a computed expression — not a plain ColRef.
+    auto body = l.c("l_quantity") + gir::lit(int64_t{1});
+    auto plan = l.aggregate(
+        {"l_orderkey"},
+        {{"n", gir::AggKind::CountDistinct, std::move(body)}}).plan();
+
+    gir::RuleConfig cfg;
+    cfg.rewrite_count_to_sum = false;
+    cfg.split_non_equi_join_conditions = false;
+    cfg.split_multi_key_equi_join = false;
+    cfg.scan_column_pushdown = false;
+    auto rewritten = gir::apply_rules(plan, cfg);
+    EXPECT_EQ(rewritten.get(), plan.get());
+    EXPECT_EQ(rewritten->agg_items[0].agg, gir::AggKind::CountDistinct);
 }
 
 TEST(RulesEngine, HonorsDagSharing) {

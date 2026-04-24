@@ -36,9 +36,30 @@ struct RuleConfig {
     // count aggregation, so this rule is what lets Q1/Q4/Q13/Q21/Q22
     // lower at all.
     //
-    // Leaves `CountDistinct` alone — that needs a separate
-    // `Distinct`-plus-count rewrite that's not yet wired.
+    // CountDistinct is handled by `rewrite_count_distinct` below —
+    // that rule emits a CountAll on top of a Distinct subtree, which
+    // this rule then catches on the same pass (G4a runs AFTER
+    // rewrite_count_distinct so the emitted CountAll is picked up in
+    // one apply_rules call).
     bool rewrite_count_to_sum {true};
+
+    // Rewrite a single-item Aggregate with `CountDistinct` into
+    // Aggregate(keys=K, aggs=[CountAll], input=Distinct(K∪{x})).
+    //
+    // Scope is deliberately narrow:
+    //   * exactly one aggregate item (mixed agg sets with CountDistinct
+    //     are not expressible via this rewrite),
+    //   * the aggregate kind is CountDistinct,
+    //   * the body is a plain ColRef (no computed expressions).
+    //
+    // Anything outside that scope falls through and the CountDistinct
+    // reaches lowering, where it throws with a pointer back at this
+    // rule's scope. TPC-H Q16 is the only query this targets today.
+    //
+    // The output ColumnId of the original CountDistinct is preserved
+    // on the outer CountAll's output field so ancestor nodes (Sort,
+    // Project) continue to resolve their refs.
+    bool rewrite_count_distinct {true};
 
     // G7. For an `Inner` join whose condition is a conjunction
     // including at least one non-equi clause (e.g. `a == b && c > d`,

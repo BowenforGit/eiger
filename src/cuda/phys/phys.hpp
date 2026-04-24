@@ -189,6 +189,14 @@ table_ptr group_by(gamax::table_view keys,
                    std::vector<AggSpec> specs,
                    const Context& ctx);
 
+// Distinct over all of `keys`' columns. One row per unique key
+// combination. Numeric, STRING, and multi-key inputs are all handled.
+// Output column order matches input. Output row order is insertion
+// order (first-encounter) — callers that depend on a specific order
+// must sort downstream.
+table_ptr distinct(gamax::table_view keys,
+                   const Context& ctx);
+
 // ── Ordering ──────────────────────────────────────────────────────
 
 table_ptr sort(gamax::table_view in,

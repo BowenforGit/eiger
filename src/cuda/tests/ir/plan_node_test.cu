@@ -377,6 +377,36 @@ TEST(IrPlanNode, DistinctPreservesSchema) {
     EXPECT_TRUE(d->distinct_keys.empty());
 }
 
+TEST(IrPlanNode, DistinctKeysCoveringAllInputsPreservesSchema) {
+    // Explicit keys that cover every input column (by id) collapse to
+    // the same shape as the empty-keys case: output_schema == input.
+    gir::IdGenerator gen;
+    auto cat = make_tpch_catalog();
+    auto s = gir::scan(cat, "lineitem", {"l_shipdate", "l_discount"}, gen);
+    auto d = gir::distinct(s,
+        {s->output_schema[0].id, s->output_schema[1].id});
+    ASSERT_EQ(d->output_schema.size(), 2u);
+    EXPECT_EQ(d->output_schema[0].id, s->output_schema[0].id);
+    EXPECT_EQ(d->output_schema[1].id, s->output_schema[1].id);
+    EXPECT_EQ(d->distinct_keys.size(), 2u);
+}
+
+TEST(IrPlanNode, DistinctProperSubsetNarrowsSchemaToKeysInCallerOrder) {
+    gir::IdGenerator gen;
+    auto cat = make_tpch_catalog();
+    auto s = gir::scan(cat, "lineitem",
+        {"l_shipdate", "l_extendedprice", "l_discount"}, gen);
+    // Pick 2-of-3 keys in non-input order. Output should contain
+    // exactly those two columns, in the caller's order.
+    auto d = gir::distinct(s,
+        {s->output_schema[2].id, s->output_schema[0].id});
+    ASSERT_EQ(d->output_schema.size(), 2u);
+    EXPECT_EQ(d->output_schema[0].id, s->output_schema[2].id);
+    EXPECT_EQ(d->output_schema[1].id, s->output_schema[0].id);
+    EXPECT_EQ(d->output_schema[0].name, "l_discount");
+    EXPECT_EQ(d->output_schema[1].name, "l_shipdate");
+}
+
 TEST(IrPlanNode, DistinctRejectsUnknownKey) {
     gir::IdGenerator gen;
     auto cat = make_tpch_catalog();

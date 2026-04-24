@@ -30,6 +30,7 @@ set(testSources
     ir/liveness_test.cu
     ir/rules_test.cu
     phys/phys_test.cu
+    phys/phys_distinct_test.cu
     exec/exec_test.cu
     test_header.cpp
 )

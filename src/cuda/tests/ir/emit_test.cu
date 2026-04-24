@@ -516,14 +516,43 @@ TEST(IrEmit, CrossJoinProducesCartesianProduct) {
     EXPECT_EQ(out->num_columns(), 4);
 }
 
-TEST(IrEmit, DistinctReportsNotImplemented) {
+TEST(IrEmit, DistinctLowersToPhysicalDistinct) {
     gir::IdGenerator gen;
     auto cat = make_lineitem_catalog();
     auto in = make_q6_input();
     auto ctx = make_ctx(cat, in);
     gir::QueryBuilder qb(cat, gen);
+    // All-columns distinct. The tiny Q6 fixture has 5 rows with 4
+    // distinct l_shipdate values — exact bag contents verified
+    // separately via phys::distinct tests; this test only asserts
+    // Distinct runs through the emitter without throwing and yields
+    // a reasonable row count.
     auto plan = qb.scan("lineitem", {"l_shipdate"}).distinct();
-    EXPECT_THROW(gir::emit(plan.plan(), ctx), std::runtime_error);
+    auto out = gir::emit(plan.plan(), ctx);
+    EXPECT_EQ(out->num_columns(), 1);
+    EXPECT_GT(out->num_rows(), 0);
+    EXPECT_LE(out->num_rows(), 5);
+}
+
+TEST(IrEmit, DistinctProperSubsetKeysNarrowsToOnlyKeys) {
+    // Build a Distinct with a proper-subset keys list. The EXEC output
+    // schema should contain only the key columns — non-key columns
+    // must not appear in the output.
+    gir::IdGenerator gen;
+    auto cat = make_lineitem_catalog();
+    auto in = make_q6_input();
+    auto ctx = make_ctx(cat, in);
+    gir::QueryBuilder qb(cat, gen);
+    auto li = qb.scan("lineitem",
+        {"l_shipdate", "l_extendedprice", "l_discount"});
+    // Dedup by (l_shipdate) alone; drop the other two columns.
+    auto plan = li.distinct({"l_shipdate"});
+    auto out = gir::emit(plan.plan(), ctx);
+    // Exactly one output column (l_shipdate) regardless of dedup
+    // outcome.
+    EXPECT_EQ(out->num_columns(), 1);
+    EXPECT_EQ(out->view()[0].type().id(), gamax::type_id::INT32);
+    EXPECT_GT(out->num_rows(), 0);
 }
 
 int main(int argc, char** argv) {

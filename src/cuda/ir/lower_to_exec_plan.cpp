@@ -271,11 +271,26 @@ gamax::groupby::aggregation_id to_physical_agg(AggKind k) {
         case AggKind::Avg: return gamax::groupby::aggregation_id::AVG;
         case AggKind::Count:
         case AggKind::CountAll:
+            // G4a (rule_count_to_sum) rewrites these to Sum(lit(1)).
+            // Reaching here means G4a is disabled in RuleConfig.
+            not_implemented("COUNT / COUNT(*) reached lowering — expected "
+                            "rule_count_to_sum (G4a) to have rewritten "
+                            "these to Sum(lit(1)). Enable the rule in "
+                            "RuleConfig or run apply_rules() before "
+                            "lowering.");
         case AggKind::CountDistinct:
-            not_implemented("COUNT / COUNT(*) / COUNT(DISTINCT) "
-                            "(physical backend has no count; express "
-                            "via SUM of a 1-literal column — rule-engine "
-                            "work)");
+            // Only a `rule_count_distinct_to_distinct_plus_count`-
+            // rewritten Aggregate lowers today (single CountDistinct as
+            // the sole agg, with a ColRef body). Any CountDistinct that
+            // survives rules violates that narrow scope.
+            not_implemented("COUNT(DISTINCT ...) reached lowering. "
+                            "Supported shape: a single CountDistinct as "
+                            "the sole aggregate item with a plain column "
+                            "reference as its body; enable "
+                            "rewrite_count_distinct in RuleConfig. Mixing "
+                            "CountDistinct with other aggregates, or "
+                            "applying it to a computed expression, is "
+                            "not supported today.");
     }
     lower_error("unknown AggKind");
 }
@@ -409,6 +424,45 @@ ValueId lower_sort(const PlanNode& node, Lowering& lo) {
     ValueId out_id = lo.next_value(in_schema);
     lo.push_step(StepKind::Sort, {input_id}, out_id,
                  exec::SortPayload{std::move(keys)});
+    return out_id;
+}
+
+// Lower NodeKind::Distinct → StepKind::Distinct with a sparse
+// `key_ordinals` payload. The EXEC output schema is the narrow
+// keys-only subset when `distinct_keys` is a proper subset of the
+// input's columns, and the full input schema when the keys cover
+// every input column (or are empty). This mirrors the IR factory's
+// output_schema policy exactly.
+ValueId lower_distinct(const PlanNode& node, Lowering& lo) {
+    auto input_id = lower_node(*node.inputs[0], lo);
+    const auto& in_schema = lo.exec_schema(input_id);
+
+    // Resolve each distinct-key id to an EXEC-side ordinal. Empty keys
+    // mean "dedup over all input columns" — we synthesise the
+    // identity ordinals so the phys side still gets a complete key
+    // set.
+    std::vector<gamax::size_type> key_ordinals;
+    if (node.distinct_keys.empty()) {
+        key_ordinals.resize(in_schema.size());
+        std::iota(key_ordinals.begin(), key_ordinals.end(),
+                  gamax::size_type{0});
+    } else {
+        key_ordinals.reserve(node.distinct_keys.size());
+        for (auto kid : node.distinct_keys) {
+            key_ordinals.push_back(resolve_ordinal(in_schema, kid));
+        }
+    }
+
+    // Build the Distinct's EXEC output schema by picking the key
+    // columns out of the input schema in the order they appear in
+    // `key_ordinals`. When all input columns are keys (either empty
+    // or covers-all), this naturally reconstructs the input schema.
+    Schema out_schema;
+    for (auto ord : key_ordinals) out_schema.append(in_schema[ord]);
+
+    ValueId out_id = lo.next_value(std::move(out_schema));
+    lo.push_step(StepKind::Distinct, {input_id}, out_id,
+                 exec::DistinctPayload{std::move(key_ordinals)});
     return out_id;
 }
 
@@ -702,8 +756,7 @@ ValueId lower_node(const PlanNode& node, Lowering& lo) {
         case NodeKind::Sort:      id = lower_sort(node, lo);      break;
         case NodeKind::Limit:     id = lower_limit(node, lo);     break;
         case NodeKind::Join:      id = lower_join(node, lo);      break;
-        case NodeKind::Distinct:
-            not_implemented("Distinct (no physical op yet)");
+        case NodeKind::Distinct:  id = lower_distinct(node, lo); break;
     }
     lo.memo[&node] = id;
     return id;

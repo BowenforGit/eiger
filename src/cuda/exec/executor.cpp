@@ -101,6 +101,13 @@ std::unique_ptr<gamax::table> run_step(
                 v.select_columns(k_indices),
                 v.select_columns(v_indices),
                 pl.specs, ctx);
+        } else if constexpr (std::is_same_v<T, DistinctPayload>) {
+            // Sparse column selection: the input may carry more than
+            // just the distinct keys, but only `pl.key_ordinals` are
+            // handed to `phys::distinct` as keys.
+            auto v = input_view(0);
+            return gamax::phys::distinct(
+                v.select_columns(pl.key_ordinals), ctx);
         } else if constexpr (std::is_same_v<T, SortPayload>) {
             return gamax::phys::sort(input_view(0), pl.keys, ctx);
         } else if constexpr (std::is_same_v<T, TopKPayload>) {

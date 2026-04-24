@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 
 namespace gamax::ir {
 
@@ -312,10 +313,45 @@ PlanPtr distinct(PlanPtr input, std::vector<ColumnId> keys) {
         }
     }
 
+    // Output-schema policy:
+    //   * Empty keys → "distinct over all columns" (SQL DISTINCT).
+    //     Output schema is the input's schema unchanged.
+    //   * Non-empty keys that cover *every* input column (by id) → the
+    //     degenerate case of above; same result, output == input schema.
+    //   * Non-empty keys that are a proper subset → output schema is
+    //     just those key columns, in caller order. Matches the
+    //     `SELECT DISTINCT k1, k2 FROM t` shape — non-key columns are
+    //     dropped rather than getting an arbitrary pick per group.
+    //
+    // SQL `DISTINCT ON (subset) keep all cols` is NOT expressible under
+    // this single-factory scheme; if a caller needs it, a separate
+    // entry point will be added rather than parameterising this one.
     auto node = std::make_shared<PlanNode>();
     node->kind = NodeKind::Distinct;
     node->inputs.push_back(input);
-    node->output_schema = input->output_schema;
+
+    bool covers_all = keys.empty();
+    if (!covers_all &&
+        keys.size() == static_cast<size_t>(input->output_schema.size()))
+    {
+        std::unordered_set<int64_t> key_ids;
+        for (auto k : keys) key_ids.insert(k.value);
+        covers_all = true;
+        for (const auto& f : input->output_schema.fields()) {
+            if (!key_ids.count(f.id.value)) { covers_all = false; break; }
+        }
+    }
+
+    if (covers_all) {
+        node->output_schema = input->output_schema;
+    } else {
+        Schema narrow;
+        for (auto k : keys) {
+            auto idx = input->output_schema.index_of(k);
+            narrow.append(input->output_schema[*idx]);
+        }
+        node->output_schema = std::move(narrow);
+    }
     node->distinct_keys = std::move(keys);
     return node;
 }

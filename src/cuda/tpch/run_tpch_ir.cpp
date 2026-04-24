@@ -122,6 +122,35 @@ void print_result(const gamax::table_view& v, gamax::size_type max_rows) {
                     col_cells.push_back(std::to_string(h[i]));
                 break;
             }
+            case type_id::STRING: {
+                // Arrow string columns carry a 2-entry helper buffer
+                // of [data_ptr, meta_ptr]. Reading both via one D2H
+                // copy keeps the path simple and side-steps the NVCC
+                // void*-arithmetic warning in `string_column_view`'s
+                // host ctor (harmless in isolation, but grep hits it
+                // every time this TU recompiles). Offsets in
+                // meta_buffer are INT64 (see get_arrow_string_offsets).
+                void* host_ptrs[2] = {nullptr, nullptr};
+                cudaMemcpy(host_ptrs, col.data<void>(),
+                           2 * sizeof(void*), cudaMemcpyDeviceToHost);
+                auto num = col.size();
+                std::vector<gamax::size_type> offsets(num + 1);
+                cudaMemcpy(offsets.data(), host_ptrs[1],
+                           (num + 1) * sizeof(gamax::size_type),
+                           cudaMemcpyDeviceToHost);
+                gamax::size_type total = offsets.back();
+                std::string bytes(total, '\0');
+                if (total > 0) {
+                    cudaMemcpy(bytes.data(), host_ptrs[0],
+                               total, cudaMemcpyDeviceToHost);
+                }
+                for (gamax::size_type i = 0; i < n; ++i) {
+                    col_cells.emplace_back(
+                        bytes.data() + offsets[i],
+                        offsets[i + 1] - offsets[i]);
+                }
+                break;
+            }
             default:
                 for (gamax::size_type i = 0; i < n; ++i) {
                     col_cells.push_back("<" +

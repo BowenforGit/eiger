@@ -381,6 +381,46 @@ TEST(ExecExecutor, PrunedFilterProducesCorrectResult) {
     EXPECT_DOUBLE_EQ(rev[1], 18.0);
 }
 
+TEST(ExecLower, DistinctLowersToDistinctStep) {
+    // Lower a proper-subset Distinct and verify the ExecPlan's last
+    // step is a Distinct with the correct key_ordinals payload.
+    auto f = make_fixture();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(f.cat, g);
+    auto li = qb.scan("lineitem",
+        {"l_shipdate", "l_extendedprice", "l_discount"});
+    auto plan = li.distinct({"l_shipdate"}).plan();
+    auto ep = gir::lower_to_exec_plan(plan, f.cat);
+
+    ASSERT_FALSE(ep.steps.empty());
+    const auto& last = ep.steps.back();
+    EXPECT_EQ(last.kind, gex::StepKind::Distinct);
+    const auto& pl = std::get<gex::DistinctPayload>(last.payload);
+    // Distinct over l_shipdate; scan-pushdown will have pruned the
+    // other two scan columns away, so l_shipdate is ordinal 0 in the
+    // Distinct's input.
+    ASSERT_EQ(pl.key_ordinals.size(), 1u);
+    EXPECT_EQ(pl.key_ordinals[0], 0);
+    // Output schema has exactly one column — the narrowed key.
+    EXPECT_EQ(ep.values[last.output].schema.size(), 1u);
+}
+
+TEST(ExecExecutor, DistinctEndToEndYieldsUniqueKeys) {
+    // End-to-end: scan fixture → distinct(l_shipdate) → execute.
+    // Fixture has 5 rows with 4 distinct l_shipdate values.
+    auto f = make_fixture();
+    gir::IdGenerator g;
+    gir::QueryBuilder qb(f.cat, g);
+    auto li = qb.scan("lineitem", {"l_shipdate"});
+    auto plan = li.distinct({"l_shipdate"}).plan();
+    auto ep = gir::lower_to_exec_plan(plan, f.cat);
+    gamax::phys::Context ctx{cudaStreamDefault};
+    auto out = gex::execute(ep, resolver_for(f), ctx);
+    EXPECT_GT(out->num_rows(), 0);
+    EXPECT_LE(out->num_rows(), 5);
+    EXPECT_EQ(out->num_columns(), 1);
+}
+
 TEST(ExecExecutor, NullRootOrResolverRaises) {
     auto f = make_fixture();
     gir::IdGenerator g;

@@ -209,10 +209,17 @@ PlanPtr left_anti_join(PlanPtr left, PlanPtr right, Expr on);
 // combined with every row of another stream for a threshold check.
 PlanPtr cross_join(PlanPtr left, PlanPtr right);
 
-// Distinct removes duplicate rows. An empty keys vector distincts over
-// all output columns (SQL DISTINCT default); a non-empty vector
-// distincts over those columns only, which is the shape emitted by
-// frontends that lower `SELECT DISTINCT k1, k2 FROM ...`.
+// Distinct removes duplicate rows.
+//   * Empty `keys` → dedup over every input column (SQL DISTINCT).
+//     Output schema == input schema.
+//   * `keys` covering every input column (by id) → identical result
+//     to the empty case.
+//   * `keys` is a non-empty proper subset → dedup by those keys; output
+//     schema is just the key columns, in caller order. Matches the
+//     `SELECT DISTINCT k1, k2 FROM t` shape — non-key columns are
+//     dropped rather than getting an arbitrary pick per group. SQL
+//     `DISTINCT ON (subset) keep all cols` is not expressible under
+//     this factory; add a separate entry point when a caller needs it.
 PlanPtr distinct(PlanPtr input, std::vector<ColumnId> keys = {});
 
 } // namespace gamax::ir

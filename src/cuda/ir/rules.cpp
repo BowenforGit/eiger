@@ -55,6 +55,65 @@ PlanPtr rule_count_to_sum(PlanPtr node) {
     return result;
 }
 
+// ── CountDistinct → Distinct + CountAll ──────────────────────────
+//
+// Rewrite `Aggregate(keys=K, aggs=[CountDistinct(x) AS c])` into
+//
+//   Aggregate(keys=K, aggs=[CountAll AS c],
+//             input=Distinct(keys=K∪{x}, input=orig))
+//
+// Ancestor nodes reference the CountDistinct's output ColumnId; the
+// outer Aggregate must emit that same id on its CountAll output or
+// lowering's ordinal-resolution breaks. `aggregate(...)`'s factory
+// allocates a fresh id per aggregate, so we construct via the factory
+// (to reuse its schema / validation machinery) and then overwrite the
+// single output id in-place before returning.
+//
+// Under the narrow scope we fire on (single agg, CountDistinct,
+// ColRef body), K∪{x} can always be expressed as a proper-subset
+// Distinct — the outer Aggregate's groupby refers to K by id and
+// CountAll needs x only to keep scan-pushdown from pruning it. The
+// CountAll body is `lit(int64_t{1})` to match G4a's output shape (so
+// G4a can pick it up on the same apply_rules pass and rewrite to
+// Sum(lit(1)) without an extra fixpoint iteration).
+//
+// G4a's rewrite IS downstream of this rule in the same
+// `apply_local_rules` sequence — we emit `CountAll`, G4a rewrites it
+// to `Sum(lit(1))` one call later.
+PlanPtr rule_count_distinct_to_distinct_plus_count(PlanPtr node) {
+    if (node->kind != NodeKind::Aggregate) return node;
+    // Narrow scope: single agg, CountDistinct, ColRef body.
+    if (node->agg_items.size() != 1) return node;
+    const auto& ag = node->agg_items[0];
+    if (ag.agg != AggKind::CountDistinct) return node;
+    if (ag.body.kind != ExprKind::ColRef) return node;
+
+    const auto x_id = ag.body.col_ref;
+    const auto preserved_id = node->output_schema.back().id;
+
+    // Build K∪{x} — the Distinct dedup keys. Ordering doesn't matter
+    // semantically (hash-based dedup); we put K first so the shape
+    // reads naturally in --print-plan.
+    std::vector<ColumnId> inner_keys = node->agg_keys;
+    inner_keys.push_back(x_id);
+
+    auto dedup = distinct(node->inputs[0], inner_keys);
+
+    // Outer: Aggregate(K, [CountAll AS c]). CountAll body is
+    // `lit(int64_t{1})` to match G4a's emitted shape.
+    std::vector<AggregateItem> outer_aggs;
+    outer_aggs.push_back(AggregateItem{
+        ag.name, AggKind::CountAll, lit(int64_t{1})});
+    auto outer = aggregate(dedup, node->agg_keys, std::move(outer_aggs));
+
+    // Patch the aggregate output id to preserve the original
+    // CountDistinct id. The factory already handles the keys (keys
+    // carry input ids forward unchanged); only the agg output field
+    // gets a fresh id from the IdGenerator, so we overwrite that one.
+    outer->output_schema.back().id = preserved_id;
+    return outer;
+}
+
 // ── G7: split non-equi clauses out of Inner join conditions ──────
 
 // Walk an AND-chain, appending leaf clauses to `out`. Non-AND roots
@@ -225,6 +284,11 @@ PlanPtr rule_scan_column_pushdown(
 PlanPtr apply_local_rules(
     PlanPtr node, const RuleConfig& cfg, const LivenessResult& liveness)
 {
+    // Order is significant here: CountDistinct rewrite runs BEFORE
+    // G4a so the CountAll it emits is picked up by G4a on the same
+    // node in this sequence. Otherwise the fixpoint loop would still
+    // converge, but in two passes instead of one.
+    if (cfg.rewrite_count_distinct)          node = rule_count_distinct_to_distinct_plus_count(node);
     if (cfg.rewrite_count_to_sum)            node = rule_count_to_sum(node);
     // Order is significant here: G7 runs BEFORE the multi-key split so
     // that any non-equi residual is lifted out first. The multi-key

@@ -6,6 +6,7 @@
 #include <string>
 
 #include "operators/groupby/groupby.hpp"
+#include "operators/groupby/groupby_hash.hpp"
 #include "operators/join/cross_join.hpp"
 #include "operators/join/inner_join.hpp"
 #include "operators/join/join.hpp"
@@ -682,6 +683,23 @@ table_ptr group_by(gamax::table_view keys,
     // mixed keys; enabling SKF is an independent perf question.
     return gamax::groupby::groupby(
         keys, values, requests, hint, ctx.stream);
+}
+
+table_ptr distinct(gamax::table_view keys,
+                   const Context& ctx)
+{
+    // Empty input → empty output with the same column shape.
+    if (keys.num_rows() == 0) {
+        std::vector<gamax::column_ptr> cols;
+        cols.reserve(keys.num_columns());
+        for (int i = 0; i < keys.num_columns(); ++i) {
+            cols.push_back(make_zero_row_column(
+                keys.get_column(i).type(), ctx.stream));
+        }
+        return std::make_unique<gamax::table>(std::move(cols));
+    }
+    gamax::groupby::groupby_hint hint;
+    return gamax::groupby::hash::distinct(keys, hint, ctx.stream);
 }
 
 // ── Ordering ──────────────────────────────────────────────────────

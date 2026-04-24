@@ -100,6 +100,13 @@ struct GroupByPayload {
     gamax::size_type n_keys;
     std::vector<gamax::phys::AggSpec> specs;
 };
+// Distinct: column ordinals of the input Value that form the
+// distinct-keys set. The executor selects those columns and passes
+// them to `phys::distinct`; the selection is sparse, so the caller
+// never materializes a dense keys-only intermediate upstream.
+struct DistinctPayload {
+    std::vector<gamax::size_type> key_ordinals;
+};
 struct SortPayload {
     std::vector<gamax::phys::SortSpec> keys;
 };
@@ -119,6 +126,7 @@ using StepPayload = std::variant<
     CrossJoinPayload,
     ScalarAggPayload,
     GroupByPayload,
+    DistinctPayload,
     SortPayload,
     TopKPayload>;
 
@@ -127,7 +135,7 @@ using StepPayload = std::variant<
 enum class StepKind {
     SourceTable, Reorder, Project, Filter,
     EqJoin, SemiJoin, AntiJoin, CrossJoin,
-    ScalarAgg, GroupBy,
+    ScalarAgg, GroupBy, Distinct,
     Sort, TopK,
 };
 

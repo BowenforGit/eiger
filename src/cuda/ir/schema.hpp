@@ -75,6 +75,11 @@ public:
 
     void append(Field f) { _fields.push_back(std::move(f)); }
 
+    // Mutable access to the last field. Used by a handful of rule
+    // rewrites that need to patch a just-constructed field's id to
+    // preserve an ancestor's reference (rule_count_distinct_to_distinct_plus_count).
+    Field& back() { return _fields.back(); }
+
 private:
     std::vector<Field> _fields;
 };
