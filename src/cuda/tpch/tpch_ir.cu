@@ -1066,14 +1066,16 @@ PlanPtr build_q19(const QueryBuilder& qb) {
 // another semi-join to prune suppliers.
 PlanPtr build_q20(const QueryBuilder& qb) {
     auto p = qb.scan("part", {"p_partkey", "p_name"});
+    // Spec is `p_name LIKE 'forest%'` (startswith), not contains.
+    // Using Contains overmatches and roughly doubled the row count.
     auto p_filt = p.filter(
-        string_op(StringOpKind::Contains, p.c("p_name"), {"forest"}));
+        string_op(StringOpKind::Startswith, p.c("p_name"), {"forest"}));
 
     auto l_sub = qb.scan("lineitem",
         {"l_partkey", "l_suppkey", "l_quantity", "l_shipdate"});
     auto l_filt = l_sub.filter(
-            (l_sub.c("l_shipdate") >= lit(19950101))
-         && (l_sub.c("l_shipdate") <  lit(19960101)));
+            (l_sub.c("l_shipdate") >= lit(19940101))
+         && (l_sub.c("l_shipdate") <  lit(19950101)));
     auto qty = l_filt.aggregate(
         {"l_partkey", "l_suppkey"},
         {{"sum_qty", AggKind::Sum, l_filt.c("l_quantity")}});
