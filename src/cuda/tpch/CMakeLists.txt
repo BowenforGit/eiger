@@ -10,6 +10,7 @@ set(tpch_srcs
     tpch_util.cu
     tpch_ops.cu
     ir_source_resolver.cpp
+    verify.cpp
 )
 
 add_library(gamax_tpch SHARED ${tpch_srcs})

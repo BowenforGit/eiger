@@ -2,19 +2,24 @@
 // against live TPC-H Parquet data.
 //
 // Usage:
-//   run_tpch_ir <query-id> [--scale N] [--print-plan]
+//   run_tpch_ir <query-id> [--scale N] [--print-plan] [--verify]
 //
 // Example:
-//   TPCH_DATA_PATH=/scratch/wubo ./run_tpch_ir 6 --scale 1
+//   TPCH_DATA_PATH=/scratch/wubo ./run_tpch_ir 6 --scale 1 --verify
 //
-// Only queries whose physical path is wired today are implemented
-// (Q6 is the canonical one). Others will exit with a clear message.
+// --verify loads the Parquet golden at
+//   $TPCH_DATA_PATH/sf<N>/golden/q<NN>.parquet
+// (produced by `script/gen_tpch_golden.py`) and compares column-by-
+// column against the gamax output. Prints "VERIFY: OK" on match or a
+// diagnostic + exits 1 on mismatch.
 
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -30,6 +35,7 @@
 #include "tpch/ir_source_resolver.hpp"
 #include "tpch/tpch.hpp"
 #include "tpch/tpch_ir.hpp"
+#include "tpch/verify.hpp"
 
 namespace {
 
@@ -37,6 +43,7 @@ struct Args {
     int query_id {6};
     int scale_factor {1};
     bool print_plan {false};
+    bool verify {false};
 };
 
 Args parse_args(int argc, char** argv) {
@@ -47,11 +54,26 @@ Args parse_args(int argc, char** argv) {
             a.scale_factor = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--print-plan") == 0) {
             a.print_plan = true;
+        } else if (std::strcmp(argv[i], "--verify") == 0) {
+            a.verify = true;
         } else {
             throw std::runtime_error("Unknown arg: " + std::string(argv[i]));
         }
     }
     return a;
+}
+
+std::string golden_path_for(int qid, int scale_factor) {
+    const char* data_path = std::getenv("TPCH_DATA_PATH");
+    if (!data_path || !*data_path) {
+        throw std::runtime_error(
+            "--verify requires TPCH_DATA_PATH to be set (golden lives at "
+            "$TPCH_DATA_PATH/sf<N>/golden/q<NN>.parquet)");
+    }
+    std::ostringstream os;
+    os << data_path << "/sf" << scale_factor << "/golden/q"
+       << (qid < 10 ? "0" : "") << qid << ".parquet";
+    return os.str();
 }
 
 gamax::ir::PlanPtr build_query(
@@ -234,6 +256,19 @@ int main(int argc, char** argv) try {
 
     // ── 5. Print ─────────────────────────────────────────────────
     print_result(result->view(), /*max_rows=*/20);
+
+    // ── 6. Optional verify against Parquet golden ────────────────
+    if (args.verify) {
+        auto golden = golden_path_for(args.query_id, args.scale_factor);
+        std::cout << "VERIFY: comparing against " << golden << "\n";
+        auto vr = gamax::tpch::verify_result(result->view(), golden);
+        if (vr.ok) {
+            std::cout << "VERIFY: OK\n";
+        } else {
+            std::cout << "VERIFY: MISMATCH\n" << vr.diagnostic;
+            return 1;
+        }
+    }
     return 0;
 }
 catch (const std::exception& e) {
