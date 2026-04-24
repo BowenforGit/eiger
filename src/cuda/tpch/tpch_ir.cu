@@ -391,8 +391,8 @@ PlanPtr build_q5(const QueryBuilder& qb) {
     auto r_filt = r.filter(
         string_op(StringOpKind::Equal, r.c("r_name"), {"ASIA"}));
     auto o_filt = o.filter(
-            (o.c("o_orderdate") >= lit(19950101))
-         && (o.c("o_orderdate") <  lit(19960101)));
+            (o.c("o_orderdate") >= lit(19940101))
+         && (o.c("o_orderdate") <  lit(19950101)));
 
     // region ⋈ nation ⋈ supplier ⋈ customer ⋈ orders ⋈ lineitem,
     // with the customer/supplier both keyed into the same nation.
