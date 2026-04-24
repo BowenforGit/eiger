@@ -17,14 +17,18 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 
+#include <nvtx3/nvtx3.hpp>
+
 #include "exec/executor.hpp"
 #include "exec/print.hpp"
+#include "exec/step_profile.hpp"
 #include "ir/lower_to_exec_plan.hpp"
 #include "ir/print.hpp"
 #include "ir/rules.hpp"
@@ -44,6 +48,7 @@ struct Args {
     int scale_factor {1};
     bool print_plan {false};
     bool verify {false};
+    std::string profile_csv;  // empty = disabled
 };
 
 Args parse_args(int argc, char** argv) {
@@ -56,6 +61,8 @@ Args parse_args(int argc, char** argv) {
             a.print_plan = true;
         } else if (std::strcmp(argv[i], "--verify") == 0) {
             a.verify = true;
+        } else if (std::strcmp(argv[i], "--profile-csv") == 0 && i + 1 < argc) {
+            a.profile_csv = argv[++i];
         } else {
             throw std::runtime_error("Unknown arg: " + std::string(argv[i]));
         }
@@ -241,18 +248,59 @@ int main(int argc, char** argv) try {
 
     // ── 4. Execute ───────────────────────────────────────────────
     gamax::phys::Context ctx{params.stream};
-    auto t0 = std::chrono::steady_clock::now();
+
+    // Opt-in per-step GPU timing. The sink is attached to `ctx` so the
+    // executor's step walker can record cudaEvent pairs around each
+    // phys dispatch; we finalize/dump after execute().
+    std::unique_ptr<gamax::exec::StepProfileSink> profile_sink;
+    if (!args.profile_csv.empty()) {
+        profile_sink = std::make_unique<gamax::exec::StepProfileSink>();
+        ctx.profile_sink = profile_sink.get();
+    }
+
+    // Per-query NVTX range: groups the per-step ranges under one
+    // parent bar in the Nsight Systems timeline. Label includes the
+    // query id and scale factor so sweeps are easy to compare visually.
+    std::string query_label =
+        "Q" + std::to_string(args.query_id) +
+        "_SF" + std::to_string(args.scale_factor);
+    nvtxRangePushA(query_label.c_str());
+
     gamax::exec::SourceResolver source_fn =
         [&resolver](const std::string& name,
                     const std::vector<std::string>& cols) {
             return resolver(name, cols);
         };
+    auto t0 = std::chrono::steady_clock::now();
     auto result = gamax::exec::execute(ep, source_fn, ctx);
     cudaStreamSynchronize(params.stream);
     auto t1 = std::chrono::steady_clock::now();
+    nvtxRangePop();
     auto elapsed_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
     std::cout << "Executed in " << elapsed_ms << " ms.\n";
+
+    // Resolve per-step GPU timings (if enabled) and append to the CSV.
+    // Header is only written when the file is new or empty, so a sweep
+    // over 22 queries produces one well-formed CSV.
+    if (profile_sink) {
+        profile_sink->finalize(params.stream);
+        bool write_header = true;
+        {
+            std::ifstream probe(args.profile_csv);
+            if (probe.good() && probe.peek() != std::ifstream::traits_type::eof()) {
+                write_header = false;
+            }
+        }
+        std::ofstream out(args.profile_csv, std::ios::app);
+        if (!out) {
+            throw std::runtime_error(
+                "Failed to open profile CSV for append: " + args.profile_csv);
+        }
+        profile_sink->to_csv(out, query_label, write_header);
+        std::cout << "PROFILE: appended " << profile_sink->rows().size()
+                  << " step rows to " << args.profile_csv << "\n";
+    }
 
     // ── 5. Print ─────────────────────────────────────────────────
     print_result(result->view(), /*max_rows=*/20);

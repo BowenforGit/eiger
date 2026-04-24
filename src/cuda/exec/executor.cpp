@@ -2,15 +2,19 @@
 
 #include <numeric>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <variant>
 
+#include <cuda_runtime_api.h>
+#include <nvtx3/nvtx3.hpp>
+
+#include "exec/print.hpp"
+#include "exec/step_profile.hpp"
+
 #ifdef GAMAX_PHYS_DEBUG
 #include <cctype>
-#include <cuda_runtime_api.h>
 #include <iostream>
-#include <string>
-#include "exec/print.hpp"
 #include "utils/debug_print.hpp"
 #endif
 
@@ -151,6 +155,26 @@ std::unique_ptr<gamax::table> execute(
     {
         const auto& s = plan.steps[i];
 
+        // Per-step NVTX range for the Nsight Systems timeline. Label
+        // includes step index + kind name so sibling steps of the same
+        // kind (two EqJoins, etc.) are distinguishable on the
+        // timeline. Cheap enough to keep compiled in unconditionally.
+        std::string nvtx_label =
+            "step[" + std::to_string(i) + "]:" +
+            step_kind_name(s.kind);
+        nvtxRangePushA(nvtx_label.c_str());
+
+        // Optional per-step GPU timing (opt-in via `ctx.profile_sink`).
+        // SourceTable is included: its elapsed time covers the tpch
+        // reader's first-touch Parquet decode + H2D copy, which is
+        // dominant on cold runs. Callers plotting the "pure execution"
+        // breakdown can filter it out by step_kind in the CSV.
+        const bool profile = (ctx.profile_sink != nullptr);
+        if (profile) {
+            ctx.profile_sink->begin_step(
+                static_cast<int>(i), s.kind, ctx.stream);
+        }
+
         // SourceTable is special: the "output" aliases a caller-owned
         // view, not a freshly-produced table. The Executor keeps the
         // view alive in its Slot without taking ownership.
@@ -164,6 +188,9 @@ std::unique_ptr<gamax::table> execute(
             slot.owned = run_step(s, live, source_resolver, ctx);
             live[s.output] = std::move(slot);
         }
+
+        if (profile) ctx.profile_sink->end_step(ctx.stream);
+        nvtxRangePop();
 
 #ifdef GAMAX_PHYS_DEBUG
         // Debug hook — fires for *every* step (including SourceTable)

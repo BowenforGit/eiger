@@ -14,6 +14,8 @@
 #include "operators/select/predicate.hpp"
 #include "types/data_type.hpp"
 
+namespace gamax::exec { class StepProfileSink; }
+
 namespace gamax::phys {
 
 // Physical operator contract.
@@ -39,8 +41,13 @@ namespace gamax::phys {
 //     IR walking happens here; that's the lowering pass's job.
 struct Context {
     cudaStream_t stream {cudaStreamDefault};
-    // Future: memory resource, tracing hooks, NVTX ranges. One stream
-    // per executor today; a stream pool is a later, additive extension.
+    // Optional per-step GPU timing sink. When non-null, the executor
+    // wraps each step's phys dispatch in a `cudaEvent` pair on `stream`
+    // and pushes the elapsed time into the sink at finalize time. Null
+    // by default — zero overhead for ordinary runs.
+    gamax::exec::StepProfileSink* profile_sink {nullptr};
+    // Future: memory resource; one stream per executor today (a stream
+    // pool is a later, additive extension).
 };
 
 using table_ptr = std::unique_ptr<gamax::table>;

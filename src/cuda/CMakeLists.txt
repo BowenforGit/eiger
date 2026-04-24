@@ -72,6 +72,7 @@ set(srcs
     ir/lower_to_exec_plan.cpp
     exec/executor.cpp
     exec/print.cpp
+    exec/step_profile.cpp
     tpch/tpch_ir.cu
     )
     
