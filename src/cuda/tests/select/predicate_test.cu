@@ -360,11 +360,22 @@ TEST_F(PredicateTest, ComplexMixedPredicate) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// 11. string_in predicate should throw for now
+// 11. string_in — exact set-membership against a small value list
 // ────────────────────────────────────────────────────────────────────────────
+//
+// The previous revision of this test was written when STRING_IN was a
+// `throw "not yet implemented"` stub in predicate.cu; it asserted the
+// throw, and grew stale once `gamax::in_multiple` landed. Positive
+// coverage here: distinguish *exact match* (x IN (...)) from prefix-
+// match and substring-match, and pin down the empty-list edge case.
 
-TEST_F(PredicateTest, StringInThrows) {
-    auto col0 = make_string_col({"a", "b", "c"});
+TEST_F(PredicateTest, StringInMatchesSetMembership) {
+    // Inputs chosen so the bitmask is distinguishable from what you'd
+    // get with alternative semantics:
+    //   - "ab" rules out "prefix match" (would match "a").
+    //   - "ab" also rules out "contains"   (would match both "a" and "b").
+    //   - "aa" rules out "same length wins" (would match "a" or "b").
+    auto col0 = make_string_col({"a", "b", "c", "ab", "aa"});
     auto table = std::make_unique<gamax::table>();
     table->add_column(std::move(col0));
 
@@ -375,11 +386,29 @@ TEST_F(PredicateTest, StringInThrows) {
     values.push_back(std::move(s2));
 
     auto pred = Predicate::string_in(0, std::move(values));
+    auto mask = gamax::select::select_to_bitmask(
+        table->view(), pred, stream_);
+    auto result = bitmask_to_host(mask->view());
+    // IN ('a','b'):  "a"→true, "b"→true, "c"/"ab"/"aa"→false.
+    std::vector<bool> expected = {true, true, false, false, false};
+    EXPECT_EQ(result, expected);
+}
 
-    EXPECT_THROW(
-        gamax::select::select_to_bitmask(table->view(), pred, stream_),
-        std::runtime_error
-    );
+TEST_F(PredicateTest, StringInEmptyValueListIsUniformlyFalse) {
+    // SQL semantics: `x IN ()` is always false. Regression pin for the
+    // explicit memset-to-zero path documented in the in_multiple
+    // landing commit (f18e3fc).
+    auto col0 = make_string_col({"a", "b", "c"});
+    auto table = std::make_unique<gamax::table>();
+    table->add_column(std::move(col0));
+
+    std::vector<std::shared_ptr<gamax::string_scalar>> values;  // empty
+    auto pred = Predicate::string_in(0, std::move(values));
+    auto mask = gamax::select::select_to_bitmask(
+        table->view(), pred, stream_);
+    auto result = bitmask_to_host(mask->view());
+    std::vector<bool> expected = {false, false, false};
+    EXPECT_EQ(result, expected);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
