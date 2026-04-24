@@ -341,56 +341,84 @@ struct PinnedStringColumnData {
     }
 };
 
-// Convert Arrow STRING array → pinned cache (widens int32 offsets to int64)
-PinnedStringColumnData convert_arrow_string_to_pinned(
-    const std::shared_ptr<arrow::Array>& array)
+// Convert an Arrow chunked STRING / LARGE_STRING column → pinned cache.
+//
+// Why chunked, not flat: at large scale a single column's total bytes
+// can exceed INT32_MAX (2 GiB), and arrow::StringArray uses int32
+// offsets — so `arrow::Concatenate` on the chunks overflows with the
+// "offset overflow ... consider casting to large_string" error. Arrow's
+// Parquet reader already splits long string columns into multiple
+// chunks that each fit int32. We aggregate those chunks into one
+// contiguous int64-offset buffer pair directly, which is what the GPU
+// string_column format expects anyway. This path handles single-chunk
+// inputs as a trivial case.
+PinnedStringColumnData convert_arrow_chunked_string_to_pinned(
+    const std::shared_ptr<arrow::ChunkedArray>& chunked)
 {
-    auto str_array = std::static_pointer_cast<arrow::StringArray>(array);
-    auto num_rows = static_cast<gamax::size_type>(str_array->length());
+    const bool is_large = (chunked->type()->id() == arrow::Type::LARGE_STRING);
+    gamax::size_type num_rows = 0;
+    int64_t total_bytes = 0;
+    for (int c = 0; c < chunked->num_chunks(); ++c) {
+        auto chk = chunked->chunk(c);
+        num_rows += static_cast<gamax::size_type>(chk->length());
+        if (is_large) {
+            auto la = std::static_pointer_cast<arrow::LargeStringArray>(chk);
+            const int64_t* off = la->raw_value_offsets();
+            total_bytes += off[la->length()] - off[0];
+        } else {
+            auto sa = std::static_pointer_cast<arrow::StringArray>(chk);
+            const int32_t* off = sa->raw_value_offsets();
+            total_bytes += static_cast<int64_t>(off[sa->length()] - off[0]);
+        }
+    }
 
-    // Offsets: Arrow has int32, gamax needs int64. Widen.
-    size_t offsets_byte_size = static_cast<size_t>(num_rows + 1) * sizeof(int64_t);
+    size_t offsets_byte_size =
+        static_cast<size_t>(num_rows + 1) * sizeof(int64_t);
     void* pinned_offsets = nullptr;
     cudaMallocHost(&pinned_offsets, offsets_byte_size);
     auto* dst_offsets = static_cast<int64_t*>(pinned_offsets);
-    const int32_t* src_offsets = str_array->raw_value_offsets();
-    for (gamax::size_type i = 0; i <= num_rows; ++i) {
-        dst_offsets[i] = static_cast<int64_t>(src_offsets[i]);
-    }
+    dst_offsets[0] = 0;
 
-    // Data: direct copy of the flat char buffer
-    size_t data_byte_size = static_cast<size_t>(dst_offsets[num_rows]);
+    size_t data_byte_size = static_cast<size_t>(total_bytes);
     void* pinned_data = nullptr;
     if (data_byte_size > 0) {
         cudaMallocHost(&pinned_data, data_byte_size);
-        std::memcpy(pinned_data, str_array->value_data()->data(), data_byte_size);
     }
 
-    return PinnedStringColumnData(
-        pinned_offsets, pinned_data, num_rows,
-        offsets_byte_size, data_byte_size);
-}
-
-// Convert Arrow LARGE_STRING array → pinned cache (offsets already int64)
-PinnedStringColumnData convert_arrow_large_string_to_pinned(
-    const std::shared_ptr<arrow::Array>& array)
-{
-    auto str_array = std::static_pointer_cast<arrow::LargeStringArray>(array);
-    auto num_rows = static_cast<gamax::size_type>(str_array->length());
-
-    // Offsets: already int64, direct copy
-    size_t offsets_byte_size = static_cast<size_t>(num_rows + 1) * sizeof(int64_t);
-    void* pinned_offsets = nullptr;
-    cudaMallocHost(&pinned_offsets, offsets_byte_size);
-    std::memcpy(pinned_offsets, str_array->raw_value_offsets(), offsets_byte_size);
-
-    // Data: direct copy
-    const int64_t* src_offsets = str_array->raw_value_offsets();
-    size_t data_byte_size = static_cast<size_t>(src_offsets[num_rows]);
-    void* pinned_data = nullptr;
-    if (data_byte_size > 0) {
-        cudaMallocHost(&pinned_data, data_byte_size);
-        std::memcpy(pinned_data, str_array->value_data()->data(), data_byte_size);
+    gamax::size_type row_cursor = 0;
+    int64_t byte_cursor = 0;
+    for (int c = 0; c < chunked->num_chunks(); ++c) {
+        auto chk = chunked->chunk(c);
+        auto chk_len = static_cast<gamax::size_type>(chk->length());
+        int64_t chunk_bytes;
+        const uint8_t* src_data_ptr;
+        if (is_large) {
+            auto la = std::static_pointer_cast<arrow::LargeStringArray>(chk);
+            const int64_t* src_off = la->raw_value_offsets();
+            const int64_t chunk_start = src_off[0];
+            for (gamax::size_type i = 0; i < chk_len; ++i) {
+                dst_offsets[row_cursor + i + 1] =
+                    byte_cursor + (src_off[i + 1] - chunk_start);
+            }
+            chunk_bytes = src_off[chk_len] - chunk_start;
+            src_data_ptr = la->value_data()->data() + chunk_start;
+        } else {
+            auto sa = std::static_pointer_cast<arrow::StringArray>(chk);
+            const int32_t* src_off = sa->raw_value_offsets();
+            const int32_t chunk_start = src_off[0];
+            for (gamax::size_type i = 0; i < chk_len; ++i) {
+                dst_offsets[row_cursor + i + 1] = byte_cursor +
+                    static_cast<int64_t>(src_off[i + 1] - chunk_start);
+            }
+            chunk_bytes = static_cast<int64_t>(src_off[chk_len] - chunk_start);
+            src_data_ptr = sa->value_data()->data() + chunk_start;
+        }
+        if (chunk_bytes > 0 && pinned_data) {
+            std::memcpy(static_cast<char*>(pinned_data) + byte_cursor,
+                        src_data_ptr, static_cast<size_t>(chunk_bytes));
+        }
+        byte_cursor += chunk_bytes;
+        row_cursor += chk_len;
     }
 
     return PinnedStringColumnData(
@@ -613,31 +641,33 @@ std::unique_ptr<gamax::table> TpchTableReader::load(
             const std::string cache_key = table_name + "." + name;
             auto chunked = projected->column(static_cast<int>(mi));
             auto arrow_type = projected->schema()->field(static_cast<int>(mi))->type();
-            auto flat_array = flatten_chunked_array(chunked);
             const auto& positions = missing.at(name);
 
-            if (arrow_type->id() == arrow::Type::STRING) {
-                auto str_cache = convert_arrow_string_to_pinned(flat_array);
+            // Strings: walk chunks directly into int64-offset pinned
+            // buffers. Skipping Concatenate here is what lets us read
+            // STRING columns whose total bytes exceed INT32_MAX (the
+            // "offset overflow, consider casting to large_string"
+            // failure at SF30+).
+            if (arrow_type->id() == arrow::Type::STRING ||
+                arrow_type->id() == arrow::Type::LARGE_STRING) {
+                auto str_cache = convert_arrow_chunked_string_to_pinned(chunked);
                 for (size_t pos : positions) {
-                    gpu_columns[pos] = string_column_from_pinned_cache(str_cache, params_.stream);
+                    gpu_columns[pos] =
+                        string_column_from_pinned_cache(str_cache, params_.stream);
                 }
                 impl_->pinned_string_column_cache.emplace(cache_key, std::move(str_cache));
-            } else if (arrow_type->id() == arrow::Type::LARGE_STRING) {
-                auto str_cache = convert_arrow_large_string_to_pinned(flat_array);
-                for (size_t pos : positions) {
-                    gpu_columns[pos] = string_column_from_pinned_cache(str_cache, params_.stream);
-                }
-                impl_->pinned_string_column_cache.emplace(cache_key, std::move(str_cache));
-            } else {
-                auto [first_gpu, pinned_cache] = arrow_array_to_gamax_column_cached(
-                    flat_array, arrow_type, params_.stream);
-                gpu_columns[positions[0]] = std::move(first_gpu);
-                for (size_t k = 1; k < positions.size(); ++k) {
-                    gpu_columns[positions[k]] =
-                        column_from_pinned_cache(pinned_cache, params_.stream);
-                }
-                impl_->pinned_column_cache.emplace(cache_key, std::move(pinned_cache));
+                continue;
             }
+
+            auto flat_array = flatten_chunked_array(chunked);
+            auto [first_gpu, pinned_cache] = arrow_array_to_gamax_column_cached(
+                flat_array, arrow_type, params_.stream);
+            gpu_columns[positions[0]] = std::move(first_gpu);
+            for (size_t k = 1; k < positions.size(); ++k) {
+                gpu_columns[positions[k]] =
+                    column_from_pinned_cache(pinned_cache, params_.stream);
+            }
+            impl_->pinned_column_cache.emplace(cache_key, std::move(pinned_cache));
         }
     }
 
