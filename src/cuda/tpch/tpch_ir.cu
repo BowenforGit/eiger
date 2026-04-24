@@ -652,8 +652,8 @@ PlanPtr build_q10(const QueryBuilder& qb) {
     auto n = qb.scan("nation", {"n_nationkey", "n_name"});
 
     auto o_filt = o.filter(
-            (o.c("o_orderdate") >= lit(19950901))
-         && (o.c("o_orderdate") <  lit(19951201)));
+            (o.c("o_orderdate") >= lit(19931001))
+         && (o.c("o_orderdate") <  lit(19940101)));
     auto l_filt = l.filter(
         string_op(StringOpKind::Equal, l.c("l_returnflag"), {"R"}));
 
@@ -679,7 +679,22 @@ PlanPtr build_q10(const QueryBuilder& qb) {
         {"c_custkey","c_name","c_acctbal","c_phone","n_name",
          "c_address","c_comment"},
         {{"revenue", AggKind::Sum, projected.c("disc_price")}});
-    return agg.sort({desc("revenue")}).limit(20).plan();
+    // Spec output order is (c_custkey, c_name, revenue, c_acctbal,
+    // n_name, c_address, c_phone, c_comment); the aggregate emits
+    // keys-first (revenue last). Pure-ColRef Project reorders
+    // without renumbering ids — the Sort's reference to `revenue`
+    // still resolves.
+    auto out = agg.project({
+        {"c_custkey", agg.c("c_custkey")},
+        {"c_name",    agg.c("c_name")},
+        {"revenue",   agg.c("revenue")},
+        {"c_acctbal", agg.c("c_acctbal")},
+        {"n_name",    agg.c("n_name")},
+        {"c_address", agg.c("c_address")},
+        {"c_phone",   agg.c("c_phone")},
+        {"c_comment", agg.c("c_comment")},
+    });
+    return out.sort({desc("revenue")}).limit(20).plan();
 }
 
 // ── Q11: Important Stock Identification ────────────────────────────
