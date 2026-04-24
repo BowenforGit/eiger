@@ -327,7 +327,18 @@ PlanPtr build_q3(const QueryBuilder& qb) {
     auto agg = projected.aggregate(
         {"l_orderkey", "o_orderdate", "o_shippriority"},
         {{"revenue", AggKind::Sum, projected.c("disc_price")}});
-    return agg.sort({desc("revenue"), asc("o_orderdate")}).limit(10).plan();
+    // Spec's SELECT column order is (l_orderkey, revenue, o_orderdate,
+    // o_shippriority); the aggregate naturally produces them in
+    // key-first order, so a pure-ColRef Project here re-orders
+    // without renumbering any ColumnIds — the subsequent Sort still
+    // resolves `revenue` and `o_orderdate` by the same ids.
+    auto out = agg.project({
+        {"l_orderkey",     agg.c("l_orderkey")},
+        {"revenue",        agg.c("revenue")},
+        {"o_orderdate",    agg.c("o_orderdate")},
+        {"o_shippriority", agg.c("o_shippriority")},
+    });
+    return out.sort({desc("revenue"), asc("o_orderdate")}).limit(10).plan();
 }
 
 // ── Q4: Order Priority Checking ────────────────────────────────────
@@ -349,8 +360,8 @@ PlanPtr build_q4(const QueryBuilder& qb) {
     auto l = qb.scan("lineitem", {"l_orderkey", "l_commitdate", "l_receiptdate"});
 
     auto o_filt = o.filter(
-            (o.c("o_orderdate") >= lit(19950901))
-         && (o.c("o_orderdate") <  lit(19951201)));
+            (o.c("o_orderdate") >= lit(19930701))
+         && (o.c("o_orderdate") <  lit(19931001)));
     auto l_filt = l.filter(l.c("l_commitdate") < l.c("l_receiptdate"));
 
     auto semi = o_filt.left_semi_join(l_filt,
@@ -412,8 +423,8 @@ PlanPtr build_q6(const QueryBuilder& qb) {
         {"l_shipdate", "l_extendedprice", "l_discount", "l_quantity"});
     auto plan = li
         .filter(
-            li.c("l_shipdate") >= lit(19950101)
-         && li.c("l_shipdate") <  lit(19960101)
+            li.c("l_shipdate") >= lit(19940101)
+         && li.c("l_shipdate") <  lit(19950101)
          && li.c("l_discount") >= lit(0.05)
          && li.c("l_discount") <= lit(0.07)
          && li.c("l_quantity") <  lit(24.0))
@@ -849,8 +860,8 @@ PlanPtr build_q15(const QueryBuilder& qb) {
     auto l = qb.scan("lineitem",
         {"l_suppkey", "l_extendedprice", "l_discount", "l_shipdate"});
     auto l_filt = l.filter(
-            (l.c("l_shipdate") >= lit(19950101))
-         && (l.c("l_shipdate") <  lit(19950401)));
+            (l.c("l_shipdate") >= lit(19960101))
+         && (l.c("l_shipdate") <  lit(19960401)));
     auto revenue_body = l_filt.project({
         {"supplier_no", l_filt.c("l_suppkey")},
         {"rev", l_filt.c("l_extendedprice") *
