@@ -279,16 +279,6 @@ void bench_tpch_ir(nvbench::state& state) {
     const int qid = static_cast<int>(state.get_int64("query"));
     const int sf  = static_cast<int>(state.get_int64("scale"));
 
-    // Per-cell pool reset. UserSpaceMM never returns blocks to the
-    // driver on its own, so without this every sweep would carry a
-    // monotonically-growing freelist + fragmentation across all 22 ×
-    // {scale} cells. release_all_mem() does NOT touch the reader's
-    // pinned-host cache (it's host memory, not GPU), so column-decode
-    // amortization across cells is preserved. Sample-to-sample within
-    // this cell still benefits from the post-reset freelist warming
-    // up over the first few samples.
-    release_all_mem();
-
     // ── Read operator-kind axes (raw strings; tri-state per axis) ──
     const auto fil_v = state.get_string("filter");
     const auto prj_v = state.get_string("project");
@@ -299,7 +289,9 @@ void bench_tpch_ir(nvbench::state& state) {
     // Breakdown-only constraint: at most one axis is in algo (set)
     // mode. Cells with multiple non-default-non-n/a axes are skipped —
     // operators are independent for break-down analysis, so jointly
-    // sweeping them produces highly redundant cells.
+    // sweeping them produces highly redundant cells. Done BEFORE the
+    // per-cell pool reset so the ~99% of cells that this prunes don't
+    // pay the slab-realloc cost.
     const int set_count =
         static_cast<int>(is_set(fil_v))
       + static_cast<int>(is_set(prj_v))
@@ -311,6 +303,16 @@ void bench_tpch_ir(nvbench::state& state) {
                    "varies one operator at a time");
         return;
     }
+
+    // Per-cell pool reset. UserSpaceMM never returns blocks to the
+    // driver on its own, so without this every sweep would carry a
+    // monotonically-growing freelist + fragmentation across all 22 ×
+    // {scale} cells. release_all_mem() does NOT touch the reader's
+    // pinned-host cache (it's host memory, not GPU), so column-decode
+    // amortization across cells is preserved. Sample-to-sample within
+    // this cell still benefits from the post-reset freelist warming
+    // up over the first few samples.
+    release_all_mem();
 
     // Build the IR plan once per cell. The plan / catalog / resolver
     // outlive the lambda; NVBench reuses them across all samples of
@@ -407,6 +409,23 @@ void bench_tpch_ir(nvbench::state& state) {
         sink = std::make_unique<gamax::exec::StepProfileSink>();
     }
 
+    // Pre-flight: run the plan once outside the measurement loop so a
+    // throwing cell (multi-key/STRING groupby, partition_hash_join
+    // bucket overflow, …) becomes a clean skip rather than tainting
+    // NVBench's sample stats or leaving the stream in a bad state.
+    try {
+        gamax::phys::Context ctx_pre{cudaStreamDefault, /*sink=*/nullptr};
+        auto resolved_pre = gamax::exec::bench_resolve_sources(
+            ep, src_fn, cudaStreamDefault);
+        auto result_pre = gamax::exec::bench_run_steps(
+            ep, std::move(resolved_pre), ctx_pre);
+        cudaStreamSynchronize(cudaStreamDefault);
+        (void)result_pre;
+    } catch (const std::exception& e) {
+        state.skip(std::string{"execute throws: "} + e.what());
+        return;
+    }
+
     // NVBench's `exec_tag::timer` mode: we control timer.start/stop.
     // `nvbench::exec_tag::sync` ensures NVBench syncs the stream
     // around each sample so cudaEvents-on-stream timing is accurate.
@@ -443,8 +462,8 @@ void bench_tpch_ir(nvbench::state& state) {
 
     // Per-cell append to the per-step CSV. Header is written only when
     // the file is new or empty so a multi-cell sweep produces one
-    // tidy file. The check races with concurrent writers; this binary
-    // is single-process so that's acceptable.
+    // tidy file. Includes the per-axis labels so a downstream plot
+    // can attribute each step row to a unique cell.
     if (sink && step_csv_path) {
         bool write_header = true;
         {
@@ -455,8 +474,20 @@ void bench_tpch_ir(nvbench::state& state) {
         }
         std::ofstream out(step_csv_path, std::ios::app);
         if (out) {
-            sink->to_summary_csv(out, std::to_string(qid),
-                                 static_cast<int64_t>(sf), write_header);
+            if (write_header) {
+                out << "query,scale,filter,project,sort,group_by,eq_join,"
+                       "step_index,step_kind,n_samples,"
+                       "mean_ms,min_ms,max_ms,stddev_ms\n";
+            }
+            for (const auto& row : sink->summary()) {
+                out << qid << ',' << sf << ','
+                    << fil_v << ',' << prj_v << ',' << srt_v << ','
+                    << grp_v << ',' << ejn_v << ','
+                    << row.step_index << ',' << row.kind_name << ','
+                    << row.n_samples << ','
+                    << row.mean_ms << ',' << row.min_ms << ','
+                    << row.max_ms  << ',' << row.stddev_ms << '\n';
+            }
         }
     }
 }
