@@ -109,13 +109,14 @@ namespace {
     } 
 
     __global__ void generate_work_units(
-        const gamax::size_type* __restrict__  r_offsets, 
-        const gamax::size_type* __restrict__  s_offsets, 
-        uint64_t*  __restrict__  r_work, 
-        uint64_t*  __restrict__  s_work, 
+        const gamax::size_type* __restrict__  r_offsets,
+        const gamax::size_type* __restrict__  s_offsets,
+        uint64_t*  __restrict__  r_work,
+        uint64_t*  __restrict__  s_work,
         gamax::size_type*        total_work, // make sure this is initialized to 0
-        const gamax::size_type   n_partitions, 
-        const gamax::size_type   threshold) 
+        gamax::size_type*        max_r_len_out, // maximum build-side bucket size observed
+        const gamax::size_type   n_partitions,
+        const gamax::size_type   threshold)
     {
         for(int p = get_cuda_tid(); p < n_partitions; p += nthreads()) {
             uint64_t r_start = (p >= 1 ? r_offsets[p-1] : 0);
@@ -124,6 +125,13 @@ namespace {
             uint64_t s_end = s_offsets[p];
             auto r_len = r_end - r_start;
             auto s_len = s_end - s_start;
+
+            // Track the largest build-side bucket so the host can
+            // pre-flight against `max_build_bucket_size` — the kernel
+            // writes past `elem`/`payload`/`next` shared-memory
+            // arrays if any partition exceeds that cap.
+            gamax::atomic::atomic_max(
+                max_r_len_out, static_cast<gamax::size_type>(r_len));
 
             auto n_units = (s_len + threshold - 1)/threshold;
             auto pos = gamax::atomic::atomic_add(total_work, static_cast<gamax::size_type>(n_units));
@@ -136,7 +144,11 @@ namespace {
         }
     }
 
-    // left work, right work, total work units
+    // left work, right work, total work units. Also precondition-
+    // checks the build-side: if any partition has more rows than
+    // max_build_bucket_size, the kernel would write past the
+    // `elem`/`payload`/`next` shared-memory arrays — throw before
+    // launch with a clear error.
     triple_col_t create_work_units(
         gamax::column_view const& left_offs,
         gamax::column_view const& right_offs,
@@ -148,18 +160,35 @@ namespace {
         auto left_work = gamax::make_column<uint64_t>(n_partitions*2);
         auto right_work = gamax::make_column<uint64_t>(n_partitions*2);
         auto total_work = gamax::make_column<gamax::size_type>(1, true);
+        auto max_r_len  = gamax::make_column<gamax::size_type>(1, true);
 
         generate_work_units<<<num_tb(n_partitions,512),512, 0, stream>>>(
-            left_offs.data<gamax::size_type>(), 
+            left_offs.data<gamax::size_type>(),
             right_offs.data<gamax::size_type>(),
             left_work->data<uint64_t>(),
             right_work->data<uint64_t>(),
             total_work->data<gamax::size_type>(),
+            max_r_len->data<gamax::size_type>(),
             n_partitions,
             params.max_probe_bucket_size);
         CHECK_LAST_CUDA_ERROR();
         cudaStreamSynchronize(stream);
-        
+
+        gamax::size_type host_max_r_len = 0;
+        cudaMemcpyAsync(&host_max_r_len, max_r_len->data<gamax::size_type>(),
+                        sizeof(gamax::size_type),
+                        cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        if (host_max_r_len > params.max_build_bucket_size) {
+            throw std::runtime_error(
+                "PARTITION hash join: build-side bucket overflow "
+                "(largest partition has " +
+                std::to_string(host_max_r_len) +
+                " rows, exceeds max_build_bucket_size=" +
+                std::to_string(params.max_build_bucket_size) +
+                "); use HASH or SORT for skewed key distributions");
+        }
+
         return std::make_tuple(std::move(left_work), std::move(right_work), std::move(total_work));
     }
 
@@ -564,42 +593,6 @@ namespace {
         
         return res_table;
     }
-    // Tactical guard against tiny-input crashes.
-    //
-    // partition_hash_join_params hard-codes n_partitions = 1 << 16
-    // (= 65536) and per-bucket capacities sized for that fan-out
-    // (max_build_bucket_size = 4096). When the build or probe side
-    // has far fewer rows than n_partitions, the partition kernel can
-    // walk off the end of its allocations on skewed hashes and write
-    // illegally — the failure surfaces as `cudaErrorIllegalAddress`
-    // on a downstream sync, after which the whole CUDA context is
-    // unrecoverable. A single such failure in the IR-bench probe at
-    // SF=1 (Q7) cascaded into 1132 cells reporting cudaErrorInvalidDevice.
-    //
-    // TODO(perf): the real fix is to bounds-check inside the
-    // partition kernel (or to size n_partitions / bucket caps to the
-    // input). Tracked as "partition_hash_join compute-sanitizer
-    // investigation" in TODO.md. Until then, we throw early with a
-    // clear message so the bench harness reports an actionable "this
-    // input is too small for partition_hash_join" instead of
-    // corrupting the run.
-    void check_partition_hash_join_input(
-        gamax::table_view const& left,
-        gamax::table_view const& right)
-    {
-        // Threshold: at least one row per partition on each side.
-        // n_partitions=65536 today; relax later if the kernel guard
-        // is added.
-        constexpr gamax::size_type kMinRows = 1 << 16;
-        const auto m = std::min(left.num_rows(), right.num_rows());
-        if (m < kMinRows) {
-            throw std::runtime_error(
-                "PARTITION hash join: input too small for n_partitions "
-                "(min(rows)=" + std::to_string(m) +
-                " < " + std::to_string(kMinRows) +
-                "); use HASH or SORT for small inputs");
-        }
-    }
 } // namespace
 
     std::unique_ptr<gamax::table> ieq_partition_hash_join_gftr(
@@ -608,7 +601,6 @@ namespace {
         gamax::join::join_hint const& hint,
         cudaStream_t stream)
     {
-        check_partition_hash_join_input(left, right);
         gamax::join::detail::partition_hash_join_params params(left, right, hint);
 
         if(params.early_materialization) {
@@ -651,7 +643,6 @@ namespace {
         gamax::join::join_hint const& hint,
         cudaStream_t stream)
     {
-        check_partition_hash_join_input(left, right);
         gamax::join::detail::partition_hash_join_params params(left, right, hint);
 
         if(params.early_materialization) {

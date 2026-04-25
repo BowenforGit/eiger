@@ -485,12 +485,18 @@ PlanPtr build_q7(const QueryBuilder& qb) {
             (l.c("l_shipdate") >= lit(19950101))
          && (l.c("l_shipdate") <= lit(19961231)));
 
-    // supplier ⋈ n1  (supp side)
-    auto s_n1 = s.inner_join(n1_filt,
-        s.c("s_nationkey") == n1_filt.c("n_nationkey"));
-    // customer ⋈ n2 (cust side)
-    auto c_n2 = c.inner_join(n2_filt,
-        c.c("c_nationkey") == n2_filt.c("n_nationkey"));
+    // n1 ⋈ supplier  (supp side). Build = n1_filt (≤25 rows);
+    // probe = supplier (10K). Inverted form (supplier ⋈ n1_filt)
+    // would put the larger side as build, and partition_hash_join
+    // chokes on the resulting 6K-row buckets when partitioning on
+    // s_nationkey (25 distinct values).
+    auto s_n1 = n1_filt.inner_join(s,
+        n1_filt.c("n_nationkey") == s.c("s_nationkey"));
+    // n2 ⋈ customer (cust side). Same reasoning — c_nationkey has
+    // 25 distinct values, so the 150K-row customer side hashed as
+    // build overflows the per-partition cap of 4096.
+    auto c_n2 = n2_filt.inner_join(c,
+        n2_filt.c("n_nationkey") == c.c("c_nationkey"));
     // supplier-side ⋈ lineitem (on supplier)
     auto sl = s_n1.inner_join(l_filt,
         s_n1.c("s_suppkey") == l_filt.c("l_suppkey"));
@@ -650,9 +656,12 @@ PlanPtr build_q9(const QueryBuilder& qb) {
     // ⋈ orders
     auto plspso = plsps.inner_join(o,
         plsps.c("l_orderkey") == o.c("o_orderkey"));
-    // ⋈ nation
-    auto joined = plspso.inner_join(n,
-        plspso.c("s_nationkey") == n.c("n_nationkey"));
+    // nation ⋈ plspso. Build = nation (25 rows); probe = plspso
+    // (the large running join). With s_nationkey having 25 distinct
+    // values, the inverted form would put 14K-row buckets as build
+    // and overflow partition_hash_join's per-bucket cap.
+    auto joined = n.inner_join(plspso,
+        n.c("n_nationkey") == plspso.c("s_nationkey"));
 
     auto projected = joined.project({
         {"nation", joined.c("n_name")},
@@ -687,8 +696,13 @@ PlanPtr build_q10(const QueryBuilder& qb) {
         c.c("c_custkey") == o_filt.c("o_custkey"));
     auto col = co.inner_join(l_filt,
         co.c("o_orderkey") == l_filt.c("l_orderkey"));
-    auto joined = col.inner_join(n,
-        col.c("c_nationkey") == n.c("n_nationkey"));
+    // nation ⋈ col. Build = nation (25 rows); probe = col (the
+    // big customer⋈orders⋈lineitem result). Inverted form
+    // (col.inner_join(n)) overflows partition_hash_join: c_nationkey
+    // has 25 distinct values, so the col side hashed as build would
+    // give ~5K-row buckets exceeding the 4096 cap.
+    auto joined = n.inner_join(col,
+        n.c("n_nationkey") == col.c("c_nationkey"));
 
     auto projected = joined.project({
         {"c_custkey",  joined.c("c_custkey")},
@@ -1274,8 +1288,12 @@ PlanPtr build_q21(const QueryBuilder& qb) {
         surviving.c("l_suppkey") == s.c("s_suppkey"));
     auto j2 = j1.inner_join(o_f,
         j1.c("l_orderkey") == o_f.c("o_orderkey"));
-    auto j3 = j2.inner_join(n_f,
-        j2.c("s_nationkey") == n_f.c("n_nationkey"));
+    // n_f ⋈ j2. Build = nation_filt (1 row, "SAUDI ARABIA"); probe
+    // = j2 (the big running join). Inverted form would overflow
+    // partition_hash_join because s_nationkey has 25 distinct
+    // values across j2's many rows.
+    auto j3 = n_f.inner_join(j2,
+        n_f.c("n_nationkey") == j2.c("s_nationkey"));
 
     auto agg = j3.aggregate(
         {"s_name"},
