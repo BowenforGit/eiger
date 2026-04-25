@@ -31,6 +31,8 @@
 #include <nvbench/nvbench.cuh>
 
 #include <cstdint>
+#include <cstdlib>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -38,6 +40,7 @@
 #include <vector>
 
 #include "exec/executor.hpp"
+#include "exec/step_profile.hpp"
 #include "ir/lower_to_exec_plan.hpp"
 #include "ir/rules.hpp"
 #include "memory/mem_manager.hpp"
@@ -136,12 +139,29 @@ void bench_tpch_ir(nvbench::state& state) {
             return resolver(name, cols);
         };
 
+    // Optional per-step breakdown sink. Enabled by setting the
+    // GAMAX_BENCH_STEP_CSV env var to a target path. NVBench doesn't
+    // accept user-defined CLI flags, so we use an env var. When unset,
+    // the sink stays null and ctx.profile_sink is null — zero overhead
+    // on the timed path.
+    const char* step_csv_path = std::getenv("GAMAX_BENCH_STEP_CSV");
+    std::unique_ptr<gamax::exec::StepProfileSink> sink;
+    if (step_csv_path && *step_csv_path) {
+        sink = std::make_unique<gamax::exec::StepProfileSink>();
+    }
+
     // NVBench's `exec_tag::timer` mode: we control timer.start/stop.
     // `nvbench::exec_tag::sync` ensures NVBench syncs the stream
     // around each sample so cudaEvents-on-stream timing is accurate.
+    //
+    // The first sample carries JIT and one-time costs (NVBench's hot
+    // mode runs a dedicated warmup; cold mode does not, so we drop
+    // the first sample ourselves to keep the aggregator's mean/stddev
+    // representative of the steady state).
+    bool warmed = false;
     state.exec(nvbench::exec_tag::sync | nvbench::exec_tag::timer,
         [&](nvbench::launch& launch, auto& timer) {
-            gamax::phys::Context ctx{launch.get_stream()};
+            gamax::phys::Context ctx{launch.get_stream(), sink.get()};
             // Phase 1: resolve sources, sync stream. Untimed.
             auto resolved = gamax::exec::bench_resolve_sources(
                 ep, src_fn, launch.get_stream());
@@ -150,9 +170,38 @@ void bench_tpch_ir(nvbench::state& state) {
             auto result = gamax::exec::bench_run_steps(
                 ep, std::move(resolved), ctx);
             timer.stop();
+            // Drain this sample's per-step events. Skip the first
+            // sample (JIT warmup) so subsequent stats are clean.
+            if (sink) {
+                if (warmed) {
+                    sink->ingest_sample(launch.get_stream());
+                } else {
+                    sink->discard_pending(launch.get_stream());
+                    warmed = true;
+                }
+            }
             // `result` falls out of scope at end of sample; the memory
             // pool reclaims its buffers.
         });
+
+    // Per-cell append to the per-step CSV. Header is written only when
+    // the file is new or empty so a multi-cell sweep produces one
+    // tidy file. The check races with concurrent writers; this binary
+    // is single-process so that's acceptable.
+    if (sink && step_csv_path) {
+        bool write_header = true;
+        {
+            std::ifstream probe(step_csv_path);
+            if (probe.good() && probe.peek() != std::ifstream::traits_type::eof()) {
+                write_header = false;
+            }
+        }
+        std::ofstream out(step_csv_path, std::ios::app);
+        if (out) {
+            sink->to_summary_csv(out, std::to_string(qid),
+                                 static_cast<int64_t>(sf), write_header);
+        }
+    }
 }
 
 } // anonymous namespace

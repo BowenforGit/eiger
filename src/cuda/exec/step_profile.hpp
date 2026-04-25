@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cuda_runtime_api.h>
+#include <map>
 #include <ostream>
 #include <string>
 #include <vector>
@@ -56,6 +57,56 @@ public:
     void to_csv(std::ostream& os, const std::string& query_label,
                 bool write_header) const;
 
+    // ─────────────────────────────────────────────────────────────
+    // Aggregating mode — for the NVBench bench harness.
+    //
+    // Each NVBench sample re-records the per-step event pairs. We
+    // call `ingest_sample(stream)` after every sample to drain those
+    // events into running per-step statistics (count, sum, sum of
+    // squares, min, max). At end of cell, `to_summary_csv` emits one
+    // row per step_index with mean/min/max/stddev across all
+    // samples. The schema is wider than `rows_`/`to_csv`'s
+    // single-shot form — different consumer (figure breakdown)
+    // wants different columns.
+    //
+    // The two modes (single-shot rows + aggregating summary) do not
+    // mix per sink instance. Pick one when constructing the sink.
+    // ─────────────────────────────────────────────────────────────
+    struct Summary {
+        int step_index {-1};
+        StepKind kind {};
+        const char* kind_name {""};
+        int64_t n_samples {0};
+        double mean_ms {0.0};
+        double min_ms  {0.0};
+        double max_ms  {0.0};
+        double stddev_ms {0.0};
+    };
+
+    // Sync the stream, resolve all currently-pending event pairs,
+    // accumulate them into the per-step aggregator, then destroy the
+    // events. Safe to call repeatedly. NVBench's `exec_tag::sync`
+    // already syncs around timer.start/stop, so the sync here is
+    // belt-and-suspenders cheap.
+    void ingest_sample(cudaStream_t stream);
+
+    // Sync and destroy the currently-pending event pairs without
+    // accumulating them. Used to drop a warmup sample whose JIT /
+    // first-touch costs would inflate the mean/stddev.
+    void discard_pending(cudaStream_t stream);
+
+    // Snapshot of the aggregator. One entry per distinct step_index.
+    // Order: ascending by step_index (matches plan-natural order).
+    std::vector<Summary> summary() const;
+
+    // Dump the aggregated summary as CSV. Columns:
+    //   query,scale,step_index,step_kind,n_samples,mean_ms,min_ms,max_ms,stddev_ms
+    // `write_header=true` emits the header once.
+    void to_summary_csv(std::ostream& os,
+                        const std::string& query_label,
+                        int64_t scale_factor,
+                        bool write_header) const;
+
 private:
     struct Pending {
         cudaEvent_t start {nullptr};
@@ -64,8 +115,19 @@ private:
         StepKind kind {};
         const char* kind_name {""};
     };
+    struct AggState {
+        StepKind kind {};
+        const char* kind_name {""};
+        int64_t n {0};
+        double sum_ms {0.0};
+        double sum_sq_ms {0.0};
+        double min_ms {0.0};
+        double max_ms {0.0};
+        bool initialized {false};
+    };
     std::vector<Pending> pending_;
     std::vector<Row> rows_;
+    std::map<int, AggState> aggs_;  // ordered by step_index
     bool finalized_ {false};
 };
 
