@@ -130,8 +130,98 @@ std::unique_ptr<gamax::table> run_step(
     }, s.payload);
 }
 
+// Run one step into a Slot, with NVTX + StepProfileSink wrapping. The
+// caller is responsible for storing the returned Slot into `live` and
+// for any post-step bookkeeping (debug hook, freeing dead inputs).
+//
+// Both the production `execute()` path and the two-phase bench path
+// dispatch through this helper, so the per-step instrumentation lives
+// in exactly one place.
+Slot step_dispatch(
+    gamax::size_type step_index,
+    const Step& s,
+    const std::unordered_map<ValueId, Slot>& live,
+    const SourceResolver& source_resolver,
+    const gamax::phys::Context& ctx)
+{
+    // Per-step NVTX range for the Nsight Systems timeline. Label
+    // includes step index + kind name so sibling steps of the same
+    // kind (two EqJoins, etc.) are distinguishable on the timeline.
+    // Cheap enough to keep compiled in unconditionally.
+    std::string nvtx_label =
+        "step[" + std::to_string(step_index) + "]:" +
+        step_kind_name(s.kind);
+    nvtxRangePushA(nvtx_label.c_str());
+
+    // Optional per-step GPU timing (opt-in via `ctx.profile_sink`).
+    // SourceTable is included when the sink is wired; the bench
+    // harness opts out by passing a sink-free ctx for phase 1.
+    const bool profile = (ctx.profile_sink != nullptr);
+    if (profile) {
+        ctx.profile_sink->begin_step(
+            static_cast<int>(step_index), s.kind, ctx.stream);
+    }
+
+    Slot slot;
+    if (s.kind == StepKind::SourceTable) {
+        // SourceTable's "output" aliases caller-owned data; no
+        // run_step dispatch — the resolver is the work.
+        const auto& pl = std::get<SourceTablePayload>(s.payload);
+        slot.view = source_resolver(pl.table_name, pl.columns);
+    } else {
+        slot.owned = run_step(s, live, source_resolver, ctx);
+    }
+
+    if (profile) ctx.profile_sink->end_step(ctx.stream);
+    nvtxRangePop();
+    return slot;
+}
+
+// Drop owned slots whose `last_used_step` has passed. Source-table
+// slots (non-owning) are kept regardless — they alias caller data and
+// freeing them would leave dangling views in any later step that still
+// reads from the same source.
+void free_dead_inputs(
+    const ExecPlan& plan,
+    const Step& s,
+    gamax::size_type step_index,
+    std::unordered_map<ValueId, Slot>& live)
+{
+    for (auto in : s.inputs) {
+        if (plan.values[in].last_used_step <= step_index) {
+            auto it = live.find(in);
+            if (it != live.end() && it->second.owned) {
+                live.erase(it);
+            }
+        }
+    }
+}
+
+// Pull the final result out of the live map. Used by execute() and
+// bench_run_steps(). For pure-Scan plans (final value is a non-owning
+// SourceTable view), materialize via identity reorder so the caller
+// receives a standalone owned table.
+std::unique_ptr<gamax::table> finalize_result(
+    const ExecPlan& plan,
+    std::unordered_map<ValueId, Slot>& live,
+    const gamax::phys::Context& ctx)
+{
+    auto final_id = plan.steps.back().output;
+    auto it = live.find(final_id);
+    if (it == live.end()) exec_error("final value missing");
+    if (it->second.owned) return std::move(it->second.owned);
+    auto v = it->second.view;
+    std::vector<gamax::size_type> identity(v.num_columns());
+    std::iota(identity.begin(), identity.end(), gamax::size_type{0});
+    return gamax::phys::reorder(v, std::move(identity), ctx);
+}
+
 } // namespace
 
+// ─────────────────────────────────────────────────────────────────────
+// Production entry point: walk the plan, dispatch every step,
+// aggressively free dead inputs.
+// ─────────────────────────────────────────────────────────────────────
 std::unique_ptr<gamax::table> execute(
     const ExecPlan& plan,
     const SourceResolver& source_resolver,
@@ -154,43 +244,7 @@ std::unique_ptr<gamax::table> execute(
          i < static_cast<gamax::size_type>(plan.steps.size()); ++i)
     {
         const auto& s = plan.steps[i];
-
-        // Per-step NVTX range for the Nsight Systems timeline. Label
-        // includes step index + kind name so sibling steps of the same
-        // kind (two EqJoins, etc.) are distinguishable on the
-        // timeline. Cheap enough to keep compiled in unconditionally.
-        std::string nvtx_label =
-            "step[" + std::to_string(i) + "]:" +
-            step_kind_name(s.kind);
-        nvtxRangePushA(nvtx_label.c_str());
-
-        // Optional per-step GPU timing (opt-in via `ctx.profile_sink`).
-        // SourceTable is included: its elapsed time covers the tpch
-        // reader's first-touch Parquet decode + H2D copy, which is
-        // dominant on cold runs. Callers plotting the "pure execution"
-        // breakdown can filter it out by step_kind in the CSV.
-        const bool profile = (ctx.profile_sink != nullptr);
-        if (profile) {
-            ctx.profile_sink->begin_step(
-                static_cast<int>(i), s.kind, ctx.stream);
-        }
-
-        // SourceTable is special: the "output" aliases a caller-owned
-        // view, not a freshly-produced table. The Executor keeps the
-        // view alive in its Slot without taking ownership.
-        if (s.kind == StepKind::SourceTable) {
-            const auto& pl = std::get<SourceTablePayload>(s.payload);
-            Slot slot;
-            slot.view = source_resolver(pl.table_name, pl.columns);
-            live[s.output] = std::move(slot);
-        } else {
-            Slot slot;
-            slot.owned = run_step(s, live, source_resolver, ctx);
-            live[s.output] = std::move(slot);
-        }
-
-        if (profile) ctx.profile_sink->end_step(ctx.stream);
-        nvtxRangePop();
+        live[s.output] = step_dispatch(i, s, live, source_resolver, ctx);
 
 #ifdef GAMAX_PHYS_DEBUG
         // Debug hook — fires for *every* step (including SourceTable)
@@ -223,33 +277,10 @@ std::unique_ptr<gamax::table> execute(
         }
 #endif
 
-        // Drop any input whose last_used_step has passed. Don't drop
-        // Source views — they alias caller-owned data.
-        for (auto in : s.inputs) {
-            if (plan.values[in].last_used_step <= i) {
-                auto it = live.find(in);
-                if (it != live.end() && it->second.owned) {
-                    live.erase(it);
-                }
-            }
-        }
+        free_dead_inputs(plan, s, i, live);
     }
 
-    auto final_id = plan.steps.back().output;
-    auto it = live.find(final_id);
-    if (it == live.end()) {
-        exec_error("final value missing");
-    }
-    if (it->second.owned) {
-        return std::move(it->second.owned);
-    }
-    // SourceTable is the only step (a pure Scan query). Materialize the
-    // aliased view into an owned table via phys::reorder with identity
-    // ordinals so the caller gets a standalone `unique_ptr<table>`.
-    auto v = it->second.view;
-    std::vector<gamax::size_type> identity(v.num_columns());
-    std::iota(identity.begin(), identity.end(), gamax::size_type{0});
-    return gamax::phys::reorder(v, std::move(identity), ctx);
+    return finalize_result(plan, live, ctx);
 }
 
 } // namespace gamax::exec
