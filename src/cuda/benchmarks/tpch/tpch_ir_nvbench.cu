@@ -18,34 +18,47 @@
 //     cache lives only across reps within one cell.
 //
 // CLI examples:
-//   ./benchmark_tpch_ir                            # full sweep
-//   ./benchmark_tpch_ir -a query=6 -a scale=10     # single cell
+//   ./benchmark_tpch_ir                            # full breakdown sweep
+//   ./benchmark_tpch_ir -a query=6 -a scale=10     # one query, both scales
 //   ./benchmark_tpch_ir --profile -a query=6       # one-shot, no timing
 //                                                  # (attach `nsys profile`)
-//   ./benchmark_tpch_ir -a "filter=[fuse]" -a "group_by=[hash,sort_gftr]"
-//                                                  # operator-hint sweep
+//   ./benchmark_tpch_ir -a query=3 -a scale=1      # breakdown for Q3:
+//                                                  # 1 baseline + per-axis algo
+//                                                  # cells, multi-algo cells
+//                                                  # are skipped automatically
 //
-// Operator axes:
-//   filter, project   "fuse"   "nofuse"   "n/a"
-//   sort              "skf"    "no_skf"   "n/a"
+// Operator axes (each accepts "default" + "n/a" sentinels):
+//   filter, project   "fuse"   "nofuse"   "default"   "n/a"
+//   sort              "skf"    "no_skf"   "default"   "n/a"
 //   group_by          "hash"   "sort_gftr"   "sort_gftr_opt"   "sort_gfur"
-//                     "partition_gftr"   "partition_gfur"   "n/a"
-//   eq_join           "hash_gfur"   "hash_gftr"   "sort_merge_gfur"
-//                     "sort_merge_gftr"   "partition_hash_gfur"
-//                     "partition_hash_gftr"   "n/a"
+//                     "partition_gftr"   "partition_gfur"   "default"   "n/a"
+//   eq_join           "hash_gfur"   "sort_merge_gfur"   "sort_merge_gftr"
+//                     "partition_hash_gfur"   "partition_hash_gftr"
+//                     "default"   "n/a"
 //
 // SemiJoin and AntiJoin are distinct StepKinds with only one
 // implementation each today, so they have no axis. Their payload
 // hints are populated by lowering with `default_eq_join_hint()` (the
 // same fallback ad-hoc callers rely on).
 //
-// Each axis includes "n/a" as a sentinel. The fixture skips a cell if
-// (axis="n/a" AND the corresponding StepKind appears in the lowered
-// plan) OR (axis≠"n/a" AND the StepKind doesn't appear). That collapses
-// the Cartesian to per-query valid combinations without the user
-// writing per-query axis manifests. The "all instances of one
-// operator kind share a single hint" simplification drops the
-// per-instance axis explosion.
+// Three axis modes per operator:
+//   "n/a"     — kind is absent from the plan; cell is skipped if the
+//               kind is in fact present.
+//   "default" — kind is present; lowering uses the bench-local default
+//               (see `bench_defaults` below — explicit so the baseline
+//               doesn't drift with IR-engine refactors). Cell is
+//               skipped if the kind is absent.
+//   <algo>    — kind is present and lowering applies this hint. Cell
+//               is skipped if the kind is absent.
+//
+// Breakdown-only constraint: the harness skips any cell where two or
+// more axes are in algo (non-default, non-n/a) mode. The rationale is
+// that operators in a query are independent — sweeping their hints
+// jointly produces highly redundant cells for break-down analysis.
+// Each query produces one all-default baseline plus, for each axis
+// whose kind is present, one cell per algo value. A query with all 5
+// kinds yields 1 + 2 + 2 + 2 + 6 + 5 = 18 cells per scale (vs the full
+// Cartesian's 2·2·2·6·5 = 240).
 //
 // Output: NVBench's standard CSV/JSON/Markdown via `--csv`, `--json`,
 // `--md` flags. Per-step breakdown is intentionally not emitted by
@@ -107,41 +120,77 @@ const gamax::ir::Catalog& shared_catalog() {
 
 // ── Axis parsing ──────────────────────────────────────────────────
 //
-// Each operator-kind axis is a string axis whose values include
-// "n/a" plus the algorithm names recognized by
-// `gamax::tpch::tpch_params::parse_algo_value`. Returning
-// `std::nullopt` from these helpers signals the "n/a" sentinel — the
-// fixture uses that to drive its skip-by-n/a logic.
+// Each operator-kind axis is a string axis with three modes:
+//   "n/a"      — kind absent from plan
+//   "default"  — kind present, use bench-local default (see
+//                `bench_defaults` below)
+//   <algo>     — kind present, override with this hint
+//
+// `parse_*_axis` helpers are only called in algo mode — callers must
+// pre-check `is_set(v)` before invoking them.
 
 constexpr const char* kNA = "n/a";
+constexpr const char* kDefault = "default";
 
-std::optional<gamax::select::select_options>
+bool is_na(const std::string& v)      { return v == kNA; }
+bool is_default(const std::string& v) { return v == kDefault; }
+bool is_set(const std::string& v)     { return !is_na(v) && !is_default(v); }
+
+// Bench-local defaults — explicit so the baseline cell is stable across
+// IR-engine refactors (the engine's own defaults are deliberately
+// hidden from this binary). The "default" axis mode applies these.
+namespace bench_defaults {
+gamax::select::select_options filter() {
+    gamax::select::select_options o;
+    o.fuse_operations = false;        // nofuse
+    return o;
+}
+gamax::project::project_options project() {
+    gamax::project::project_options o;
+    o.fuse_operations = false;        // nofuse
+    return o;
+}
+gamax::sort::sort_table_options sort() {
+    gamax::sort::sort_table_options o;
+    o.smart_keys_fusion = false;      // no_skf
+    return o;
+}
+gamax::groupby::groupby_hint group_by() {
+    gamax::groupby::groupby_hint h;
+    h.groupby_algo = gamax::groupby::HASH;
+    return h;
+}
+gamax::join::join_hint eq_join() {
+    gamax::join::join_hint h;
+    h.join_algo = gamax::join::HASH;
+    h.mat_algo  = gamax::join::GFUR;
+    return h;
+}
+} // namespace bench_defaults
+
+gamax::select::select_options
 parse_filter_axis(const std::string& v) {
-    if (v == kNA) return std::nullopt;
     gamax::select::select_options o;
     o.fuse_operations = (v == "fuse");
     return o;
 }
 
-std::optional<gamax::project::project_options>
+gamax::project::project_options
 parse_project_axis(const std::string& v) {
-    if (v == kNA) return std::nullopt;
     gamax::project::project_options o;
     o.fuse_operations = (v == "fuse");
     return o;
 }
 
-std::optional<gamax::sort::sort_table_options>
+gamax::sort::sort_table_options
 parse_sort_axis(const std::string& v) {
-    if (v == kNA) return std::nullopt;
     gamax::sort::sort_table_options o;
     o.smart_keys_fusion = (v == "skf");
     return o;
 }
 
-std::optional<gamax::groupby::groupby_hint>
+gamax::groupby::groupby_hint
 parse_group_by_axis(const std::string& v) {
-    if (v == kNA) return std::nullopt;
     int algo_int = gamax::tpch::tpch_params::parse_algo_value(v);
     gamax::groupby::groupby_hint h;
     h.groupby_algo = static_cast<gamax::groupby::groupby_algo>(algo_int);
@@ -150,18 +199,18 @@ parse_group_by_axis(const std::string& v) {
 
 // `eq_join` axis only — SemiJoin / AntiJoin have one implementation
 // each today, so the harness doesn't expose an axis for them.
-std::optional<gamax::join::join_hint>
+gamax::join::join_hint
 parse_eq_join_axis(const std::string& v) {
-    if (v == kNA) return std::nullopt;
     // Decoupled from `tpch_params::parse_algo_value` because the
     // legacy map omits the HASH+GFTR pair (the default our IR path
     // ships with). Spell the (algo, mat) pair explicitly here.
     using gamax::join::join_algo;
     using gamax::join::materialization_algo;
+    // HASH+GFTR is intentionally absent — it is not a supported
+    // (algo, mat) combination on the inner_eq_join path.
     static const std::unordered_map<std::string,
         std::pair<join_algo, materialization_algo>> table = {
         {"hash_gfur",            {gamax::join::HASH,      gamax::join::GFUR}},
-        {"hash_gftr",            {gamax::join::HASH,      gamax::join::GFTR}},
         {"sort_merge_gfur",      {gamax::join::SORT,      gamax::join::GFUR}},
         {"sort_merge_gftr",      {gamax::join::SORT,      gamax::join::GFTR}},
         {"partition_hash_gfur",  {gamax::join::PARTITION, gamax::join::GFUR}},
@@ -240,12 +289,28 @@ void bench_tpch_ir(nvbench::state& state) {
     // up over the first few samples.
     release_all_mem();
 
-    // ── Read operator-kind axes (each accepts an "n/a" sentinel) ──
-    auto filter_hint   = parse_filter_axis(state.get_string("filter"));
-    auto project_hint  = parse_project_axis(state.get_string("project"));
-    auto sort_hint     = parse_sort_axis(state.get_string("sort"));
-    auto group_by_hint = parse_group_by_axis(state.get_string("group_by"));
-    auto eq_join_hint  = parse_eq_join_axis(state.get_string("eq_join"));
+    // ── Read operator-kind axes (raw strings; tri-state per axis) ──
+    const auto fil_v = state.get_string("filter");
+    const auto prj_v = state.get_string("project");
+    const auto srt_v = state.get_string("sort");
+    const auto grp_v = state.get_string("group_by");
+    const auto ejn_v = state.get_string("eq_join");
+
+    // Breakdown-only constraint: at most one axis is in algo (set)
+    // mode. Cells with multiple non-default-non-n/a axes are skipped —
+    // operators are independent for break-down analysis, so jointly
+    // sweeping them produces highly redundant cells.
+    const int set_count =
+        static_cast<int>(is_set(fil_v))
+      + static_cast<int>(is_set(prj_v))
+      + static_cast<int>(is_set(srt_v))
+      + static_cast<int>(is_set(grp_v))
+      + static_cast<int>(is_set(ejn_v));
+    if (set_count > 1) {
+        state.skip("more than one axis is non-default — break-down sweep "
+                   "varies one operator at a time");
+        return;
+    }
 
     // Build the IR plan once per cell. The plan / catalog / resolver
     // outlive the lambda; NVBench reuses them across all samples of
@@ -258,15 +323,15 @@ void bench_tpch_ir(nvbench::state& state) {
     plan = gamax::ir::apply_rules(plan);
 
     // First lowering with default options — used only to inspect the
-    // plan's StepKind set so we can decide skip-by-n/a per axis. If
-    // the cell is valid, we re-lower with the populated overrides.
+    // plan's StepKind set so we can decide skip-by-presence per axis.
+    // If the cell is valid, we re-lower with the populated overrides.
     auto inspect_ep = gamax::ir::lower_to_exec_plan(plan, catalog);
     const auto kinds = step_kind_set(inspect_ep);
 
-    // Skip-by-n/a: a cell is invalid if (axis="n/a" AND its kind is
-    // present) OR (axis≠"n/a" AND its kind is absent). The "sort"
-    // axis covers BOTH Sort and TopK steps (they share the same
-    // sort_table_options hint type).
+    // Skip-by-presence: an axis in non-NA mode (default or set) requires
+    // its kind to be present; an axis in NA mode requires the kind to
+    // be absent. The "sort" axis covers BOTH Sort and TopK steps (they
+    // share the same sort_table_options hint type).
     using gamax::exec::StepKind;
     const bool has_filter   = plan_has(kinds, StepKind::Filter);
     const bool has_project  = plan_has(kinds, StepKind::Project);
@@ -275,38 +340,52 @@ void bench_tpch_ir(nvbench::state& state) {
     const bool has_group_by = plan_has(kinds, StepKind::GroupBy);
     const bool has_eq_join  = plan_has(kinds, StepKind::EqJoin);
 
-    auto axis_mismatch = [&](bool axis_set, bool kind_present, const char* name) {
-        if (axis_set && !kind_present) {
+    auto axis_mismatch = [&](bool kind_required, bool kind_present, const char* name) {
+        if (kind_required && !kind_present) {
             state.skip(std::string{"axis "} + name +
                        " set but plan has no " + name + " step");
             return true;
         }
-        if (!axis_set && kind_present) {
+        if (!kind_required && kind_present) {
             state.skip(std::string{"axis "} + name +
                        " is n/a but plan has " + name + " step(s)");
             return true;
         }
         return false;
     };
-    if (axis_mismatch(filter_hint.has_value(),   has_filter,   "filter"))   return;
-    if (axis_mismatch(project_hint.has_value(),  has_project,  "project"))  return;
-    if (axis_mismatch(sort_hint.has_value(),     has_sort,     "sort"))     return;
-    if (axis_mismatch(group_by_hint.has_value(), has_group_by, "group_by")) return;
-    if (axis_mismatch(eq_join_hint.has_value(),  has_eq_join,  "eq_join"))  return;
+    if (axis_mismatch(!is_na(fil_v), has_filter,   "filter"))   return;
+    if (axis_mismatch(!is_na(prj_v), has_project,  "project"))  return;
+    if (axis_mismatch(!is_na(srt_v), has_sort,     "sort"))     return;
+    if (axis_mismatch(!is_na(grp_v), has_group_by, "group_by")) return;
+    if (axis_mismatch(!is_na(ejn_v), has_eq_join,  "eq_join"))  return;
 
-    // Re-lower with the harness's per-kind overrides. Empty optionals
-    // fall through to the engine default.
+    // Re-lower with the harness's per-kind overrides. Every non-NA
+    // axis populates its LowerOptions field — SET mode applies the
+    // parsed hint, DEFAULT mode applies the bench-local default. NA
+    // mode leaves the field empty (kind is absent from the plan).
     // SemiJoin and AntiJoin have a single implementation today, so
     // they get no axis — `opts.semi_join` / `opts.anti_join` stay
     // empty and lowering populates them with `default_eq_join_hint()`,
     // matching ad-hoc callers (run_tpch_ir, tests).
     gamax::ir::LowerOptions opts;
-    opts.filter    = filter_hint;
-    opts.project   = project_hint;
-    opts.sort      = sort_hint;
-    opts.top_k     = sort_hint;     // share with Sort axis
-    opts.group_by  = group_by_hint;
-    opts.eq_join   = eq_join_hint;
+    if (!is_na(fil_v))
+        opts.filter   = is_set(fil_v) ? parse_filter_axis(fil_v)
+                                      : bench_defaults::filter();
+    if (!is_na(prj_v))
+        opts.project  = is_set(prj_v) ? parse_project_axis(prj_v)
+                                      : bench_defaults::project();
+    if (!is_na(srt_v)) {
+        auto h = is_set(srt_v) ? parse_sort_axis(srt_v)
+                               : bench_defaults::sort();
+        opts.sort  = h;
+        opts.top_k = h;            // share with Sort axis
+    }
+    if (!is_na(grp_v))
+        opts.group_by = is_set(grp_v) ? parse_group_by_axis(grp_v)
+                                      : bench_defaults::group_by();
+    if (!is_na(ejn_v))
+        opts.eq_join  = is_set(ejn_v) ? parse_eq_join_axis(ejn_v)
+                                      : bench_defaults::eq_join();
     auto ep = gamax::ir::lower_to_exec_plan(plan, catalog, opts);
 
     auto& reader = shared_reader(sf);
@@ -390,13 +469,12 @@ NVBENCH_BENCH(bench_tpch_ir)
         {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
          12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22})
     .add_int64_axis("scale", {1, 10})
-    .add_string_axis("filter",   {"fuse", "nofuse",       "n/a"})
-    .add_string_axis("project",  {"fuse", "nofuse",       "n/a"})
-    .add_string_axis("sort",     {"skf",  "no_skf",       "n/a"})
+    .add_string_axis("filter",   {"fuse", "nofuse", "default", "n/a"})
+    .add_string_axis("project",  {"fuse", "nofuse", "default", "n/a"})
+    .add_string_axis("sort",     {"skf",  "no_skf", "default", "n/a"})
     .add_string_axis("group_by", {"hash", "sort_gftr",    "sort_gftr_opt",
                                   "sort_gfur", "partition_gftr",
-                                  "partition_gfur",       "n/a"})
-    .add_string_axis("eq_join",  {"hash_gfur",            "hash_gftr",
-                                  "sort_merge_gfur",      "sort_merge_gftr",
-                                  "partition_hash_gfur",  "partition_hash_gftr",
-                                  "n/a"});
+                                  "partition_gfur", "default", "n/a"})
+    .add_string_axis("eq_join",  {"hash_gfur",            "sort_merge_gfur",
+                                  "sort_merge_gftr",      "partition_hash_gfur",
+                                  "partition_hash_gftr",  "default", "n/a"});
