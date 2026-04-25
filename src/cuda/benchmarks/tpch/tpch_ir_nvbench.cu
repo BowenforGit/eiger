@@ -30,13 +30,14 @@
 //   sort              "skf"    "no_skf"   "n/a"
 //   group_by          "hash"   "sort_gftr"   "sort_gftr_opt"   "sort_gfur"
 //                     "partition_gftr"   "partition_gfur"   "n/a"
-//   join              "hash_gfur"   "hash_gftr"   "sort_merge_gfur"
+//   eq_join           "hash_gfur"   "hash_gftr"   "sort_merge_gfur"
 //                     "sort_merge_gftr"   "partition_hash_gfur"
 //                     "partition_hash_gftr"   "n/a"
 //
-// The "join" axis is unified across EqJoin / SemiJoin / AntiJoin —
-// all join steps in a query share one hint per measurement, matching
-// the per-kind-shares-one-config simplification.
+// SemiJoin and AntiJoin are distinct StepKinds with only one
+// implementation each today, so they have no axis. Their payload
+// hints are populated by lowering with `default_eq_join_hint()` (the
+// same fallback ad-hoc callers rely on).
 //
 // Each axis includes "n/a" as a sentinel. The fixture skips a cell if
 // (axis="n/a" AND the corresponding StepKind appears in the lowered
@@ -147,8 +148,10 @@ parse_group_by_axis(const std::string& v) {
     return h;
 }
 
+// `eq_join` axis only — SemiJoin / AntiJoin have one implementation
+// each today, so the harness doesn't expose an axis for them.
 std::optional<gamax::join::join_hint>
-parse_join_axis(const std::string& v) {
+parse_eq_join_axis(const std::string& v) {
     if (v == kNA) return std::nullopt;
     // Decoupled from `tpch_params::parse_algo_value` because the
     // legacy map omits the HASH+GFTR pair (the default our IR path
@@ -166,7 +169,7 @@ parse_join_axis(const std::string& v) {
     };
     auto it = table.find(v);
     if (it == table.end()) {
-        throw std::runtime_error("Unknown join axis value: " + v);
+        throw std::runtime_error("Unknown eq_join axis value: " + v);
     }
     gamax::join::join_hint h;
     h.join_algo = it->second.first;
@@ -242,7 +245,7 @@ void bench_tpch_ir(nvbench::state& state) {
     auto project_hint  = parse_project_axis(state.get_string("project"));
     auto sort_hint     = parse_sort_axis(state.get_string("sort"));
     auto group_by_hint = parse_group_by_axis(state.get_string("group_by"));
-    auto join_hint     = parse_join_axis(state.get_string("join"));
+    auto eq_join_hint  = parse_eq_join_axis(state.get_string("eq_join"));
 
     // Build the IR plan once per cell. The plan / catalog / resolver
     // outlive the lambda; NVBench reuses them across all samples of
@@ -270,9 +273,7 @@ void bench_tpch_ir(nvbench::state& state) {
     const bool has_sort     = plan_has(kinds, StepKind::Sort)
                            || plan_has(kinds, StepKind::TopK);
     const bool has_group_by = plan_has(kinds, StepKind::GroupBy);
-    const bool has_join     = plan_has(kinds, StepKind::EqJoin)
-                           || plan_has(kinds, StepKind::SemiJoin)
-                           || plan_has(kinds, StepKind::AntiJoin);
+    const bool has_eq_join  = plan_has(kinds, StepKind::EqJoin);
 
     auto axis_mismatch = [&](bool axis_set, bool kind_present, const char* name) {
         if (axis_set && !kind_present) {
@@ -291,19 +292,21 @@ void bench_tpch_ir(nvbench::state& state) {
     if (axis_mismatch(project_hint.has_value(),  has_project,  "project"))  return;
     if (axis_mismatch(sort_hint.has_value(),     has_sort,     "sort"))     return;
     if (axis_mismatch(group_by_hint.has_value(), has_group_by, "group_by")) return;
-    if (axis_mismatch(join_hint.has_value(),     has_join,     "join"))     return;
+    if (axis_mismatch(eq_join_hint.has_value(),  has_eq_join,  "eq_join"))  return;
 
     // Re-lower with the harness's per-kind overrides. Empty optionals
     // fall through to the engine default.
+    // SemiJoin and AntiJoin have a single implementation today, so
+    // they get no axis — `opts.semi_join` / `opts.anti_join` stay
+    // empty and lowering populates them with `default_eq_join_hint()`,
+    // matching ad-hoc callers (run_tpch_ir, tests).
     gamax::ir::LowerOptions opts;
     opts.filter    = filter_hint;
     opts.project   = project_hint;
     opts.sort      = sort_hint;
     opts.top_k     = sort_hint;     // share with Sort axis
     opts.group_by  = group_by_hint;
-    opts.eq_join   = join_hint;     // unified join axis
-    opts.semi_join = join_hint;
-    opts.anti_join = join_hint;
+    opts.eq_join   = eq_join_hint;
     auto ep = gamax::ir::lower_to_exec_plan(plan, catalog, opts);
 
     auto& reader = shared_reader(sf);
@@ -393,7 +396,7 @@ NVBENCH_BENCH(bench_tpch_ir)
     .add_string_axis("group_by", {"hash", "sort_gftr",    "sort_gftr_opt",
                                   "sort_gfur", "partition_gftr",
                                   "partition_gfur",       "n/a"})
-    .add_string_axis("join",     {"hash_gfur",            "hash_gftr",
+    .add_string_axis("eq_join",  {"hash_gfur",            "hash_gftr",
                                   "sort_merge_gfur",      "sort_merge_gftr",
                                   "partition_hash_gfur",  "partition_hash_gftr",
                                   "n/a"});
