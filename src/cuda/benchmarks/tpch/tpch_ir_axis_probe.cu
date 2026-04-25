@@ -3,12 +3,14 @@
 // at all", not "what's the GPU time of cells that succeed".
 //
 // Bypasses NVBench's measurement loop (per-cell ~1s overhead) and
-// instead enumerates the full axis Cartesian itself, calling the IR
-// `lower → execute` pipeline once per valid cell with a try/catch.
-// Each invalid cell is short-circuited via the same skip-by-n/a logic
-// the bench fixture uses; each valid cell either runs to completion
-// (PASS) or throws (FAIL: <error>). One CSV row per invalid cell
-// would explode the output, so SKIP rows are omitted by default.
+// instead enumerates the same valid axis configurations the
+// tpch_ir_nvbench fixture sweeps — one per cell — calling the IR
+// `lower → execute` pipeline once with a try/catch. Each invalid
+// cell is short-circuited via the same skip rules the bench fixture
+// uses (skip-by-n/a + at-most-one-axis-set); each valid cell either
+// runs to completion (PASS) or throws (FAIL: <error>). One CSV row
+// per invalid cell would explode the output, so SKIP rows are
+// omitted by default.
 //
 // Tradeoffs vs benchmark_tpch_ir:
 //   * No timing — the goal is failure detection, not perf.
@@ -58,10 +60,48 @@
 #include "tpch/ir_source_resolver.hpp"
 #include "tpch/tpch.hpp"
 #include "tpch/tpch_ir.hpp"
+#include "tpch/verify.hpp"
+#include <sstream>
 
 namespace {
 
 constexpr const char* kNA = "n/a";
+constexpr const char* kDefault = "default";
+
+bool is_na(const std::string& v)      { return v == kNA; }
+bool is_default(const std::string& v) { return v == kDefault; }
+bool is_set(const std::string& v)     { return !is_na(v) && !is_default(v); }
+
+// Bench-local defaults — explicit so the baseline cell is stable across
+// IR-engine refactors (mirrors `bench_defaults` in tpch_ir_nvbench.cu).
+namespace bench_defaults {
+gamax::select::select_options filter() {
+    gamax::select::select_options o;
+    o.fuse_operations = false;        // nofuse
+    return o;
+}
+gamax::project::project_options project() {
+    gamax::project::project_options o;
+    o.fuse_operations = false;        // nofuse
+    return o;
+}
+gamax::sort::sort_table_options sort() {
+    gamax::sort::sort_table_options o;
+    o.smart_keys_fusion = false;      // no_skf
+    return o;
+}
+gamax::groupby::groupby_hint group_by() {
+    gamax::groupby::groupby_hint h;
+    h.groupby_algo = gamax::groupby::HASH;
+    return h;
+}
+gamax::join::join_hint eq_join() {
+    gamax::join::join_hint h;
+    h.join_algo = gamax::join::HASH;
+    h.mat_algo  = gamax::join::GFUR;
+    return h;
+}
+} // namespace bench_defaults
 
 // Process-wide reader cache, keyed by scale. Same shape as the
 // NVBench fixture — pinned-host caches survive the whole probe run.
@@ -115,44 +155,42 @@ gamax::ir::PlanPtr build_query(int qid, const gamax::ir::QueryBuilder& qb) {
 
 // ── Axis parsing (mirrors tpch_ir_nvbench.cu) ─────────────────────
 
-std::optional<gamax::select::select_options>
+// `parse_*` helpers are only called in algo (set) mode — callers must
+// pre-check `is_set(v)` before invoking them.
+gamax::select::select_options
 parse_filter(const std::string& v) {
-    if (v == kNA) return std::nullopt;
     gamax::select::select_options o;
     o.fuse_operations = (v == "fuse");
     return o;
 }
-std::optional<gamax::project::project_options>
+gamax::project::project_options
 parse_project(const std::string& v) {
-    if (v == kNA) return std::nullopt;
     gamax::project::project_options o;
     o.fuse_operations = (v == "fuse");
     return o;
 }
-std::optional<gamax::sort::sort_table_options>
+gamax::sort::sort_table_options
 parse_sort(const std::string& v) {
-    if (v == kNA) return std::nullopt;
     gamax::sort::sort_table_options o;
     o.smart_keys_fusion = (v == "skf");
     return o;
 }
-std::optional<gamax::groupby::groupby_hint>
+gamax::groupby::groupby_hint
 parse_group_by(const std::string& v) {
-    if (v == kNA) return std::nullopt;
     int algo = gamax::tpch::tpch_params::parse_algo_value(v);
     gamax::groupby::groupby_hint h;
     h.groupby_algo = static_cast<gamax::groupby::groupby_algo>(algo);
     return h;
 }
-std::optional<gamax::join::join_hint>
+gamax::join::join_hint
 parse_eq_join(const std::string& v) {
-    if (v == kNA) return std::nullopt;
     using gamax::join::join_algo;
     using gamax::join::materialization_algo;
+    // HASH+GFTR is intentionally absent — not a supported (algo, mat)
+    // combination on the inner_eq_join path.
     static const std::unordered_map<std::string,
         std::pair<join_algo, materialization_algo>> table = {
         {"hash_gfur",            {gamax::join::HASH,      gamax::join::GFUR}},
-        {"hash_gftr",            {gamax::join::HASH,      gamax::join::GFTR}},
         {"sort_merge_gfur",      {gamax::join::SORT,      gamax::join::GFUR}},
         {"sort_merge_gftr",      {gamax::join::SORT,      gamax::join::GFTR}},
         {"partition_hash_gfur",  {gamax::join::PARTITION, gamax::join::GFUR}},
@@ -180,15 +218,15 @@ bool has_kind(const std::unordered_set<int>& s, gamax::exec::StepKind k) {
 }
 
 // "n/a" axis value matches a query that lacks the kind; non-"n/a"
-// matches one that has it. Returns nullopt on match (not skipped),
-// or a reason string when this cell should be skipped.
+// (default or set) matches one that has it. Returns nullopt on match
+// (not skipped), or a reason string when this cell should be skipped.
 std::optional<std::string> mismatched(
-    bool axis_set, bool kind_present, const char* name)
+    bool kind_required, bool kind_present, const char* name)
 {
-    if (axis_set && !kind_present) {
+    if (kind_required && !kind_present) {
         return std::string{name} + "=set,plan_lacks_" + name;
     }
-    if (!axis_set && kind_present) {
+    if (!kind_required && kind_present) {
         return std::string{name} + "=n/a,plan_has_" + name;
     }
     return std::nullopt;
@@ -211,7 +249,25 @@ struct Args {
     int query_min {1};
     int query_max {22};
     bool quiet {false};
+    bool use_cuda_mm {false};
+    bool verify {false};
 };
+
+// Mirrors run_tpch_ir.cpp's golden_path_for. Format is
+// $TPCH_DATA_PATH/sf<N>/golden/q<NN>.parquet (zero-padded to 2
+// digits) — produced by script/gen_tpch_golden.py.
+std::string golden_path_for(int qid, int sf) {
+    const char* data_path = std::getenv("TPCH_DATA_PATH");
+    if (!data_path || !*data_path) {
+        throw std::runtime_error(
+            "--verify requires TPCH_DATA_PATH to be set (golden lives at "
+            "$TPCH_DATA_PATH/sf<N>/golden/q<NN>.parquet)");
+    }
+    std::ostringstream os;
+    os << data_path << "/sf" << sf << "/golden/q"
+       << (qid < 10 ? "0" : "") << qid << ".parquet";
+    return os.str();
+}
 
 Args parse_args(int argc, char** argv) {
     Args a;
@@ -226,6 +282,10 @@ Args parse_args(int argc, char** argv) {
             a.query_max = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--quiet") == 0) {
             a.quiet = true;
+        } else if (std::strcmp(argv[i], "--use-cuda-mm") == 0) {
+            a.use_cuda_mm = true;
+        } else if (std::strcmp(argv[i], "--verify") == 0) {
+            a.verify = true;
         } else {
             throw std::runtime_error(
                 "tpch_ir_axis_probe: unknown arg: " + std::string(argv[i]));
@@ -238,43 +298,61 @@ Args parse_args(int argc, char** argv) {
 }
 
 // Axis value lists. Match tpch_ir_nvbench.cu.
-const std::vector<std::string> kFilterVals  = {"fuse", "nofuse", "n/a"};
-const std::vector<std::string> kProjectVals = {"fuse", "nofuse", "n/a"};
-const std::vector<std::string> kSortVals    = {"skf", "no_skf", "n/a"};
+const std::vector<std::string> kFilterVals  = {"fuse", "nofuse", "default", "n/a"};
+const std::vector<std::string> kProjectVals = {"fuse", "nofuse", "default", "n/a"};
+const std::vector<std::string> kSortVals    = {"skf", "no_skf", "default", "n/a"};
 const std::vector<std::string> kGroupByVals = {
     "hash", "sort_gftr", "sort_gftr_opt", "sort_gfur",
-    "partition_gftr", "partition_gfur", "n/a"};
+    "partition_gftr", "partition_gfur", "default", "n/a"};
 const std::vector<std::string> kEqJoinVals  = {
-    "hash_gfur", "hash_gftr",
-    "sort_merge_gfur", "sort_merge_gftr",
+    "hash_gfur", "sort_merge_gfur", "sort_merge_gftr",
     "partition_hash_gfur", "partition_hash_gftr",
-    "n/a"};
+    "default", "n/a"};
 
 } // namespace
 
 int main(int argc, char** argv) try {
     auto args = parse_args(argc, argv);
-    const bool reset_pool = std::getenv("GAMAX_PROBE_RESET_POOL") != nullptr;
+
+    // CudaMM does per-allocation cudaMallocAsync/cudaFreeAsync so the
+    // device pool naturally drains between cells. Default UserSpaceMM
+    // pre-allocates a single slab; the per-query pool reset below
+    // releases its cached source columns + intermediates between
+    // queries to keep the slab from filling at SF=30.
+    if (args.use_cuda_mm) {
+        use_cuda_mm();
+    }
 
     std::ofstream out(args.out_path);
     if (!out) {
         throw std::runtime_error("Failed to open output: " + args.out_path);
     }
-    out << "query,scale,filter,project,sort,group_by,eq_join,status,error\n";
+    // status is `pass` (executed without throwing) or `fail` (threw).
+    // verify is `ok` / `mismatch` for passing cells when --verify is
+    // set, `skip` when --verify is off, and empty for failing cells.
+    out << "query,scale,filter,project,sort,group_by,eq_join,status,verify,error\n";
 
     auto& catalog = shared_catalog();
     auto& reader  = shared_reader(args.scale_factor);
-    gamax::tpch::IrSourceResolver resolver(reader, catalog);
-    gamax::exec::SourceResolver src_fn =
-        [&resolver](const std::string& name,
-                    const std::vector<std::string>& cols) {
-            return resolver(name, cols);
-        };
 
     int64_t pass_n = 0, fail_n = 0, skip_n = 0;
+    int64_t verify_ok_n = 0, verify_mismatch_n = 0;
     auto t_start = std::chrono::steady_clock::now();
 
     for (int qid = args.query_min; qid <= args.query_max; ++qid) {
+        // Per-query scope: resolver + IR + per-cell loop are nested
+        // here so the resolver is destructed (releasing its cached
+        // device columns) BEFORE release_all_mem touches the slab.
+        // Without this ordering, the resolver's pointers would dangle
+        // into a freed slab.
+      {
+        gamax::tpch::IrSourceResolver resolver(reader, catalog);
+        gamax::exec::SourceResolver src_fn =
+            [&resolver](const std::string& name,
+                        const std::vector<std::string>& cols) {
+                return resolver(name, cols);
+            };
+
         // Build IR + apply rules once per query.
         gamax::ir::IdGenerator gen;
         gamax::ir::QueryBuilder qb(catalog, gen);
@@ -298,39 +376,65 @@ int main(int argc, char** argv) try {
         for (const auto& sv : kSortVals)
         for (const auto& gv : kGroupByVals)
         for (const auto& jv : kEqJoinVals) {
-            auto fh = parse_filter(fv);
-            auto ph = parse_project(pv);
-            auto sh = parse_sort(sv);
-            auto gh = parse_group_by(gv);
-            auto jh = parse_eq_join(jv);
+            // At-most-one-set rule (matches the bench fixture).
+            const int set_count =
+                static_cast<int>(is_set(fv))
+              + static_cast<int>(is_set(pv))
+              + static_cast<int>(is_set(sv))
+              + static_cast<int>(is_set(gv))
+              + static_cast<int>(is_set(jv));
+            if (set_count > 1) { ++skip_n; continue; }
 
-            // Skip-by-n/a (silently — SKIP rows aren't emitted).
-            if (mismatched(fh.has_value(), h_filter,   "filter"))   { ++skip_n; continue; }
-            if (mismatched(ph.has_value(), h_project,  "project"))  { ++skip_n; continue; }
-            if (mismatched(sh.has_value(), h_sort,     "sort"))     { ++skip_n; continue; }
-            if (mismatched(gh.has_value(), h_group_by, "group_by")) { ++skip_n; continue; }
-            if (mismatched(jh.has_value(), h_eq_join,  "eq_join"))  { ++skip_n; continue; }
+            // Skip-by-presence (silently — SKIP rows aren't emitted).
+            if (mismatched(!is_na(fv), h_filter,   "filter"))   { ++skip_n; continue; }
+            if (mismatched(!is_na(pv), h_project,  "project"))  { ++skip_n; continue; }
+            if (mismatched(!is_na(sv), h_sort,     "sort"))     { ++skip_n; continue; }
+            if (mismatched(!is_na(gv), h_group_by, "group_by")) { ++skip_n; continue; }
+            if (mismatched(!is_na(jv), h_eq_join,  "eq_join"))  { ++skip_n; continue; }
 
-            // Re-lower with overrides for this cell.
+            // Re-lower with per-kind overrides. Non-NA axes populate
+            // their LowerOptions field — SET applies the parsed hint,
+            // DEFAULT applies the bench-local default.
             gamax::ir::LowerOptions opts;
-            opts.filter   = fh;
-            opts.project  = ph;
-            opts.sort     = sh;
-            opts.top_k    = sh;       // share with Sort axis
-            opts.group_by = gh;
-            opts.eq_join  = jh;
+            if (!is_na(fv))
+                opts.filter   = is_set(fv) ? parse_filter(fv) : bench_defaults::filter();
+            if (!is_na(pv))
+                opts.project  = is_set(pv) ? parse_project(pv) : bench_defaults::project();
+            if (!is_na(sv)) {
+                auto h = is_set(sv) ? parse_sort(sv) : bench_defaults::sort();
+                opts.sort  = h;
+                opts.top_k = h;       // share with Sort axis
+            }
+            if (!is_na(gv))
+                opts.group_by = is_set(gv) ? parse_group_by(gv) : bench_defaults::group_by();
+            if (!is_na(jv))
+                opts.eq_join  = is_set(jv) ? parse_eq_join(jv) : bench_defaults::eq_join();
 
             std::string status = "pass";
+            std::string verify = args.verify ? std::string{} : std::string{"skip"};
             std::string err;
             try {
-                if (reset_pool) release_all_mem();
                 auto ep = gamax::ir::lower_to_exec_plan(plan, catalog, opts);
                 gamax::tpch::tpch_params params(args.scale_factor);
                 gamax::phys::Context ctx{params.stream};
                 auto result = gamax::exec::execute(ep, src_fn, ctx);
                 cudaStreamSynchronize(params.stream);
-                (void)result;
                 ++pass_n;
+                if (args.verify) {
+                    auto vr = gamax::tpch::verify_result(
+                        result->view(),
+                        golden_path_for(qid, args.scale_factor));
+                    if (vr.ok) {
+                        verify = "ok";
+                        ++verify_ok_n;
+                    } else {
+                        verify = "mismatch";
+                        // Squash diagnostic onto a single CSV-safe
+                        // line (verify.diagnostic is multi-line).
+                        err = csv_safe(vr.diagnostic);
+                        ++verify_mismatch_n;
+                    }
+                }
             } catch (const std::exception& e) {
                 status = "fail";
                 err = csv_safe(e.what());
@@ -339,7 +443,7 @@ int main(int argc, char** argv) try {
 
             out << qid << ',' << args.scale_factor << ',' << fv << ','
                 << pv << ',' << sv << ',' << gv << ',' << jv << ','
-                << status << ',' << err << '\n';
+                << status << ',' << verify << ',' << err << '\n';
 
             if (!args.quiet && (pass_n + fail_n) % 100 == 0) {
                 std::cerr << "[probe] " << (pass_n + fail_n)
@@ -348,6 +452,12 @@ int main(int argc, char** argv) try {
                           << " skip=" << skip_n << ")\n";
             }
         }
+      }  // resolver destructs here, before release_all_mem
+        // Drop the slab between queries. Required at SF=30 — without
+        // it, accumulated source tables from earlier queries fill the
+        // slab. Harmless under CudaMM (no-op since the alloc map is
+        // empty at this point).
+        release_all_mem();
     }
 
     auto t_end = std::chrono::steady_clock::now();
@@ -355,8 +465,12 @@ int main(int argc, char** argv) try {
                         t_end - t_start).count();
     std::cerr << "[probe] done: pass=" << pass_n
               << " fail=" << fail_n
-              << " skip=" << skip_n
-              << " (" << elapsed_s << " s, "
+              << " skip=" << skip_n;
+    if (args.verify) {
+        std::cerr << " verify_ok=" << verify_ok_n
+                  << " verify_mismatch=" << verify_mismatch_n;
+    }
+    std::cerr << " (" << elapsed_s << " s, "
               << args.out_path << ")\n";
     return 0;
 }

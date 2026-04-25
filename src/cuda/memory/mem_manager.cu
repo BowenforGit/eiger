@@ -35,7 +35,25 @@ std::shared_ptr<MemoryManager> get_mm() {
         if (requested_kind == MMKind::Cuda) {
             mm = std::make_shared<CudaMM>();
         } else {
-            std::size_t free, total;
+            // Force CUDA context init before sizing the slab.
+            // cudaMemGetInfo returns (0, 0) on a cold context (no
+            // prior CUDA call), which would size the pool to 0 and
+            // make cudaMalloc(0) return a null pointer — surfaced as
+            // "Initializing memory pool fails" in the probe binary
+            // when called before the resolver's first cudaMallocHost.
+            // Force CUDA context init before sizing the slab.
+            // cudaMemGetInfo returns (0, 0) on a cold context (the
+            // CUDA driver lazy-inits the device context only on the
+            // first device-affecting alloc). cudaFree(nullptr),
+            // cudaSetDevice, cudaDeviceSynchronize are all no-ops on
+            // a cold context. A 4-byte cudaMalloc + cudaFree pair
+            // reliably forces context init; then cudaGetLastError
+            // clears the swallowed status.
+            void* ctx_init = nullptr;
+            cudaMalloc(&ctx_init, 4);
+            cudaFree(ctx_init);
+            cudaGetLastError();
+            std::size_t free = 0, total = 0;
             cudaMemGetInfo(&free, &total);
             auto mem_pool_size = 0.95 * free;
             mm = std::make_shared<UserSpaceMM>(mem_pool_size);
