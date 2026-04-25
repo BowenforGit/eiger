@@ -1,11 +1,15 @@
 # GaMax TPC-H — the whole journey
 
-**End state (2026-04-24):** all 22 TPC-H queries execute on the GaMax
+**End state (2026-04-25):** all 22 TPC-H queries execute on the GaMax
 GPU engine and match DuckDB-generated Parquet goldens byte-for-byte
-at both SF1 and SF10, inside the verifier's per-type tolerances
+at SF1, SF10, and SF30, inside the verifier's per-type tolerances
 (exact for ints / strings; `|Δ| ≤ max(0.01, 1e-6·|expected|)` for
-floats). Zero engine-level divergences. The verifier, goldens, and
-runner driver are all committed.
+floats). Zero engine-level divergences. Beyond correctness, the
+engine now has end-to-end measurement infrastructure: NVTX timeline
+instrumentation, an IR-driven NVBench harness with operator-hint
+sweeping, a fast failure-mode probe binary, and Caliper-style
+per-step CSV breakdown. The verifier, goldens, runner driver, and
+all measurement tooling are committed.
 
 **Starting state (week one):** Q6 matched pyarrow. Q1 crashed on
 STRING groupby. Most of Q2–Q22 either threw `not yet implemented`
@@ -22,9 +26,12 @@ future maintainer is most likely to step on.
 | Metric | Start | End |
 |---|---|---|
 | Queries that run end-to-end | 1 (Q6) | 22 / 22 |
-| Queries verified against a canonical oracle | 1 (Q6 vs pyarrow, manual) | 22 / 22 (DuckDB golden, automated `--verify`) |
+| Queries verified against a canonical oracle | 1 (Q6 vs pyarrow, manual) | 22 / 22 (DuckDB golden, automated `--verify`) at SF1, SF10, SF30 |
 | IR rules | 0 | 5 (G4a, G7, G1-rule, scan-pushdown, CountDistinct rewrite) |
 | Phys ops | reorder/filter/project/eq/semi/cross/scalaragg/groupby/sort/topk | + anti, distinct, concat, substring, year_of, in_multiple, and more |
+| Operator-hint sweeping | none | per-kind axes via `LowerOptions` + NVBench fixture |
+| Per-step GPU timing | none | `StepProfileSink` (cudaEvent pairs) + Caliper-style CSV |
+| Q1 SF10 wall (cold) | 27.6 s | 6.6 s (Parquet column projection + threaded decode) |
 | Unit tests | ~220 | 620+ across ~45 binaries |
 | Pool OOMs on runnable queries | Multiple | 0 |
 
@@ -325,6 +332,168 @@ FIRST collapses it to ~1M rows before concat; the concat input
 volumes are balanced and small, and the only remaining copy is a
 negligible 4 MB on the anti side.
 
+### 7. Performance + measurement infrastructure
+
+**Problem:** with all 22 queries correct, the next questions were
+"how long does each query take?", "where does the time go?", and
+"what changes when we pick a different operator implementation?"
+The engine had no per-step timing, no operator-hint sweeping at the
+IR level, and the Parquet reader was a bottleneck nobody had
+profiled.
+
+**What shipped (in rough dependency order):**
+
+- **Parquet reader column projection + threaded decode**
+  (`tpch_reader.cpp`). Was: `reader->ReadTable(&table)` decoded all
+  16 lineitem columns even when the query needed 4, single-threaded.
+  Now: cache `parquet::arrow::FileReader` per table, configure
+  `ArrowReaderProperties(use_threads=true)`, and call
+  `ReadTable(missing_col_indices, &tbl)` to project + parallel-
+  decode only the missing columns. **3–4× end-to-end speedup at
+  SF10.** Q6: 24.2 s → 5.8 s. Q1: 27.6 s → 6.6 s.
+
+- **Chunked-string path for SF30+** (same file). Arrow's
+  `StringArray` uses int32 offsets; columns over 2 GiB total
+  (orders.o_comment / lineitem.l_shipinstruct at SF30) made
+  `arrow::Concatenate` overflow. Walked Arrow's chunks directly
+  into the int64-offset pinned cache we were going to build anyway.
+  All 22 queries verify at SF30.
+
+- **NVTX + per-step GPU timing** (`exec/step_profile.{hpp,cpp}` +
+  `executor.cpp`). Per-step cudaEvent pairs recorded on the
+  executor's stream, resolved at finalize. NVTX ranges
+  unconditionally; events only when `phys::Context::profile_sink`
+  is non-null. The legacy `query_context::scoped_op` NVTX wrapper
+  in `tpch.hpp` was the bootstrap; the executor-side instrumentation
+  generalises it. `run_tpch_ir --profile-csv` exposes per-step CSV.
+
+- **IR-driven NVBench harness** (`benchmarks/tpch/tpch_ir_nvbench.cu`).
+  Single `NVBENCH_BENCH(tpch_ir)` over `(query, scale, filter,
+  project, sort, group_by, eq_join)` axes. Methodology:
+  `bench_resolve_sources` (Phase 1, untimed — H2D + Parquet decode)
+  + `bench_run_steps` (Phase 2, timed via NVBench's
+  `exec_tag::timer`). Skip-by-`n/a`: each operator-kind axis includes
+  an `n/a` sentinel; the fixture inspects the lowered plan's
+  `StepKind` set and skips cells that don't match. Process-wide
+  reader cache keyed by scale, per-cell IrSourceResolver bounds
+  device memory. `release_all_mem()` at cell boundary keeps the slab
+  pool's high-water mark predictable.
+
+- **Per-payload typed hints + LowerOptions overrides** (the v2 of
+  the bench harness). Every ExecPlan payload that has a runtime
+  implementation choice gained a typed `hint` field
+  (Project → `project_options`, Filter → `select_options`, EqJoin →
+  `join_hint`, GroupBy → `groupby_hint`, Sort → `sort_table_options`,
+  ...). `LowerOptions` carries one `std::optional<KindHint>` per
+  kind; lowering sets `payload.hint = opts.kind.value_or(default)`.
+  Phys op signatures grew matching `const HintT& = default` params;
+  the executor's `step_dispatch` walker forwards `payload.hint`. The
+  bench fixture wires NVBench string axes through `tpch_params::
+  parse_algo_value` to typed hints.
+
+- **`Predicate` purely semantic.** `select_options` (the fuse vs
+  nofuse axis for filter) used to be baked at construction time
+  inside Predicate leaves. Stripped — `Predicate::expr(tree)` no
+  longer takes options; `select_to_bitmask(table, pred, options,
+  stream)` takes them at evaluation time; `FilterPayload::hint`
+  carries them through the executor. Mirrors how `EqJoinPayload`
+  carries structural keys but the new hint is a separate field.
+  Closes the doc's open question #2 about `select_to_bitmask`'s
+  surface.
+
+- **`project=nofuse` Select + materialization fixes**
+  (`expr_nofuse.cu`). `evaluate_one_expr`'s switch had explicitly
+  skipped `ExprId::Select` (`// skip for now`); wired it up to the
+  existing `launch_select` infrastructure (which had a latent
+  T1/T2 deduction bug — fixed). `evaluate_expr_nofuse` also
+  materialises non-`column_ptr` final results: `column_view` →
+  `copy_column`, `scalar` → broadcast via `thrust::fill_n`. All 22
+  queries verify with `--no-fuse-project --verify`.
+
+- **Axis-probe binary**
+  (`benchmarks/tpch/tpch_ir_axis_probe.cu`). NVBench has ~1 s
+  per-cell overhead; for failure-mode coverage where the question
+  is "which (q × hint) cells fail at all", that adds up to multi-
+  hour sweeps. The probe enumerates the full axis Cartesian itself,
+  calls IR `lower → execute` once per valid cell with try/catch,
+  emits one CSV row per cell. **Full SF=1 sweep runs in ~60 s**
+  (vs. NVBench's projected 8 hours). Wrapper script
+  `script/run_tpch_axis_probe.sh` spawns one subprocess per query
+  so a CUDA-context-corrupting cell only contaminates that query's
+  remaining cells.
+
+- **`use_cuda_mm()` runtime memory-manager switch**
+  (`memory/mem_manager.{hpp,cu}`). Replaced the old
+  `USE_DEFAULT_MEMALLOC` compile-time macro: now a runtime function
+  that swaps from `UserSpaceMM` (88 GiB pre-allocated slab) to
+  `CudaMM` (per-allocation `cudaMallocAsync`/`cudaFreeAsync`)
+  before first allocation. Used to debug kernel OOBs that
+  UserSpaceMM's slab boundary would have hidden — a kernel
+  writing past its logical bucket but inside the slab looked
+  legal. `run_tpch_ir --use-cuda-mm` exposes it.
+
+**Operator-hint sweeping found real bugs:**
+
+The IR-bench probe at SF=1 surfaced six distinct failure patterns
+across 2400+ cells. After triage:
+
+- *Pattern A* — sort-based groupby (`sort_gftr`,
+  `sort_gftr_opt`, `sort_gfur`) fails on multi-key or STRING groups
+  ("Only single-column group keys are supported" / "Invalid
+  type_id: 12"). Out of scope per the directive "let groupby_hash
+  handle these cases."
+
+- *Pattern B* — partition-based groupby (`partition_gftr`,
+  `partition_gfur`) ignores keys past column 0 (the
+  `type_dispatcher` only sees `key.get_column(0).type()`); the
+  caller's post-processing in `groupby_noskf` then indexes past
+  the result's columns. Tactical guard in place; real fix is
+  `multikey_compress` inside the partition path. See
+  `docs/PARTITION_KERNEL_BUGS.md`.
+
+- *Pattern C* — partition_hash_join's
+  `join_copartitions_arr` writes past shared-memory `elem`/
+  `payload`/`next` buffers when any partition has more than
+  `max_build_bucket_size + 512 = 4608` rows, corrupting adjacent
+  shared-mem regions and producing non-deterministic output
+  (sometimes wrong values, sometimes `cudaErrorIllegalAddress`).
+  Two pieces of fix:
+
+  - Host-side precondition check in `create_work_units`:
+    `generate_work_units` now also `atomic_max`'s the per-partition
+    build size into a 1-element scalar; `create_work_units` reads
+    it back and throws cleanly if any partition exceeds
+    `max_build_bucket_size`.
+
+  - Build-vs-probe flips in `tpch_ir.cu` for Q7/Q9/Q10/Q21: each
+    had a big intermediate (lineitem-side join result) on the
+    LEFT (build) and a small dimension table (`nation`,
+    `nation_filt`) on the RIGHT (probe), joined on a 25-distinct-
+    value key (n_nationkey). With the dimension table on the
+    right, the partition_hash_join hashed the big-side keys
+    into 65536 partitions, with the 25 distinct values landing
+    in 25 partitions of `big_size / 25` rows each — way past the
+    4096 cap. Flipping to put the dimension table on the build
+    side is correct semantically (IR uses ColumnIds, not ordinals,
+    so downstream references are unaffected) and avoids the
+    overflow.
+
+  Together these eliminated all 384 SF=1 overflow failures.
+
+- *Probe diagnostics at SF=1*: 4516 cells × all axes →
+  pass=2116 / fail=2400. Every remaining failure is a clean
+  unsupported-shape rejection with an actionable message. No
+  CUDA-context-corruption cascades.
+
+**What localized the partition_hash_join bug.** `compute-sanitizer`
+could not attach to a libcudart-linked binary on this build
+(libcudart's static initializers init CUDA before `main`,
+disabling the sanitizer hooks). Workaround: `printf` instrumentation
+in `generate_work_units` (per-partition `r_len`) and the kernel
+entry (work-unit shape). The first oversize bucket showed up in
+the first run: `len_R=6100, max_build_bucket_size=4096`. Total
+debug time from `printf` to root cause: ~30 minutes.
+
 ## Corners cut (deliberate)
 
 - **No `phys::left_outer_join`.** Never wrote it. The decomposition
@@ -375,6 +544,31 @@ negligible 4 MB on the anti side.
 - **`emit.cpp` still exists.** Legacy two-line wrapper around
   `lower_to_exec_plan` + `execute`. Some tests use it. Deleting it
   is risk-free but hasn't happened.
+- **`partition_hash_join`'s build-bucket overflow check is host-
+  side only.** The kernel still has the latent OOB shared-memory
+  write; we throw before launching when any partition exceeds the
+  cap. Anyone who widens the cap or adds a workload with even more
+  skewed keys re-discovers the same OOB. Real fix tracked in
+  `docs/PARTITION_KERNEL_BUGS.md` (kernel bounds-check + spill
+  path; or dynamic n_partitions sizing).
+- **`partition::groupby` and `partition::groupby_gfur` are
+  single-key-only.** Multi-key / STRING inputs now throw a clear
+  error. The proper fix (multikey_compress inside the partition
+  path) is sketched but not implemented. The `_sort` variants are
+  similarly single-key-only and will likely stay so — the user
+  directive was "let groupby_hash handle these cases."
+- **`tpch_params::algo_map`** (a string→int map keyed by op name)
+  remains in use only for the legacy hand-written queries and
+  legacy `tpch_nvbench.cu`. The IR pipeline doesn't read it; IR
+  hint-sweeping goes through `LowerOptions`. The map can retire
+  once the legacy queries either go away or migrate to IR.
+- **`compute-sanitizer` does not attach** to any binary that
+  dynamically links libcudart on this build environment (CUDA
+  initialises before sanitizer's hooks). The `use_cuda_mm()` switch
+  was the workaround for one investigation; future kernel
+  debugging may need `printf` instrumentation instead. If you
+  ever land a fix that lets the sanitizer attach, please update
+  `docs/PARTITION_KERNEL_BUGS.md`.
 
 ## Load-bearing assumptions
 
@@ -500,34 +694,93 @@ breakage:
   segfaulted at runtime when called from that TU. If you refactor
   the reader, don't "simplify" by calling the ctor — test end-to-
   end first.
+- **The `inner_join` IR factory's L/R order matters for performance
+  even though it doesn't affect correctness.** The IR uses
+  ColumnIds so flipping L/R preserves downstream references, but
+  `phys::eq_join` lets `inner_eq_join` use the LEFT table as the
+  build side and the RIGHT as the probe side. For partition_hash,
+  build > 4096 rows per partition crashes the kernel; for hash, a
+  large build is still a memory hit. **Put the smaller table on
+  the LEFT.** Q7/Q9/Q10/Q21 had this backwards and silently
+  worked on the default hint (because the auto algo picked HASH);
+  the bug only surfaced when the bench harness asked for
+  partition_hash explicitly. If you write a new IR builder, default
+  to `small.inner_join(big, predicate)`.
+- **`UserSpaceMM`'s slab hides kernel OOBs.** The 88 GiB
+  pre-allocated slab makes any out-of-bounds write inside the
+  slab read as legal memory. compute-sanitizer (when it can
+  attach) and runtime crashes both miss them — you only see
+  garbage output. If a new query produces non-deterministic
+  results, swap to `--use-cuda-mm` (or call `use_cuda_mm()`) to
+  unmask OOBs that UserSpaceMM is hiding.
+- **`StepProfileSink` skips the first sample in aggregating mode.**
+  NVBench's `cold` mode doesn't run a separate warmup, so the
+  first invocation carries JIT and one-time costs that would
+  inflate the per-step mean by 5–50×. The bench fixture's
+  `discard_pending` call drops the first sample's events; the
+  CSV stats reflect the steady state.
+- **`bench_run_steps` requires a sentinel `SourceResolver`.** The
+  resolver passed to `bench_resolve_sources` is consumed in
+  Phase 1; Phase 2 must NOT re-call it. The executor enforces
+  this with a throwing sentinel, but a future caller that
+  reuses the resolver across phases will hit the throw and
+  should instead split the calls.
+- **`run_tpch_ir --eq-join-algo partition_hash_gfur`** picks the
+  PARTITION+GFUR pair, but for inputs that match the
+  `early_materialization` shape (caller's wrapper builds a
+  [key, row_id] table — true for every IR-driven join), the
+  partition_hash_join routes to `ieq_partition_hash_join_narrow`
+  which is GFTR-equivalent regardless of the requested mat_algo.
+  So the bench cell labelled `partition_hash_gfur` is actually
+  measuring the GFTR-equivalent narrow path. Worth flagging
+  if you ever need a clean GFUR vs GFTR comparison.
 
 ## What's next (if you're picking up the work)
 
 Nothing is "required" for TPC-H. The engine is complete for that
 workload. Strong next directions, in rough priority:
 
-1. **SF100 readiness.** Q5's join-order fix was manual; a join-
+1. **Partition-kernel bug fixes.** `partition_hash_join`'s shared-
+   memory OOB is currently host-side-guarded; the kernel itself
+   still has the bug. `partition::groupby` is single-key-only.
+   See `docs/PARTITION_KERNEL_BUGS.md` for the kernel sketches
+   (bounds-check + spill-to-global; multikey_compress inside the
+   partition path). Until those land, the IR-bench probe at SF=1
+   reports clean unsupported-shape rejections instead of crashes,
+   which is acceptable but limits what the operator-axis sweep
+   can compare.
+
+2. **SF100 readiness.** Q5's join-order fix was manual; a join-
    order optimizer would be the cleanest way to make arbitrary
    future queries scale to SF100 and beyond. Also: the 88 GiB
    pool is a hard ceiling — spilling intermediates to host
    memory is a precondition for SF100.
 
-2. **Non-equi residual rule for semi/anti joins (the general
+3. **Non-equi residual rule for semi/anti joins (the general
    case).** Q21's rewrite covers a specific algebraic shape. A
    true rule pass that detects non-equi residual + pushes it INTO
    the match predicate would unblock frontend queries with
    arbitrary correlated-subquery shapes.
 
-3. **Real `phys::left_outer_join`.** Paired with a NULL scheme
+4. **Real `phys::left_outer_join`.** Paired with a NULL scheme
    (either native nullability or a matched-mask column). Would
    let the builder-side decomposition retire, and would unblock
    outer joins whose ON clause genuinely references both sides.
 
-4. **CodeGen (Phase 3 in the original plan).** The ExecPlan was
+5. **Verification gtest for operator-hint configurations.** The
+   bench harness exercises every (q × hint) cell, but doesn't
+   verify against goldens — only checks that the cell doesn't
+   throw. A parameterized gtest that runs each non-`n/a` cell
+   end-to-end with `--verify` would catch silent wrong results
+   from hint paths that "succeed" but mis-compute. Tactical guards
+   currently mask this; once the partition kernel bugs are fixed
+   and more cells run, we'll need a verify gate.
+
+6. **CodeGen (Phase 3 in the original plan).** The ExecPlan was
    designed to feed either the Executor or a CodeGenerator. Only
    the Executor is in place.
 
-5. **Multi-GPU / multi-node.** The long-term scope. Single-stream
+7. **Multi-GPU / multi-node.** The long-term scope. Single-stream
    single-GPU is a steady floor to build on; scale-out is a from-
    scratch layer above the phys op set.
 
@@ -543,3 +796,12 @@ workload. Strong next directions, in rough priority:
   GaMax's builders, Maximus, and the TPC-H spec.
 - `docs/GROUPBY_STRING_KEYS.md` — deep dive on the STRING-groupby
   rewrite (the single largest gap-closing arc prior to this one).
+- `docs/PARTITION_KERNEL_BUGS.md` — tracking doc for the partition-
+  based operator bugs surfaced by the IR-bench axis probe. Bug 2
+  (partition_hash_join build-bucket overflow) has a host-side
+  precondition fix; Bug 1 (partition::groupby single-key-only)
+  has a tactical guard. Both have real-fix sketches.
+- `script/run_tpch_axis_probe.sh` — wrapper for the operator-axis
+  probe; full SF=1 sweep finishes in ~60 s.
+- `benchmarks/tpch/tpch_ir_nvbench.cu` — IR-driven NVBench harness
+  with operator-hint axes.
