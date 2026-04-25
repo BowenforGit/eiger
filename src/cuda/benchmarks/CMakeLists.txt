@@ -72,6 +72,14 @@ if(BUILD_TPCH AND USE_NVIDIA)
     target_link_libraries(benchmark_tpch_ir PRIVATE ${GAMAX_BENCHMARK_MAIN_TARGET})
     target_link_libraries(benchmark_tpch_ir PRIVATE gamax_tpch)
     target_link_libraries(benchmark_tpch_ir PRIVATE OpenMP::OpenMP_CXX)
+
+    # IR-driven TPC-H axis probe — fast failure-mode coverage tool.
+    # Bypasses NVBench's measurement loop and runs each (query × axis)
+    # cell once with try/catch, emitting a CSV of pass/fail outcomes.
+    add_executable(tpch_ir_axis_probe tpch/tpch_ir_axis_probe.cu)
+    target_link_libraries(tpch_ir_axis_probe PRIVATE common)
+    target_link_libraries(tpch_ir_axis_probe PRIVATE gamax_tpch)
+    target_link_libraries(tpch_ir_axis_probe PRIVATE OpenMP::OpenMP_CXX)
 endif()
 # Target-specific options live in a separate file so that editing them
 # does not cause CMake to re-evaluate CPMAddPackage in this file.
