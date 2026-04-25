@@ -22,6 +22,22 @@
 //   ./benchmark_tpch_ir -a query=6 -a scale=10     # single cell
 //   ./benchmark_tpch_ir --profile -a query=6       # one-shot, no timing
 //                                                  # (attach `nsys profile`)
+//   ./benchmark_tpch_ir -a "filter=[fuse]" -a "group_by=[hash,sort_gftr]"
+//                                                  # operator-hint sweep
+//
+// Operator axes:
+//   filter, project   "fuse"   "nofuse"   "n/a"
+//   sort              "skf"    "no_skf"   "n/a"
+//   group_by          "hash"   "sort_gftr"   "sort_gftr_opt"   "sort_gfur"
+//                     "partition_gftr"   "partition_gfur"   "n/a"
+//
+// Each axis includes "n/a" as a sentinel. The fixture skips a cell if
+// (axis="n/a" AND the corresponding StepKind appears in the lowered
+// plan) OR (axis≠"n/a" AND the StepKind doesn't appear). That collapses
+// the Cartesian to per-query valid combinations without the user
+// writing per-query axis manifests. The "all instances of one
+// operator kind share a single hint" simplification drops the
+// per-instance axis explosion.
 //
 // Output: NVBench's standard CSV/JSON/Markdown via `--csv`, `--json`,
 // `--md` flags. Per-step breakdown is intentionally not emitted by
@@ -34,9 +50,11 @@
 #include <cstdlib>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "exec/executor.hpp"
@@ -44,6 +62,10 @@
 #include "ir/lower_to_exec_plan.hpp"
 #include "ir/rules.hpp"
 #include "memory/mem_manager.hpp"
+#include "operators/groupby/groupby.hpp"
+#include "operators/sort/sort.hpp"
+#include "operators/select/select.hpp"
+#include "operators/project/project.hpp"
 #include "phys/phys.hpp"
 #include "tpch/ir_source_resolver.hpp"
 #include "tpch/tpch.hpp"
@@ -73,6 +95,67 @@ gamax::tpch::TpchTableReader& shared_reader(int scale_factor) {
 const gamax::ir::Catalog& shared_catalog() {
     static auto cat = gamax::ir::tpch::make_tpch_catalog();
     return cat;
+}
+
+// ── Axis parsing ──────────────────────────────────────────────────
+//
+// Each operator-kind axis is a string axis whose values include
+// "n/a" plus the algorithm names recognized by
+// `gamax::tpch::tpch_params::parse_algo_value`. Returning
+// `std::nullopt` from these helpers signals the "n/a" sentinel — the
+// fixture uses that to drive its skip-by-n/a logic.
+
+constexpr const char* kNA = "n/a";
+
+std::optional<gamax::select::select_options>
+parse_filter_axis(const std::string& v) {
+    if (v == kNA) return std::nullopt;
+    gamax::select::select_options o;
+    o.fuse_operations = (v == "fuse");
+    return o;
+}
+
+std::optional<gamax::project::project_options>
+parse_project_axis(const std::string& v) {
+    if (v == kNA) return std::nullopt;
+    gamax::project::project_options o;
+    o.fuse_operations = (v == "fuse");
+    return o;
+}
+
+std::optional<gamax::sort::sort_table_options>
+parse_sort_axis(const std::string& v) {
+    if (v == kNA) return std::nullopt;
+    gamax::sort::sort_table_options o;
+    o.smart_keys_fusion = (v == "skf");
+    return o;
+}
+
+std::optional<gamax::groupby::groupby_hint>
+parse_group_by_axis(const std::string& v) {
+    if (v == kNA) return std::nullopt;
+    int algo_int = gamax::tpch::tpch_params::parse_algo_value(v);
+    gamax::groupby::groupby_hint h;
+    h.groupby_algo = static_cast<gamax::groupby::groupby_algo>(algo_int);
+    return h;
+}
+
+// ── Plan inspection for skip-by-n/a ───────────────────────────────
+//
+// Compute the StepKind set of a lowered plan so the fixture can
+// decide skip-or-set per axis. Reorder, ScalarAgg, Distinct, Concat,
+// CrossJoin, SourceTable have no v1 axis — they're not consulted.
+
+std::unordered_set<int> step_kind_set(const gamax::exec::ExecPlan& ep) {
+    std::unordered_set<int> kinds;
+    for (const auto& s : ep.steps) {
+        kinds.insert(static_cast<int>(s.kind));
+    }
+    return kinds;
+}
+
+bool plan_has(const std::unordered_set<int>& kinds, gamax::exec::StepKind k) {
+    return kinds.count(static_cast<int>(k)) > 0;
 }
 
 gamax::ir::PlanPtr build_query(int qid, const gamax::ir::QueryBuilder& qb) {
@@ -120,6 +203,12 @@ void bench_tpch_ir(nvbench::state& state) {
     // up over the first few samples.
     release_all_mem();
 
+    // ── Read operator-kind axes (each accepts an "n/a" sentinel) ──
+    auto filter_hint   = parse_filter_axis(state.get_string("filter"));
+    auto project_hint  = parse_project_axis(state.get_string("project"));
+    auto sort_hint     = parse_sort_axis(state.get_string("sort"));
+    auto group_by_hint = parse_group_by_axis(state.get_string("group_by"));
+
     // Build the IR plan once per cell. The plan / catalog / resolver
     // outlive the lambda; NVBench reuses them across all samples of
     // this cell. Per-cell scope means the resolver's device-table
@@ -129,7 +218,51 @@ void bench_tpch_ir(nvbench::state& state) {
     gamax::ir::QueryBuilder qb(catalog, gen);
     auto plan = build_query(qid, qb);
     plan = gamax::ir::apply_rules(plan);
-    auto ep = gamax::ir::lower_to_exec_plan(plan, catalog);
+
+    // First lowering with default options — used only to inspect the
+    // plan's StepKind set so we can decide skip-by-n/a per axis. If
+    // the cell is valid, we re-lower with the populated overrides.
+    auto inspect_ep = gamax::ir::lower_to_exec_plan(plan, catalog);
+    const auto kinds = step_kind_set(inspect_ep);
+
+    // Skip-by-n/a: a cell is invalid if (axis="n/a" AND its kind is
+    // present) OR (axis≠"n/a" AND its kind is absent). The "sort"
+    // axis covers BOTH Sort and TopK steps (they share the same
+    // sort_table_options hint type).
+    using gamax::exec::StepKind;
+    const bool has_filter   = plan_has(kinds, StepKind::Filter);
+    const bool has_project  = plan_has(kinds, StepKind::Project);
+    const bool has_sort     = plan_has(kinds, StepKind::Sort)
+                           || plan_has(kinds, StepKind::TopK);
+    const bool has_group_by = plan_has(kinds, StepKind::GroupBy);
+
+    auto axis_mismatch = [&](bool axis_set, bool kind_present, const char* name) {
+        if (axis_set && !kind_present) {
+            state.skip(std::string{"axis "} + name +
+                       " set but plan has no " + name + " step");
+            return true;
+        }
+        if (!axis_set && kind_present) {
+            state.skip(std::string{"axis "} + name +
+                       " is n/a but plan has " + name + " step(s)");
+            return true;
+        }
+        return false;
+    };
+    if (axis_mismatch(filter_hint.has_value(),   has_filter,   "filter"))   return;
+    if (axis_mismatch(project_hint.has_value(),  has_project,  "project"))  return;
+    if (axis_mismatch(sort_hint.has_value(),     has_sort,     "sort"))     return;
+    if (axis_mismatch(group_by_hint.has_value(), has_group_by, "group_by")) return;
+
+    // Re-lower with the harness's per-kind overrides. Empty optionals
+    // fall through to the engine default.
+    gamax::ir::LowerOptions opts;
+    opts.filter   = filter_hint;
+    opts.project  = project_hint;
+    opts.sort     = sort_hint;
+    opts.top_k    = sort_hint;     // share with Sort axis
+    opts.group_by = group_by_hint;
+    auto ep = gamax::ir::lower_to_exec_plan(plan, catalog, opts);
 
     auto& reader = shared_reader(sf);
     gamax::tpch::IrSourceResolver resolver(reader, catalog);
@@ -211,4 +344,10 @@ NVBENCH_BENCH(bench_tpch_ir)
     .add_int64_axis("query",
         {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
          12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22})
-    .add_int64_axis("scale", {1, 10});
+    .add_int64_axis("scale", {1, 10})
+    .add_string_axis("filter",   {"fuse", "nofuse",       "n/a"})
+    .add_string_axis("project",  {"fuse", "nofuse",       "n/a"})
+    .add_string_axis("sort",     {"skf",  "no_skf",       "n/a"})
+    .add_string_axis("group_by", {"hash", "sort_gftr",    "sort_gftr_opt",
+                                  "sort_gfur", "partition_gftr",
+                                  "partition_gfur",       "n/a"});
