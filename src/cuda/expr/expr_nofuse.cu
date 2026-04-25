@@ -4,6 +4,8 @@
 #include <unordered_map>
 #include <type_traits>
 #include <cuda/std/utility>
+#include <thrust/execution_policy.h>
+#include <thrust/fill.h>
 #include <thrust/iterator/constant_iterator.h>
 
 #include "memory/column.hpp"
@@ -13,6 +15,7 @@
 #include "expr/expr_fast.hpp"
 #include "expr/expr_impl.cuh"
 #include "memory/scalar.hpp"
+#include "utils/copying.hpp"
 #include "utils/utils.cuh"
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
@@ -243,14 +246,19 @@ __global__ void kernel_binary_op_vec(
     }
 }
 
-template <typename InputItr>
+// Two iterator type parameters because Select's true/false operands
+// can be a mix of column_view_itr / constant_itr (e.g. column-vs-
+// scalar in `case when ... then col else 0`). Both iterators yield
+// the same value type by precondition (launch_select rejects type
+// mismatches).
+template <typename InputItr1, typename InputItr2>
 __global__ void kernel_select_op(
-    InputItr input1,
-    InputItr input2,
+    InputItr1 input1,
+    InputItr2 input2,
     column_view select_mask,
     mutable_column_view output)
-{   
-    using T = typename std::iterator_traits<InputItr>::value_type;
+{
+    using T = typename std::iterator_traits<InputItr1>::value_type;
     using ResType = std::remove_cv_t<std::remove_reference_t<T>>;
 
     const size_type idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -514,7 +522,11 @@ struct binary_op_launch_helper {
         return output;
     }
 
-    template<typename T1, typename T2, typename Input1, typename Input2>
+    // Select-kernel overload. Single template type because
+    // `launch_select` precondition guarantees the t/f operands have
+    // matching dtypes; type_dispatcher dispatches that one type and
+    // both make_iterator calls share it.
+    template<typename T, typename Input1, typename Input2>
     column_ptr operator() (
         Input1 input1,
         Input2 input2,
@@ -523,20 +535,20 @@ struct binary_op_launch_helper {
     {
         const auto output_size = get_output_size(input1, input2);
         auto output = gamax::make_column(input1.type(), output_size);
-        
+
         const int blockSize = 256;
         const int numBlocks = (output_size + blockSize - 1) / blockSize;
-        
+
         kernel_select_op<<<numBlocks, blockSize, 0, stream>>>(
-            make_iterator<T1>(input1), 
-            make_iterator<T2>(input2), 
+            make_iterator<T>(input1),
+            make_iterator<T>(input2),
             select_mask,
             output->mutable_view());
-        
+
         // Ensure the kernel is finished before returning otherwise
         // the unique_ptr may go out of scope before the kernel is done
         cudaStreamSynchronize(stream);
-        
+
         return output;
     }
 
@@ -566,11 +578,70 @@ private:
     }
 };
 
+// Broadcast a scalar value into a fresh column of `n` rows. Used to
+// materialise an expression program whose final register is a scalar
+// (e.g. a project item that is a literal constant) — the public
+// contract of `evaluate_expr_nofuse` is to return a column.
+struct broadcast_scalar_helper {
+    template <typename T,
+              std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
+    gamax::column_ptr operator()(gamax::scalar const& s,
+                                 gamax::size_type n,
+                                 cudaStream_t stream) const
+    {
+        auto col = gamax::make_column<T>(n, /*clear=*/false, stream);
+        T val = s.get<T>();
+        thrust::fill_n(thrust::cuda::par.on(stream),
+                       col->mutable_view().template data<T>(),
+                       n, val);
+        return col;
+    }
+
+    template <typename T,
+              std::enable_if_t<!std::is_arithmetic_v<T>, int> = 0>
+    gamax::column_ptr operator()(gamax::scalar const&,
+                                 gamax::size_type,
+                                 cudaStream_t) const
+    {
+        throw std::runtime_error(
+            "evaluate_expr_nofuse: scalar broadcast for non-arithmetic "
+            "types not supported");
+    }
+};
+
+gamax::column_ptr broadcast_scalar(gamax::scalar const& s,
+                                   gamax::size_type n,
+                                   cudaStream_t stream)
+{
+    if (s.type().id() == gamax::type_id::STRING) {
+        throw std::runtime_error(
+            "evaluate_expr_nofuse: STRING scalar broadcast not supported");
+    }
+    return gamax::type_dispatcher(
+        s.type(), broadcast_scalar_helper{}, s, n, stream);
+}
+
+// Borrow a `column_view` from a Select-condition operand. The cond
+// variant is held by the caller's scope while the kernel runs, so
+// the returned view is valid for the kernel's lifetime.
+column_view cond_view_of(intermediate_storage::operand_type& v)
+{
+    return std::visit(overloaded {
+        [](gamax::column_ptr& cp) -> column_view { return cp->view(); },
+        [](column_view cv)         -> column_view { return cv; },
+        [](gamax::scalar) -> column_view {
+            throw std::runtime_error(
+                "evaluate_expr_nofuse: Select condition must be a "
+                "column, not a scalar");
+        },
+    }, v);
+}
+
 void evaluate_one_expr(
-    Expr const& expr, 
+    Expr const& expr,
     gamax::table_view& table,
-    intermediate_storage& storage, 
-    cudaStream_t stream) 
+    intermediate_storage& storage,
+    cudaStream_t stream)
 {
     using namespace gamax::expression::detail;
     switch(expr.id) {
@@ -732,8 +803,78 @@ void evaluate_one_expr(
                 stream);
             break;
         }
-        case ExprId::Select: 
-         // skip for now
+        case ExprId::Select: {
+            // Select(cond, t, f): elementwise `cond ? t : f`. The
+            // existing `binary_op_launch_helper::launch_select` plus
+            // `kernel_select_op` infrastructure already implements
+            // the kernel; this case wires the variant dispatch over
+            // the t/f operand types and supplies cond as the mask.
+            //
+            // The cond operand must be column-shaped (BOOL8) — it
+            // typically arrives as a `column_ptr` from a prior
+            // comparison op.
+            auto cond_v = storage.load(expr.operand_regs[0]);
+            auto t_v    = storage.load(expr.operand_regs[1]);
+            auto f_v    = storage.load(expr.operand_regs[2]);
+            column_view cond_view = cond_view_of(cond_v);
+
+            binary_op_launch_helper launcher;
+            auto result = std::visit(overloaded {
+                [&](gamax::column_ptr&& tp, gamax::column_ptr&& fp)
+                    -> gamax::column_ptr {
+                    return launcher.launch_select(
+                        tp->view(), fp->view(), cond_view, stream);
+                },
+                [&](column_view tv, column_view fv)
+                    -> gamax::column_ptr {
+                    return launcher.launch_select(
+                        tv, fv, cond_view, stream);
+                },
+                [&](gamax::column_ptr&& tp, column_view fv)
+                    -> gamax::column_ptr {
+                    return launcher.launch_select(
+                        tp->view(), fv, cond_view, stream);
+                },
+                [&](column_view tv, gamax::column_ptr&& fp)
+                    -> gamax::column_ptr {
+                    return launcher.launch_select(
+                        tv, fp->view(), cond_view, stream);
+                },
+                [&](gamax::column_ptr&& tp, gamax::scalar fs)
+                    -> gamax::column_ptr {
+                    return launcher.launch_select(
+                        tp->view(), fs, cond_view, stream);
+                },
+                [&](gamax::scalar ts, gamax::column_ptr&& fp)
+                    -> gamax::column_ptr {
+                    return launcher.launch_select(
+                        ts, fp->view(), cond_view, stream);
+                },
+                [&](column_view tv, gamax::scalar fs)
+                    -> gamax::column_ptr {
+                    return launcher.launch_select(
+                        tv, fs, cond_view, stream);
+                },
+                [&](gamax::scalar ts, column_view fv)
+                    -> gamax::column_ptr {
+                    return launcher.launch_select(
+                        ts, fv, cond_view, stream);
+                },
+                [&](gamax::scalar ts, gamax::scalar fs)
+                    -> gamax::column_ptr {
+                    // Both branches are scalars (e.g. `case when ...
+                    // then 1 else 0`). Broadcast the true branch to
+                    // a column of cond's row count, then dispatch
+                    // via the existing column-vs-scalar select path.
+                    auto t_col = broadcast_scalar(
+                        ts, cond_view.size(), stream);
+                    return launcher.launch_select(
+                        t_col->view(), fs, cond_view, stream);
+                },
+            }, std::move(t_v), std::move(f_v));
+            storage.store(expr.return_reg, std::move(result));
+            break;
+        }
         default:
             throw std::runtime_error("Unsupported expression type");
     }
@@ -742,21 +883,42 @@ void evaluate_one_expr(
     
 std::unique_ptr<gamax::column> evaluate_expr_nofuse(
     gamax::table_view table,
-    ExprTree& et, 
-    cudaStream_t stream) 
+    ExprTree& et,
+    cudaStream_t stream)
 {
     intermediate_storage storage;
-    
+
     auto program = et.make_program_host();
     for(const auto& expr : program) {
         evaluate_one_expr(expr, table, storage, stream);
     }
 
+    // Materialise whatever the final register holds into an owned
+    // column. The intermediate-storage variant carries three forms;
+    // any of them is a valid program output:
+    //   * column_ptr  — a freshly-produced column from an op kernel.
+    //                   Move it out as-is.
+    //   * column_view — a borrowed slice of the input table. Happens
+    //                   when the expression's root is `Column` (e.g.
+    //                   a project item that turns out to be a single
+    //                   column reference and slipped past phys's
+    //                   `is_column_ref()` early-out). Deep-copy so
+    //                   the caller owns the result.
+    //   * scalar      — a literal constant. Happens when a project
+    //                   item is `lit(0)` etc. Broadcast to a column
+    //                   of `table.num_rows()` rows so the result has
+    //                   the right shape.
     auto result_variant = storage.load(program.back().return_reg);
-    
-    if(!std::holds_alternative<gamax::column_ptr>(result_variant)) {
-        throw std::runtime_error("The final result of the expression is not a column");
-    }
-    return std::get<gamax::column_ptr>(std::move(result_variant));
+    return std::visit(overloaded {
+        [](gamax::column_ptr&& p) -> gamax::column_ptr {
+            return std::move(p);
+        },
+        [&](column_view v) -> gamax::column_ptr {
+            return gamax::copy_column(v, stream);
+        },
+        [&](gamax::scalar s) -> gamax::column_ptr {
+            return broadcast_scalar(s, table.num_rows(), stream);
+        },
+    }, std::move(result_variant));
 }
 } // namespace gamax::expression

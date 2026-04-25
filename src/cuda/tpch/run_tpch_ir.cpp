@@ -48,6 +48,7 @@ struct Args {
     int scale_factor {1};
     bool print_plan {false};
     bool verify {false};
+    bool no_fuse_project {false};
     std::string profile_csv;  // empty = disabled
 };
 
@@ -63,6 +64,8 @@ Args parse_args(int argc, char** argv) {
             a.verify = true;
         } else if (std::strcmp(argv[i], "--profile-csv") == 0 && i + 1 < argc) {
             a.profile_csv = argv[++i];
+        } else if (std::strcmp(argv[i], "--no-fuse-project") == 0) {
+            a.no_fuse_project = true;
         } else {
             throw std::runtime_error("Unknown arg: " + std::string(argv[i]));
         }
@@ -227,7 +230,13 @@ int main(int argc, char** argv) try {
     }
 
     // ── 3. Lower to ExecPlan ─────────────────────────────────────
-    auto ep = gamax::ir::lower_to_exec_plan(plan, catalog);
+    gamax::ir::LowerOptions lower_opts;
+    if (args.no_fuse_project) {
+        gamax::project::project_options po;
+        po.fuse_operations = false;
+        lower_opts.project = po;
+    }
+    auto ep = gamax::ir::lower_to_exec_plan(plan, catalog, lower_opts);
     std::cout << "ExecPlan: " << ep.steps.size() << " steps, "
               << ep.required_sources.size() << " sources.\n";
     if (args.print_plan) {
