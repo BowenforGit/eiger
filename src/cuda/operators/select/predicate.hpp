@@ -38,15 +38,19 @@ public:
     Predicate& operator=(Predicate&&) = default;
 
     // ── Leaf factories: numeric expression ──
+    //
+    // Predicate carries no `select_options` — the algorithm choice
+    // (fuse/nofuse) is an operational concern that travels alongside
+    // the predicate, not inside it. Pass `select_options` to
+    // `select_to_bitmask` (and to `phys::filter` via FilterPayload's
+    // hint) at evaluation time. This makes Predicate purely semantic
+    // and lets the bench harness sweep filter algorithms without
+    // rebuilding the IR.
 
-    static Predicate expr(
-        gamax::expression::ExprTree tree,
-        select_options opts = {})
-    {
+    static Predicate expr(gamax::expression::ExprTree tree) {
         Predicate p;
         p._type = PredicateNodeType::EXPR;
         p._expr = std::move(tree);
-        p._select_opts = opts;
         return p;
     }
 
@@ -190,8 +194,6 @@ public:
 
     gamax::expression::ExprTree& expr_tree() { return _expr; }
     const gamax::expression::ExprTree& expr_tree() const { return _expr; }
-    select_options& expr_select_options() { return _select_opts; }
-    const select_options& expr_select_options() const { return _select_opts; }
 
     gamax::size_type string_cid() const { return _string_cid; }
     gamax::string_impl_id string_impl() const { return _string_impl; }
@@ -206,7 +208,6 @@ private:
 
     // Data for EXPR leaf
     gamax::expression::ExprTree _expr;
-    select_options _select_opts;
 
     // Data for string predicate leaves
     gamax::size_type _string_cid = 0;

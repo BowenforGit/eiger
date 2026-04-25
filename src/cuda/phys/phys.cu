@@ -252,7 +252,13 @@ table_ptr project(gamax::table_view in,
         switch (kinds[i]) {
             case Kind::Predicate: {
                 auto& pred = std::get<gamax::select::Predicate>(items[i]);
-                auto bm = gamax::select::select_to_bitmask(in, pred, ctx.stream);
+                // Predicate items inside Project use the engine's
+                // default select_options. The Project's `hint`
+                // controls fuse/nofuse for the numeric-expr batch
+                // path; per-Predicate-item options aren't a separate
+                // bench axis today.
+                auto bm = gamax::select::select_to_bitmask(
+                    in, pred, gamax::select::select_options{}, ctx.stream);
                 out.push_back(std::move(bm));
                 break;
             }
@@ -297,11 +303,8 @@ table_ptr filter(gamax::table_view in,
                  gamax::select::Predicate& pred,
                  std::vector<gamax::size_type> output_ordinals,
                  const Context& ctx,
-                 const gamax::select::select_options& /*hint*/)
+                 const gamax::select::select_options& hint)
 {
-    // `hint` is currently unused — `select_to_bitmask(table, Predicate&)`
-    // reads each EXPR leaf's baked `select_options`. B-2 strips that
-    // baked field and threads `hint` through to select_to_bitmask.
     const bool all_cols = output_ordinals.empty();
     // Bounds-check ordinals eagerly: a bad ordinal here would otherwise
     // surface only deep inside the gather path, with a confusing error.
@@ -331,7 +334,7 @@ table_ptr filter(gamax::table_view in,
     // The Predicate may reference ANY ordinal of `in`, not just the
     // ones in `output_ordinals`. select_to_bitmask runs over the full
     // view; only the materialization is selective.
-    auto mask = gamax::select::select_to_bitmask(in, pred, ctx.stream);
+    auto mask = gamax::select::select_to_bitmask(in, pred, hint, ctx.stream);
     return apply_bitmask(in, mask->view(), output_ordinals, ctx.stream);
 }
 

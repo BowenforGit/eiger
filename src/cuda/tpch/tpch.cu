@@ -212,7 +212,8 @@ namespace {
             query_context::scoped_op op(qc, "project_join_lineitem_part");
             auto scalar = gamax::make_string_scalar("PROMO", params_.stream);
             auto pred = gamax::select::Predicate::string_startswith(2 /*col2 - p_type */, std::move(scalar));
-            auto mask = gamax::select::select_to_bitmask(input->view(), pred, params_.stream);
+            auto mask = gamax::select::select_to_bitmask(
+                input->view(), pred, gamax::select::select_options{}, params_.stream);
             input->add_column(std::move(mask)); // col3: startswith(p_type, 'PROMO')
 
             if(project_join_lineitem_part_exprs_.empty()) {

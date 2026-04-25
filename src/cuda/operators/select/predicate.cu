@@ -14,12 +14,13 @@ namespace {
 gamax::column_ptr evaluate_predicate(
     gamax::table_view table,
     Predicate& pred,
+    select_options options,
     cudaStream_t stream)
 {
     switch (pred.type()) {
         case PredicateNodeType::EXPR: {
             return gamax::select::select_to_bitmask(
-                table, pred.expr_tree(), pred.expr_select_options(), stream);
+                table, pred.expr_tree(), options, stream);
         }
 
         case PredicateNodeType::STRING_EQUAL: {
@@ -75,19 +76,19 @@ gamax::column_ptr evaluate_predicate(
         }
 
         case PredicateNodeType::AND: {
-            auto lhs = evaluate_predicate(table, *pred.children()[0], stream);
-            auto rhs = evaluate_predicate(table, *pred.children()[1], stream);
+            auto lhs = evaluate_predicate(table, *pred.children()[0], options, stream);
+            auto rhs = evaluate_predicate(table, *pred.children()[1], options, stream);
             return gamax::util::device::bitmask_and(lhs->view(), rhs->view(), stream);
         }
 
         case PredicateNodeType::OR: {
-            auto lhs = evaluate_predicate(table, *pred.children()[0], stream);
-            auto rhs = evaluate_predicate(table, *pred.children()[1], stream);
+            auto lhs = evaluate_predicate(table, *pred.children()[0], options, stream);
+            auto rhs = evaluate_predicate(table, *pred.children()[1], options, stream);
             return gamax::util::device::bitmask_or(lhs->view(), rhs->view(), stream);
         }
 
         case PredicateNodeType::NOT: {
-            auto child = evaluate_predicate(table, *pred.children()[0], stream);
+            auto child = evaluate_predicate(table, *pred.children()[0], options, stream);
             return gamax::util::device::bitmask_not(child->view(), stream);
         }
 
@@ -101,9 +102,10 @@ gamax::column_ptr evaluate_predicate(
 gamax::column_ptr select_to_bitmask(
     gamax::table_view table,
     Predicate& predicate,
+    select_options options,
     cudaStream_t stream)
 {
-    return evaluate_predicate(table, predicate, stream);
+    return evaluate_predicate(table, predicate, options, stream);
 }
 
 } // namespace gamax::select

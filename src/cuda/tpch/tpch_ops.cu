@@ -45,7 +45,12 @@ namespace {
     {
         query_context::scoped_op op(qc, op_name);
 
-        auto mask = select_to_bitmask(input, pred, params.stream);
+        // Legacy hand-written queries now thread `select_options`
+        // explicitly via `params.select_options(op_name)` (the
+        // `algo_map` / fuse-vs-nofuse axis), since Predicate no
+        // longer bakes them.
+        auto mask = select_to_bitmask(
+            input, pred, params.select_options(op_name), params.stream);
         std::vector<gamax::column_ptr> materialized_cols;
         gamax::column_ptr compact_tids {nullptr};
         std::vector<int> actual_output_cols = output_cols;
@@ -77,7 +82,7 @@ namespace {
         gamax::expression::ExprTree& expr,
         std::vector<int> const& output_cols)
     {
-        auto pred = gamax::select::Predicate::expr(expr, params.select_options(op_name));
+        auto pred = gamax::select::Predicate::expr(expr);
         return tpch_select(qc, params, op_name, input, pred, output_cols);
     }
 
