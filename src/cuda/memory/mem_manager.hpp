@@ -108,6 +108,28 @@ private:
     cudaStream_t stream_;
 };
 
+// Switch the global memory manager to use cudaMallocAsync /
+// cudaFreeAsync directly (CudaMM) instead of the UserSpaceMM slab
+// pool. Must be called before any allocation — i.e. before the
+// first get_mm() — otherwise throws.
+//
+// Why: UserSpaceMM cudaMalloc's ~95% of free GPU memory up front and
+// hands out aligned slices from the slab. compute-sanitizer / memcheck
+// only sees the one big slab as a legal allocation, so an OOB write
+// inside the slab boundary looks valid to the tool. Switching to
+// CudaMM makes each `cudaMallocAsync` a separately-tracked allocation
+// the sanitizer can detect overflows on.
+//
+// The default (no call to use_cuda_mm) keeps the existing UserSpaceMM
+// behaviour. The previous compile-time `USE_DEFAULT_MEMALLOC` macro
+// is removed in favour of this runtime switch — debug binaries can
+// just call `use_cuda_mm()` at start of main() without rebuilding the
+// library.
+//
+// Idempotent: calling use_cuda_mm() multiple times before first
+// allocation is a no-op.
+void use_cuda_mm();
+
 std::shared_ptr<MemoryManager> get_mm();
 
 template<typename T = char>

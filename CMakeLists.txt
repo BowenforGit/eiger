@@ -9,7 +9,10 @@ option(USE_ROCM "Use ROCm. [Default=OFF]" OFF)
 option(BUILD_TEST "Build tests. [Default=ON]" ON)
 option(BUILD_BENCHMARK "Build benchmarks. [Default=ON]" ON)
 option(BUILD_TPCH "Build TPC-H query runner (requires Arrow and Parquet). [Default=OFF]" OFF)
-option(USE_DEFAULT_MEMALLOC "Use the default memory allocation and deallocation. [Default=OFF]" OFF)
+# `USE_DEFAULT_MEMALLOC` was a compile-time switch between
+# UserSpaceMM and CudaMM. Replaced by the runtime function
+# `use_cuda_mm()` (declared in `memory/mem_manager.hpp`); debug
+# binaries call it at startup without rebuilding the library.
 
 if (NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
@@ -117,14 +120,8 @@ target_compile_definitions(
     $<$<CONFIG:Debug>:DEBUG>
 )
 
-if(USE_DEFAULT_MEMALLOC)
-    message(STATUS "Using CUDA to manage memory allocation and deallocation.")
-    target_compile_definitions(
-        common 
-        INTERFACE
-        $<$<COMPILE_LANGUAGE:${LangGPU}>:USE_DEFAULT_MEMALLOC>
-    )
-endif()
+# (USE_DEFAULT_MEMALLOC compile-time switch retired; see
+# memory/mem_manager.hpp::use_cuda_mm() for the runtime equivalent.)
 
 # download CPM.cmake
 file(

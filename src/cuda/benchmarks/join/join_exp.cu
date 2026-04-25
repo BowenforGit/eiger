@@ -655,9 +655,8 @@ int main(int argc, char** argv) {
 #ifdef DEBUG
     std::cout << "!! This is DEBUG build !!\n";
 #endif
-#ifdef USE_DEFAULT_MEMALLOC
-    std::cout << "!! Using CUDA memory allocator !!\n";
-#endif
+// (Memory-manager kind is now a runtime choice — see
+// `use_cuda_mm()` in memory/mem_manager.hpp.)
 #ifndef COL_T_8B
     using col_t = int;
 #else

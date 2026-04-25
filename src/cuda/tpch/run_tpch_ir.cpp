@@ -20,9 +20,12 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <utility>
 
 #include <nvtx3/nvtx3.hpp>
 
@@ -34,6 +37,7 @@
 #include "ir/rules.hpp"
 #include "utils/debug_print.hpp"
 #include "memory/column.hpp"
+#include "memory/mem_manager.hpp"
 #include "memory/table.hpp"
 #include "phys/phys.hpp"
 #include "tpch/ir_source_resolver.hpp"
@@ -49,7 +53,9 @@ struct Args {
     bool print_plan {false};
     bool verify {false};
     bool no_fuse_project {false};
-    std::string profile_csv;  // empty = disabled
+    bool use_cuda_mm {false};
+    std::string eq_join_algo;  // empty = default
+    std::string profile_csv;   // empty = disabled
 };
 
 Args parse_args(int argc, char** argv) {
@@ -66,6 +72,16 @@ Args parse_args(int argc, char** argv) {
             a.profile_csv = argv[++i];
         } else if (std::strcmp(argv[i], "--no-fuse-project") == 0) {
             a.no_fuse_project = true;
+        } else if (std::strcmp(argv[i], "--use-cuda-mm") == 0) {
+            // Switches the global memory manager from UserSpaceMM
+            // (88 GiB pre-alloc'd slab) to CudaMM (per-allocation
+            // cudaMallocAsync). Useful under compute-sanitizer:
+            // each CUDA allocation is a separately-tracked range, so
+            // an OOB write inside what UserSpaceMM would consider
+            // "the slab" is now caught by the sanitizer.
+            a.use_cuda_mm = true;
+        } else if (std::strcmp(argv[i], "--eq-join-algo") == 0 && i + 1 < argc) {
+            a.eq_join_algo = argv[++i];
         } else {
             throw std::runtime_error("Unknown arg: " + std::string(argv[i]));
         }
@@ -203,8 +219,40 @@ void print_result(const gamax::table_view& v, gamax::size_type max_rows) {
 
 } // namespace
 
+// Map an `--eq-join-algo <name>` value to a `gamax::join::join_hint`.
+// Same value vocabulary as the bench fixture's `eq_join` axis.
+std::optional<gamax::join::join_hint> parse_eq_join_algo(const std::string& v) {
+    if (v.empty()) return std::nullopt;
+    using gamax::join::join_algo;
+    using gamax::join::materialization_algo;
+    static const std::unordered_map<std::string,
+        std::pair<join_algo, materialization_algo>> table = {
+        {"hash_gfur",            {gamax::join::HASH,      gamax::join::GFUR}},
+        {"hash_gftr",            {gamax::join::HASH,      gamax::join::GFTR}},
+        {"sort_merge_gfur",      {gamax::join::SORT,      gamax::join::GFUR}},
+        {"sort_merge_gftr",      {gamax::join::SORT,      gamax::join::GFTR}},
+        {"partition_hash_gfur",  {gamax::join::PARTITION, gamax::join::GFUR}},
+        {"partition_hash_gftr",  {gamax::join::PARTITION, gamax::join::GFTR}},
+    };
+    auto it = table.find(v);
+    if (it == table.end()) {
+        throw std::runtime_error("Unknown --eq-join-algo: " + v);
+    }
+    gamax::join::join_hint h;
+    h.join_algo = it->second.first;
+    h.mat_algo  = it->second.second;
+    return h;
+}
+
 int main(int argc, char** argv) try {
     auto args = parse_args(argc, argv);
+
+    // `use_cuda_mm()` must run before any get_mm() — wire it up here
+    // before any TPC-H reader / executor work touches device memory.
+    if (args.use_cuda_mm) {
+        use_cuda_mm();
+        std::cout << "Memory manager: CudaMM (cudaMallocAsync per allocation)\n";
+    }
 
     std::cout << "== TPC-H Q" << args.query_id
               << " (SF=" << args.scale_factor << ") via IR pipeline ==\n";
@@ -235,6 +283,9 @@ int main(int argc, char** argv) try {
         gamax::project::project_options po;
         po.fuse_operations = false;
         lower_opts.project = po;
+    }
+    if (auto h = parse_eq_join_algo(args.eq_join_algo)) {
+        lower_opts.eq_join = h;
     }
     auto ep = gamax::ir::lower_to_exec_plan(plan, catalog, lower_opts);
     std::cout << "ExecPlan: " << ep.steps.size() << " steps, "

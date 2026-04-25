@@ -12,16 +12,34 @@
 
 std::shared_ptr<MemoryManager> mm {nullptr};
 
+namespace {
+    // The kind to instantiate on the next get_mm() call. Default ==
+    // UserSpaceMM (production behaviour). use_cuda_mm() flips it to
+    // CudaMM. Sticky across release_all_mem() / re-init cycles, so
+    // a single call at startup affects every later cell.
+    enum class MMKind { UserSpace, Cuda };
+    MMKind requested_kind = MMKind::UserSpace;
+}
+
+void use_cuda_mm() {
+    if (mm) {
+        throw std::runtime_error(
+            "use_cuda_mm(): the global memory manager is already "
+            "initialized; call this before any allocation");
+    }
+    requested_kind = MMKind::Cuda;
+}
+
 std::shared_ptr<MemoryManager> get_mm() {
     if(!mm) {
-#ifdef USE_DEFAULT_MEMALLOC
-        mm = std::make_shared<CudaMM>();
-#else
-        std::size_t free, total;
-        cudaMemGetInfo(&free, &total);
-        auto mem_pool_size = 0.95 * free;
-        mm = std::make_shared<UserSpaceMM>(mem_pool_size);
-#endif
+        if (requested_kind == MMKind::Cuda) {
+            mm = std::make_shared<CudaMM>();
+        } else {
+            std::size_t free, total;
+            cudaMemGetInfo(&free, &total);
+            auto mem_pool_size = 0.95 * free;
+            mm = std::make_shared<UserSpaceMM>(mem_pool_size);
+        }
     }
     return mm;
 }
@@ -32,11 +50,11 @@ void debug_device_mem_usage() {
 }
 
 void release_all_mem() {
-#ifdef USE_DEFAULT_MEMALLOC
-    std::cout << "Cannot release all memory with the CUDA memory allocator\n";
-#else
+    // Drop the manager — UserSpaceMM's dtor cudaFree's its slab;
+    // CudaMM's alloc_map should already be empty by the time callers
+    // reach this point (callers release intermediates via column
+    // dtors first). The next get_mm() rebuilds per `requested_kind`.
     mm.reset();
-#endif
 }
 
 UserSpaceMM::UserSpaceMM(const size_t kInitialPoolSize, const size_t kAlignBits) : align_bits(kAlignBits) {
