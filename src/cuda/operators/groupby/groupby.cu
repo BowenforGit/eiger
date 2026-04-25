@@ -212,6 +212,31 @@ std::unique_ptr<gamax::table> groupby_noskf(
     
     auto_select_groupby_algo(key, hint, stream);
 
+    // PARTITION groupby's underlying impl only handles a single
+    // numeric key column — its result schema is `[encoded_key,
+    // agg0..]` regardless of caller-provided key cardinality, so the
+    // post-processing here would index past the result's columns for
+    // multi-key / STRING inputs (surfacing as "column out of range"
+    // or `vector::_M_range_check`). Reject those cases up front with
+    // a clear error so the bench harness reports a methodologically
+    // useful "unsupported shape" instead of a cryptic indexing
+    // throw. `auto_select_groupby_algo` already routes AUTO callers
+    // away from PARTITION on the same conditions; this is the
+    // explicit-hint counterpart of that guard.
+    if (hint.groupby_algo == gamax::groupby::PARTITION ||
+        hint.groupby_algo == gamax::groupby::PARTITION_GFUR)
+    {
+        if (key.num_columns() != 1) {
+            throw std::runtime_error(
+                "PARTITION groupby: only single-column keys supported "
+                "(got " + std::to_string(key.num_columns()) + ")");
+        }
+        if (key.get_column(0).type().id() == gamax::type_id::STRING) {
+            throw std::runtime_error(
+                "PARTITION groupby: STRING keys not supported");
+        }
+    }
+
     // Execute the internal groupby
     std::unique_ptr<gamax::table> internal_result;
     switch (hint.groupby_algo) {

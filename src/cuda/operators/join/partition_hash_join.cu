@@ -564,14 +564,51 @@ namespace {
         
         return res_table;
     }
+    // Tactical guard against tiny-input crashes.
+    //
+    // partition_hash_join_params hard-codes n_partitions = 1 << 16
+    // (= 65536) and per-bucket capacities sized for that fan-out
+    // (max_build_bucket_size = 4096). When the build or probe side
+    // has far fewer rows than n_partitions, the partition kernel can
+    // walk off the end of its allocations on skewed hashes and write
+    // illegally — the failure surfaces as `cudaErrorIllegalAddress`
+    // on a downstream sync, after which the whole CUDA context is
+    // unrecoverable. A single such failure in the IR-bench probe at
+    // SF=1 (Q7) cascaded into 1132 cells reporting cudaErrorInvalidDevice.
+    //
+    // TODO(perf): the real fix is to bounds-check inside the
+    // partition kernel (or to size n_partitions / bucket caps to the
+    // input). Tracked as "partition_hash_join compute-sanitizer
+    // investigation" in TODO.md. Until then, we throw early with a
+    // clear message so the bench harness reports an actionable "this
+    // input is too small for partition_hash_join" instead of
+    // corrupting the run.
+    void check_partition_hash_join_input(
+        gamax::table_view const& left,
+        gamax::table_view const& right)
+    {
+        // Threshold: at least one row per partition on each side.
+        // n_partitions=65536 today; relax later if the kernel guard
+        // is added.
+        constexpr gamax::size_type kMinRows = 1 << 16;
+        const auto m = std::min(left.num_rows(), right.num_rows());
+        if (m < kMinRows) {
+            throw std::runtime_error(
+                "PARTITION hash join: input too small for n_partitions "
+                "(min(rows)=" + std::to_string(m) +
+                " < " + std::to_string(kMinRows) +
+                "); use HASH or SORT for small inputs");
+        }
+    }
 } // namespace
 
     std::unique_ptr<gamax::table> ieq_partition_hash_join_gftr(
-        gamax::table_view left, 
+        gamax::table_view left,
         gamax::table_view right,
         gamax::join::join_hint const& hint,
         cudaStream_t stream)
-    {   
+    {
+        check_partition_hash_join_input(left, right);
         gamax::join::detail::partition_hash_join_params params(left, right, hint);
 
         if(params.early_materialization) {
@@ -609,11 +646,12 @@ namespace {
     }
 
     std::unique_ptr<gamax::table> ieq_partition_hash_join_gfur(
-        gamax::table_view left, 
+        gamax::table_view left,
         gamax::table_view right,
         gamax::join::join_hint const& hint,
         cudaStream_t stream)
-    {   
+    {
+        check_partition_hash_join_input(left, right);
         gamax::join::detail::partition_hash_join_params params(left, right, hint);
 
         if(params.early_materialization) {
