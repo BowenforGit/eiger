@@ -63,6 +63,15 @@ if(BUILD_TPCH AND USE_NVIDIA)
     target_link_libraries(benchmark_tpch PRIVATE ${GAMAX_BENCHMARK_MAIN_TARGET})
     target_link_libraries(benchmark_tpch PRIVATE gamax_tpch)
     target_link_libraries(benchmark_tpch PRIVATE OpenMP::OpenMP_CXX)
+
+    # IR-driven TPC-H benchmark — uses the IR/ExecPlan pipeline plus
+    # NVBench's manual-timer mode to exclude SourceTable resolution
+    # (Parquet decode + H2D) from the timed region.
+    add_executable(benchmark_tpch_ir tpch/tpch_ir_nvbench.cu)
+    target_link_libraries(benchmark_tpch_ir PRIVATE common)
+    target_link_libraries(benchmark_tpch_ir PRIVATE ${GAMAX_BENCHMARK_MAIN_TARGET})
+    target_link_libraries(benchmark_tpch_ir PRIVATE gamax_tpch)
+    target_link_libraries(benchmark_tpch_ir PRIVATE OpenMP::OpenMP_CXX)
 endif()
 # Target-specific options live in a separate file so that editing them
 # does not cause CMake to re-evaluate CPMAddPackage in this file.

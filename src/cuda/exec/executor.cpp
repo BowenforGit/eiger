@@ -283,4 +283,90 @@ std::unique_ptr<gamax::table> execute(
     return finalize_result(plan, live, ctx);
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// BenchExecState — opaque carrier for the populated `live` map between
+// bench_resolve_sources() and bench_run_steps(). Implemented as PIMPL
+// because `Slot` is private to this translation unit.
+// ─────────────────────────────────────────────────────────────────────
+struct BenchExecState::Impl {
+    std::unordered_map<ValueId, Slot> live;
+};
+
+BenchExecState::BenchExecState() : impl_(std::make_unique<Impl>()) {}
+BenchExecState::~BenchExecState() = default;
+BenchExecState::BenchExecState(BenchExecState&&) noexcept = default;
+BenchExecState& BenchExecState::operator=(BenchExecState&&) noexcept = default;
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 1 of the bench path: resolve every SourceTable step into the
+// live map. Untimed in the bench fixture; the resolver's per-cell
+// cache means rep-0 pays the H2D and subsequent reps hit the cache.
+// We sync the stream on return so any in-flight async copies (e.g.
+// pinned→device done by the resolver) are complete before phase 2.
+// ─────────────────────────────────────────────────────────────────────
+BenchExecState bench_resolve_sources(
+    const ExecPlan& plan,
+    const SourceResolver& source_resolver,
+    cudaStream_t stream)
+{
+    if (plan.steps.empty()) exec_error("empty plan");
+
+    BenchExecState state;
+    auto& live = state.impl()->live;
+    live.reserve(plan.values.size());
+
+    // Phase 1's ctx carries no profile_sink — SourceTable timings
+    // belong outside the breakdown by construction here. The ctx is
+    // passed only so step_dispatch's signature stays uniform; the
+    // SourceTable branch does not actually invoke any phys ops.
+    gamax::phys::Context ctx{stream, /*profile_sink=*/nullptr};
+
+    for (gamax::size_type i = 0;
+         i < static_cast<gamax::size_type>(plan.steps.size()); ++i)
+    {
+        const auto& s = plan.steps[i];
+        if (s.kind != StepKind::SourceTable) continue;
+        live[s.output] = step_dispatch(i, s, live, source_resolver, ctx);
+    }
+
+    cudaStreamSynchronize(stream);
+    return state;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 2 of the bench path: walk the plan, skip SourceTable steps,
+// dispatch the rest into the pre-built live map. Honors the same
+// last_used_step freeing as execute(). NVBench should wrap this call
+// in `timer.start()`/`timer.stop()`.
+//
+// The SourceResolver passed to step_dispatch is a sentinel that throws
+// if invoked — phase 2 must never see a SourceTable step.
+// ─────────────────────────────────────────────────────────────────────
+std::unique_ptr<gamax::table> bench_run_steps(
+    const ExecPlan& plan,
+    BenchExecState state,
+    const gamax::phys::Context& ctx)
+{
+    if (plan.steps.empty()) exec_error("empty plan");
+
+    auto& live = state.impl()->live;
+
+    SourceResolver null_resolver =
+        [](const std::string&,
+           const std::vector<std::string>&) -> gamax::table_view {
+            exec_error("bench_run_steps: SourceTable seen in phase 2");
+        };
+
+    for (gamax::size_type i = 0;
+         i < static_cast<gamax::size_type>(plan.steps.size()); ++i)
+    {
+        const auto& s = plan.steps[i];
+        if (s.kind == StepKind::SourceTable) continue;
+        live[s.output] = step_dispatch(i, s, live, null_resolver, ctx);
+        free_dead_inputs(plan, s, i, live);
+    }
+
+    return finalize_result(plan, live, ctx);
+}
+
 } // namespace gamax::exec
