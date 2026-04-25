@@ -1,8 +1,15 @@
 #pragma once
 
+#include <optional>
+
 #include "exec/exec_plan.hpp"
 #include "ir/catalog.hpp"
 #include "ir/plan_node.hpp"
+#include "operators/groupby/groupby.hpp"
+#include "operators/join/join.hpp"
+#include "operators/project/project.hpp"
+#include "operators/select/select.hpp"
+#include "operators/sort/sort.hpp"
 
 namespace gamax::ir {
 
@@ -32,6 +39,26 @@ struct LowerOptions {
     // input-=-output materialization (everything survives; Reorder
     // picks out what parents actually want).
     bool prune_filter_materialization {true};
+
+    // ── Per-operator hint overrides ──────────────────────────────
+    //
+    // Each `std::optional<KindHint>` here is the harness-facing knob
+    // that tells lowering "for this run, set every payload of the
+    // matching kind to this hint value." Empty optional = use the
+    // payload's default-constructed hint (preserves engine
+    // historical behavior).
+    //
+    // The bench harness wires these from NVBench string axes via
+    // `tpch_params::parse_algo_value`. ad-hoc callers (run_tpch_ir,
+    // tests) leave them empty and get default behavior.
+    std::optional<gamax::project::project_options> project;
+    std::optional<gamax::select::select_options>   filter;
+    std::optional<gamax::join::join_hint>          eq_join;
+    std::optional<gamax::join::join_hint>          semi_join;
+    std::optional<gamax::join::join_hint>          anti_join;
+    std::optional<gamax::groupby::groupby_hint>    group_by;
+    std::optional<gamax::sort::sort_table_options>       sort;
+    std::optional<gamax::sort::sort_table_options>       top_k;
 };
 
 // Lower an IR plan DAG to an `exec::ExecPlan`. All host-side work

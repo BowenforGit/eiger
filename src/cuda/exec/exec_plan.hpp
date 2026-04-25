@@ -7,7 +7,12 @@
 
 #include "expr/expr_fast.hpp"
 #include "ir/schema.hpp"
+#include "operators/groupby/groupby.hpp"
+#include "operators/join/join.hpp"
+#include "operators/project/project.hpp"
 #include "operators/select/predicate.hpp"
+#include "operators/select/select.hpp"
+#include "operators/sort/sort.hpp"
 #include "phys/phys.hpp"
 #include "types/data_type.hpp"
 
@@ -61,8 +66,19 @@ struct ReorderPayload {
 // select_to_bitmask. The variant preserves per-item kind; output
 // ordering matches the `items` vector. `ProjectItem` is declared
 // once in `phys/phys.hpp`; re-used here.
+// ── Per-payload hint fields ───────────────────────────────────────
+//
+// Each payload that has a runtime implementation choice carries a
+// typed `hint` field. Default-constructed values match the engine's
+// historical fixed-implementation behavior, so existing call sites
+// produce identical execution. The lowering pass populates the field
+// from `LowerOptions` overrides; the executor forwards
+// `payload.hint` to the corresponding phys op. The bench harness
+// drives operator-hint sweeps by setting `LowerOptions` from NVBench
+// axes.
 struct ProjectPayload {
     std::vector<gamax::phys::ProjectItem> items;
+    gamax::project::project_options hint {};
 };
 struct FilterPayload {
     gamax::select::Predicate predicate;
@@ -72,14 +88,17 @@ struct FilterPayload {
     // when some input column is touched only by the predicate and not
     // consumed by any downstream operator.
     std::vector<gamax::size_type> output_ordinals;
+    gamax::select::select_options hint {};
 };
 struct EqJoinPayload {
     std::vector<gamax::size_type> lkeys;
     std::vector<gamax::size_type> rkeys;
+    gamax::join::join_hint hint {};
 };
 struct SemiJoinPayload {
     std::vector<gamax::size_type> lkeys;
     std::vector<gamax::size_type> rkeys;
+    gamax::join::join_hint hint {};
 };
 // LEFT ANTI JOIN — output schema is identical to SemiJoin (L only); only
 // the underlying kernel differs (keep L rows whose key has NO match on
@@ -88,6 +107,7 @@ struct SemiJoinPayload {
 struct AntiJoinPayload {
     std::vector<gamax::size_type> lkeys;
     std::vector<gamax::size_type> rkeys;
+    gamax::join::join_hint hint {};
 };
 struct CrossJoinPayload {};
 struct ScalarAggPayload {
@@ -99,6 +119,7 @@ struct GroupByPayload {
     // (`[n_keys, end)`) that the Executor passes to `phys::group_by`.
     gamax::size_type n_keys;
     std::vector<gamax::phys::AggSpec> specs;
+    gamax::groupby::groupby_hint hint {};
 };
 // Distinct: column ordinals of the input Value that form the
 // distinct-keys set. The executor selects those columns and passes
@@ -113,10 +134,12 @@ struct DistinctPayload {
 struct ConcatPayload {};
 struct SortPayload {
     std::vector<gamax::phys::SortSpec> keys;
+    gamax::sort::sort_table_options hint {};
 };
 struct TopKPayload {
     std::vector<gamax::phys::SortSpec> keys;
     gamax::size_type k;
+    gamax::sort::sort_table_options hint {};
 };
 
 using StepPayload = std::variant<

@@ -186,7 +186,8 @@ table_ptr reorder(gamax::table_view in,
 
 table_ptr project(gamax::table_view in,
                   std::vector<ProjectItem>& items,
-                  const Context& ctx)
+                  const Context& ctx,
+                  const gamax::project::project_options& hint)
 {
     // Per-item classification. Five kinds:
     //   * Predicate        → select_to_bitmask (BOOL8 out)
@@ -236,12 +237,12 @@ table_ptr project(gamax::table_view in,
     }
 
     // Batch the computed ExprTrees through project::project once,
-    // if any.
-    gamax::project::project_options opts;  // defaults
+    // if any. The caller-supplied `hint` controls fuse-vs-nofuse
+    // dispatch in project::project.
     std::unique_ptr<gamax::table> computed_tbl;
     if (!computed.empty()) {
         computed_tbl = gamax::project::project(
-            in, computed, opts, ctx.stream);
+            in, computed, hint, ctx.stream);
     }
 
     // Stitch per-item results in positional order.
@@ -286,16 +287,21 @@ table_ptr project(gamax::table_view in,
 
 table_ptr filter(gamax::table_view in,
                  gamax::select::Predicate& pred,
-                 const Context& ctx)
+                 const Context& ctx,
+                 const gamax::select::select_options& hint)
 {
-    return filter(in, pred, /*output_ordinals=*/{}, ctx);
+    return filter(in, pred, /*output_ordinals=*/{}, ctx, hint);
 }
 
 table_ptr filter(gamax::table_view in,
                  gamax::select::Predicate& pred,
                  std::vector<gamax::size_type> output_ordinals,
-                 const Context& ctx)
+                 const Context& ctx,
+                 const gamax::select::select_options& /*hint*/)
 {
+    // `hint` is currently unused — `select_to_bitmask(table, Predicate&)`
+    // reads each EXPR leaf's baked `select_options`. B-2 strips that
+    // baked field and threads `hint` through to select_to_bitmask.
     const bool all_cols = output_ordinals.empty();
     // Bounds-check ordinals eagerly: a bad ordinal here would otherwise
     // surface only deep inside the gather path, with a confusing error.
@@ -496,7 +502,8 @@ gamax::phys::table_ptr make_empty_semi_join_output(
 
 table_ptr eq_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
                   gamax::table_view R, std::vector<gamax::size_type> rkeys,
-                  const Context& ctx)
+                  const Context& ctx,
+                  const gamax::join::join_hint& hint)
 {
     require_single_key("eq_join", lkeys, rkeys);
 
@@ -516,7 +523,7 @@ table_ptr eq_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
     auto R_small = build_key_plus_rowid(R, rkeys, ctx);
 
     auto joined = gamax::join::inner_eq_join(
-        L_small->view(), R_small->view(), default_join_hint(), ctx.stream);
+        L_small->view(), R_small->view(), hint, ctx.stream);
     // Joined shape is [shared_key, L_row_id, R_row_id] (3 columns —
     // the single-key dedup matches the ieq_join_test.cu invariant
     // `rcols+scols-1`).
@@ -530,7 +537,8 @@ table_ptr eq_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
 
 table_ptr semi_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
                     gamax::table_view R, std::vector<gamax::size_type> rkeys,
-                    const Context& ctx)
+                    const Context& ctx,
+                    const gamax::join::join_hint& hint)
 {
     require_single_key("semi_join", lkeys, rkeys);
 
@@ -542,7 +550,7 @@ table_ptr semi_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
     auto R_small = build_key_plus_rowid(R, rkeys, ctx);
 
     auto joined = gamax::join::semi_join(
-        L_small->view(), R_small->view(), default_join_hint(), ctx.stream);
+        L_small->view(), R_small->view(), hint, ctx.stream);
     // Semi-join output carries only the left (surviving) rows: shape
     // is [shared_key, L_row_id] (2 columns, matching the single-key
     // convention).
@@ -563,7 +571,8 @@ table_ptr semi_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
 
 table_ptr left_outer_join(
     gamax::table_view, std::vector<gamax::size_type>,
-    gamax::table_view, std::vector<gamax::size_type>, const Context&)
+    gamax::table_view, std::vector<gamax::size_type>, const Context&,
+    const gamax::join::join_hint&)
 {
     not_implemented("left_outer_join",
                     "no underlying left_outer_join operator yet");
@@ -571,7 +580,8 @@ table_ptr left_outer_join(
 
 table_ptr anti_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
                     gamax::table_view R, std::vector<gamax::size_type> rkeys,
-                    const Context& ctx)
+                    const Context& ctx,
+                    const gamax::join::join_hint& hint)
 {
     require_single_key("anti_join", lkeys, rkeys);
 
@@ -603,7 +613,7 @@ table_ptr anti_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
     // layout that semi_join produces, because `gamax::join::anti_join`
     // compacts the same `L_small` table.
     auto joined = gamax::join::anti_join(
-        L_small->view(), R_small->view(), default_join_hint(), ctx.stream);
+        L_small->view(), R_small->view(), hint, ctx.stream);
     auto shared_key = joined->view()[0];
     auto l_row_id   = joined->view()[1];
 
@@ -656,7 +666,8 @@ table_ptr scalar_aggregate(gamax::table_view values,
 table_ptr group_by(gamax::table_view keys,
                    gamax::table_view values,
                    std::vector<AggSpec> specs,
-                   const Context& ctx)
+                   const Context& ctx,
+                   const gamax::groupby::groupby_hint& hint_in)
 {
     // Grouped aggregate over 0 rows → 0 groups → 0-row output
     // whose schema is [key_types..., agg_output_types...].
@@ -677,11 +688,10 @@ table_ptr group_by(gamax::table_view keys,
     std::vector<gamax::groupby::aggregation_request> requests;
     requests.reserve(specs.size());
     for (const auto& s : specs) requests.emplace_back(s.column, s.agg);
-    gamax::groupby::groupby_hint hint;
-    // SKF (smart-key-fusion) left OFF for now. The `groupby_noskf` path
-    // combined with the new STRING→HASH / multi-col→HASH routing in
-    // `auto_select_groupby_algo` is sufficient to cover STRING and
-    // mixed keys; enabling SKF is an independent perf question.
+    // Caller-supplied hint drives algorithm selection (HASH / SORT /
+    // PARTITION / SKF). gamax::groupby::groupby takes the hint by
+    // non-const reference, so copy the input.
+    auto hint = hint_in;
     return gamax::groupby::groupby(
         keys, values, requests, hint, ctx.stream);
 }
@@ -898,7 +908,8 @@ gamax::phys::table_ptr zero_rows_like(
 
 table_ptr sort(gamax::table_view in,
                std::vector<SortSpec> keys,
-               const Context& ctx)
+               const Context& ctx,
+               const gamax::sort::sort_table_options& hint)
 {
     if (in.num_rows() == 0) return zero_rows_like(in, ctx.stream);
     std::vector<int> k;
@@ -909,14 +920,19 @@ table_ptr sort(gamax::table_view in,
         k.push_back(static_cast<int>(s.column));
         o.push_back(s.order);
     }
-    return gamax::sort::sort_table(in, k, o, ctx.stream);
+    return gamax::sort::sort_table(in, k, o, hint, ctx.stream);
 }
 
 table_ptr top_k(gamax::table_view in,
                 std::vector<SortSpec> keys,
                 gamax::size_type k,
-                const Context& ctx)
+                const Context& ctx,
+                const gamax::sort::sort_table_options& /*hint*/)
 {
+    // `gamax::sort::topk_table` doesn't accept sort_table_options
+    // today (no SKF path through topk). The hint parameter is
+    // accepted on this surface for shape-uniformity with `sort`,
+    // but currently has no effect.
     if (in.num_rows() == 0) return zero_rows_like(in, ctx.stream);
     std::vector<int> ks;
     std::vector<gamax::sort_order> os;

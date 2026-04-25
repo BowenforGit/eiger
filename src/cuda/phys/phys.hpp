@@ -11,7 +11,12 @@
 #include "memory/column.hpp"
 #include "memory/table.hpp"
 #include "operators/groupby/aggregation.hpp"
+#include "operators/groupby/groupby.hpp"
+#include "operators/join/join.hpp"
+#include "operators/project/project.hpp"
 #include "operators/select/predicate.hpp"
+#include "operators/select/select.hpp"
+#include "operators/sort/sort.hpp"
 #include "types/data_type.hpp"
 
 namespace gamax::exec { class StepProfileSink; }
@@ -67,6 +72,20 @@ struct SortSpec {
     gamax::sort_order order;
 };
 
+// Engine defaults for hint structs whose default-constructed values
+// don't match what the underlying operators actually accept.
+// `gamax::join::join_hint{}` carries `AUTO_ALGO`/`AUTO_MAT`, but
+// `inner_eq_join` rejects auto and demands a concrete pair — HASH+GFTR
+// matches the existing test/benchmark coverage. Inline so the default
+// argument expressions in the eq_join / semi_join / anti_join
+// signatures below can call this helper.
+inline gamax::join::join_hint default_eq_join_hint() {
+    gamax::join::join_hint h;
+    h.join_algo = gamax::join::HASH;
+    h.mat_algo  = gamax::join::GFTR;
+    return h;
+}
+
 // ── Data reshaping ────────────────────────────────────────────────
 
 // Pure-ColRef reorder / column subset. Produces a new owned table
@@ -117,16 +136,23 @@ using ProjectItem = std::variant<
     SubstringItem>;
 table_ptr project(gamax::table_view in,
                   std::vector<ProjectItem>& items,
-                  const Context& ctx);
+                  const Context& ctx,
+                  const gamax::project::project_options& hint = {});
 
 // Heterogeneous filter. Uses `select_to_bitmask(Predicate)` then
 // materializes surviving rows across every column of `in`: numeric
 // via `compact`, STRING via a shared `compact_tids` + `gather_strings`
 // pattern — same approach today's `apply_bitmask_to_heterogeneous_table`
 // uses in `emit.cpp`, just lifted into the phys layer.
+//
+// `hint` chooses the algorithm used by `select_to_bitmask` for any
+// numeric `EXPR` leaves of the predicate (fuse vs nofuse). String
+// leaves currently bake their own per-leaf `string_op_options` on
+// the Predicate; that is a separate, finer-grained concern.
 table_ptr filter(gamax::table_view in,
                  gamax::select::Predicate& pred,
-                 const Context& ctx);
+                 const Context& ctx,
+                 const gamax::select::select_options& hint = {});
 
 // Selective-output overload: predicate is evaluated against all of
 // `in` (so it may reference any ordinal), but only the columns listed
@@ -140,7 +166,8 @@ table_ptr filter(gamax::table_view in,
 table_ptr filter(gamax::table_view in,
                  gamax::select::Predicate& pred,
                  std::vector<gamax::size_type> output_ordinals,
-                 const Context& ctx);
+                 const Context& ctx,
+                 const gamax::select::select_options& hint = {});
 
 // ── Joins ─────────────────────────────────────────────────────────
 
@@ -158,13 +185,15 @@ table_ptr filter(gamax::table_view in,
 // order follow up with a `phys::reorder`.
 table_ptr eq_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
                   gamax::table_view R, std::vector<gamax::size_type> rkeys,
-                  const Context& ctx);
+                  const Context& ctx,
+                  const gamax::join::join_hint& hint = default_eq_join_hint());
 
 // Left semi-join. Same key-list semantics as `eq_join`; output is
 // `[shared_key, L_rest...]`.
 table_ptr semi_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
                     gamax::table_view R, std::vector<gamax::size_type> rkeys,
-                    const Context& ctx);
+                    const Context& ctx,
+                    const gamax::join::join_hint& hint = default_eq_join_hint());
 
 // ── Joins declared but not yet implemented at the backend ─────────
 //
@@ -173,10 +202,12 @@ table_ptr semi_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
 // physical operator lands.
 table_ptr left_outer_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
                           gamax::table_view R, std::vector<gamax::size_type> rkeys,
-                          const Context& ctx);
+                          const Context& ctx,
+                          const gamax::join::join_hint& hint = default_eq_join_hint());
 table_ptr anti_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
                     gamax::table_view R, std::vector<gamax::size_type> rkeys,
-                    const Context& ctx);
+                    const Context& ctx,
+                    const gamax::join::join_hint& hint = default_eq_join_hint());
 table_ptr cross_join(gamax::table_view L, gamax::table_view R,
                      const Context& ctx);
 
@@ -194,7 +225,8 @@ table_ptr scalar_aggregate(gamax::table_view values,
 table_ptr group_by(gamax::table_view keys,
                    gamax::table_view values,
                    std::vector<AggSpec> specs,
-                   const Context& ctx);
+                   const Context& ctx,
+                   const gamax::groupby::groupby_hint& hint = {});
 
 // Distinct over all of `keys`' columns. One row per unique key
 // combination. Numeric, STRING, and multi-key inputs are all handled.
@@ -218,13 +250,15 @@ table_ptr concat(std::vector<gamax::table_view> inputs,
 
 table_ptr sort(gamax::table_view in,
                std::vector<SortSpec> keys,
-               const Context& ctx);
+               const Context& ctx,
+               const gamax::sort::sort_table_options& hint = {});
 
 // Top-K: fused sort + limit. `result_in_sorted_order=true` matches
 // the existing `sort::topk_table` convention.
 table_ptr top_k(gamax::table_view in,
                 std::vector<SortSpec> keys,
                 gamax::size_type k,
-                const Context& ctx);
+                const Context& ctx,
+                const gamax::sort::sort_table_options& hint = {});
 
 } // namespace gamax::phys

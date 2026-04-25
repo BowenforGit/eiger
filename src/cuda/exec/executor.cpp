@@ -66,26 +66,26 @@ std::unique_ptr<gamax::table> run_step(
         } else if constexpr (std::is_same_v<T, ProjectPayload>) {
             // phys::project takes non-const ref; give it a local copy.
             auto items = pl.items;
-            return gamax::phys::project(input_view(0), items, ctx);
+            return gamax::phys::project(input_view(0), items, ctx, pl.hint);
         } else if constexpr (std::is_same_v<T, FilterPayload>) {
             auto pred = pl.predicate;  // non-const needed
             if (pl.output_ordinals.empty()) {
-                return gamax::phys::filter(input_view(0), pred, ctx);
+                return gamax::phys::filter(input_view(0), pred, ctx, pl.hint);
             }
             return gamax::phys::filter(
-                input_view(0), pred, pl.output_ordinals, ctx);
+                input_view(0), pred, pl.output_ordinals, ctx, pl.hint);
         } else if constexpr (std::is_same_v<T, EqJoinPayload>) {
             return gamax::phys::eq_join(
                 input_view(0), pl.lkeys,
-                input_view(1), pl.rkeys, ctx);
+                input_view(1), pl.rkeys, ctx, pl.hint);
         } else if constexpr (std::is_same_v<T, SemiJoinPayload>) {
             return gamax::phys::semi_join(
                 input_view(0), pl.lkeys,
-                input_view(1), pl.rkeys, ctx);
+                input_view(1), pl.rkeys, ctx, pl.hint);
         } else if constexpr (std::is_same_v<T, AntiJoinPayload>) {
             return gamax::phys::anti_join(
                 input_view(0), pl.lkeys,
-                input_view(1), pl.rkeys, ctx);
+                input_view(1), pl.rkeys, ctx, pl.hint);
         } else if constexpr (std::is_same_v<T, CrossJoinPayload>) {
             return gamax::phys::cross_join(
                 input_view(0), input_view(1), ctx);
@@ -104,7 +104,7 @@ std::unique_ptr<gamax::table> run_step(
             return gamax::phys::group_by(
                 v.select_columns(k_indices),
                 v.select_columns(v_indices),
-                pl.specs, ctx);
+                pl.specs, ctx, pl.hint);
         } else if constexpr (std::is_same_v<T, DistinctPayload>) {
             // Sparse column selection: the input may carry more than
             // just the distinct keys, but only `pl.key_ordinals` are
@@ -121,10 +121,10 @@ std::unique_ptr<gamax::table> run_step(
             }
             return gamax::phys::concat(std::move(views), ctx);
         } else if constexpr (std::is_same_v<T, SortPayload>) {
-            return gamax::phys::sort(input_view(0), pl.keys, ctx);
+            return gamax::phys::sort(input_view(0), pl.keys, ctx, pl.hint);
         } else if constexpr (std::is_same_v<T, TopKPayload>) {
             return gamax::phys::top_k(
-                input_view(0), pl.keys, pl.k, ctx);
+                input_view(0), pl.keys, pl.k, ctx, pl.hint);
         }
         exec_error("unknown StepPayload alternative");
     }, s.payload);

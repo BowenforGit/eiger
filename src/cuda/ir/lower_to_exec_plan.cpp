@@ -31,6 +31,17 @@ using exec::ValueId;
         "ir::lower_to_exec_plan: not yet implemented: " + what);
 }
 
+// Engine defaults used when no `LowerOptions` override is supplied.
+// Mirrors the legacy `phys.cu::default_join_hint()` so behavior is
+// identical for IR queries that don't set hints — the join operator
+// rejects `AUTO_ALGO`/`AUTO_MAT`, so a concrete pair is required.
+gamax::join::join_hint default_join_hint() {
+    gamax::join::join_hint h;
+    h.join_algo = gamax::join::HASH;
+    h.mat_algo  = gamax::join::GFTR;
+    return h;
+}
+
 // Walk state threaded through the recursive lowering. Owns the
 // ExecPlan under construction, the Catalog reference, a memo for
 // DAG-shared plan nodes, the liveness analysis, and the monotonic
@@ -193,9 +204,11 @@ ValueId lower_filter(const PlanNode& node, Lowering& lo) {
     if (!actually_pruned) output_ordinals.clear();
 
     ValueId out_id = lo.next_value(std::move(out_schema));
-    lo.push_step(StepKind::Filter, {input_id}, out_id,
-                 exec::FilterPayload{
-                     std::move(pred), std::move(output_ordinals)});
+    exec::FilterPayload pl;
+    pl.predicate = std::move(pred);
+    pl.output_ordinals = std::move(output_ordinals);
+    pl.hint = lo.opts.filter.value_or(gamax::select::select_options{});
+    lo.push_step(StepKind::Filter, {input_id}, out_id, std::move(pl));
     return out_id;
 }
 
@@ -256,8 +269,10 @@ ValueId lower_project(const PlanNode& node, Lowering& lo) {
     // it's independent of any upstream pruning, so the EXEC schema
     // equals the IR's declared output_schema.
     ValueId out_id = lo.next_value(node.output_schema);
-    lo.push_step(StepKind::Project, {input_id}, out_id,
-                 exec::ProjectPayload{std::move(items)});
+    exec::ProjectPayload pl;
+    pl.items = std::move(items);
+    pl.hint = lo.opts.project.value_or(gamax::project::project_options{});
+    lo.push_step(StepKind::Project, {input_id}, out_id, std::move(pl));
     return out_id;
 }
 
@@ -364,8 +379,10 @@ std::pair<ValueId, gamax::size_type> materialize_keys_and_values(
         for (const auto& ag : node.agg_items) {
             items.emplace_back(lower_expr_to_tree(ag.body, in_schema));
         }
-        lo.push_step(StepKind::Project, {input_id}, mat_id,
-                     exec::ProjectPayload{std::move(items)});
+        exec::ProjectPayload mat_pl;
+        mat_pl.items = std::move(items);
+        mat_pl.hint = lo.opts.project.value_or(gamax::project::project_options{});
+        lo.push_step(StepKind::Project, {input_id}, mat_id, std::move(mat_pl));
     }
     return {mat_id, n_keys};
 }
@@ -404,8 +421,11 @@ ValueId lower_aggregate(const PlanNode& node, Lowering& lo) {
         {
             specs[i].column = i;
         }
-        lo.push_step(StepKind::GroupBy, {mat_id}, out_id,
-                     exec::GroupByPayload{n_keys, std::move(specs)});
+        exec::GroupByPayload pl;
+        pl.n_keys = n_keys;
+        pl.specs = std::move(specs);
+        pl.hint = lo.opts.group_by.value_or(gamax::groupby::groupby_hint{});
+        lo.push_step(StepKind::GroupBy, {mat_id}, out_id, std::move(pl));
     }
     return out_id;
 }
@@ -422,8 +442,10 @@ ValueId lower_sort(const PlanNode& node, Lowering& lo) {
     // Sort preserves its input layout exactly; EXEC schema passes
     // through (so upstream pruning flows downstream unchanged).
     ValueId out_id = lo.next_value(in_schema);
-    lo.push_step(StepKind::Sort, {input_id}, out_id,
-                 exec::SortPayload{std::move(keys)});
+    exec::SortPayload pl;
+    pl.keys = std::move(keys);
+    pl.hint = lo.opts.sort.value_or(gamax::sort::sort_table_options{});
+    lo.push_step(StepKind::Sort, {input_id}, out_id, std::move(pl));
     return out_id;
 }
 
@@ -526,8 +548,11 @@ ValueId lower_limit(const PlanNode& node, Lowering& lo) {
     // TopK preserves input layout like Sort — EXEC schema passes
     // through.
     ValueId out_id = lo.next_value(in_schema);
-    lo.push_step(StepKind::TopK, {input_id}, out_id,
-                 exec::TopKPayload{std::move(keys), node.limit_n});
+    exec::TopKPayload pl;
+    pl.keys = std::move(keys);
+    pl.k = node.limit_n;
+    pl.hint = lo.opts.top_k.value_or(gamax::sort::sort_table_options{});
+    lo.push_step(StepKind::TopK, {input_id}, out_id, std::move(pl));
     return out_id;
 }
 
@@ -753,14 +778,23 @@ ValueId lower_join(const PlanNode& node, Lowering& lo) {
 
     ValueId raw_id = lo.next_value(std::move(raw_schema));
     if (node.join_kind == JoinKind::Inner) {
-        lo.push_step(StepKind::EqJoin, {l_id, r_id}, raw_id,
-                     exec::EqJoinPayload{{l_key_ord}, {r_key_ord}});
+        exec::EqJoinPayload pl;
+        pl.lkeys = {l_key_ord};
+        pl.rkeys = {r_key_ord};
+        pl.hint  = lo.opts.eq_join.value_or(default_join_hint());
+        lo.push_step(StepKind::EqJoin, {l_id, r_id}, raw_id, std::move(pl));
     } else if (node.join_kind == JoinKind::LeftSemi) {
-        lo.push_step(StepKind::SemiJoin, {l_id, r_id}, raw_id,
-                     exec::SemiJoinPayload{{l_key_ord}, {r_key_ord}});
+        exec::SemiJoinPayload pl;
+        pl.lkeys = {l_key_ord};
+        pl.rkeys = {r_key_ord};
+        pl.hint  = lo.opts.semi_join.value_or(default_join_hint());
+        lo.push_step(StepKind::SemiJoin, {l_id, r_id}, raw_id, std::move(pl));
     } else {
-        lo.push_step(StepKind::AntiJoin, {l_id, r_id}, raw_id,
-                     exec::AntiJoinPayload{{l_key_ord}, {r_key_ord}});
+        exec::AntiJoinPayload pl;
+        pl.lkeys = {l_key_ord};
+        pl.rkeys = {r_key_ord};
+        pl.hint  = lo.opts.anti_join.value_or(default_join_hint());
+        lo.push_step(StepKind::AntiJoin, {l_id, r_id}, raw_id, std::move(pl));
     }
 
     // Reshape raw → IR-declared order, skipping fields that were
