@@ -40,6 +40,7 @@
 #include "exec/executor.hpp"
 #include "ir/lower_to_exec_plan.hpp"
 #include "ir/rules.hpp"
+#include "memory/mem_manager.hpp"
 #include "phys/phys.hpp"
 #include "tpch/ir_source_resolver.hpp"
 #include "tpch/tpch.hpp"
@@ -105,6 +106,16 @@ gamax::ir::PlanPtr build_query(int qid, const gamax::ir::QueryBuilder& qb) {
 void bench_tpch_ir(nvbench::state& state) {
     const int qid = static_cast<int>(state.get_int64("query"));
     const int sf  = static_cast<int>(state.get_int64("scale"));
+
+    // Per-cell pool reset. UserSpaceMM never returns blocks to the
+    // driver on its own, so without this every sweep would carry a
+    // monotonically-growing freelist + fragmentation across all 22 ×
+    // {scale} cells. release_all_mem() does NOT touch the reader's
+    // pinned-host cache (it's host memory, not GPU), so column-decode
+    // amortization across cells is preserved. Sample-to-sample within
+    // this cell still benefits from the post-reset freelist warming
+    // up over the first few samples.
+    release_all_mem();
 
     // Build the IR plan once per cell. The plan / catalog / resolver
     // outlive the lambda; NVBench reuses them across all samples of
