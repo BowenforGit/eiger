@@ -2,7 +2,8 @@
 
 Tracking doc for kernel-level bugs in the
 `gamax::groupby::partition::*` and `gamax::join::partition_hash_join`
-implementations that the IR-bench operator-axis probe surfaced at SF=1.
+implementations that the IR-bench operator-axis probe surfaced at SF=1
+and again (with new shapes for Bug 2) at SF=30.
 
 ## Status
 
@@ -19,7 +20,10 @@ implementations that the IR-bench operator-axis probe surfaced at SF=1.
   size after `partition_transform` (via an `atomic_max` written by
   `generate_work_units`) and throws a clear error before launch when
   any partition exceeds `max_build_bucket_size`. No more crashes; no
-  more CUDA-context-corruption cascade.
+  more CUDA-context-corruption cascade. SF=30 sweeps surface this
+  cleanly on Q9, Q10, and Q21 (largest partitions of 5540 and 12202
+  rows vs the cap of 4096) — same root cause; only shows up at
+  higher scales because key skew per partition is dataset-dependent.
 
 ---
 

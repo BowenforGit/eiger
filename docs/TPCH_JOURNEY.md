@@ -29,8 +29,9 @@ future maintainer is most likely to step on.
 | Queries verified against a canonical oracle | 1 (Q6 vs pyarrow, manual) | 22 / 22 (DuckDB golden, automated `--verify`) at SF1, SF10, SF30 |
 | IR rules | 0 | 5 (G4a, G7, G1-rule, scan-pushdown, CountDistinct rewrite) |
 | Phys ops | reorder/filter/project/eq/semi/cross/scalaragg/groupby/sort/topk | + anti, distinct, concat, substring, year_of, in_multiple, and more |
-| Operator-hint sweeping | none | per-kind axes via `LowerOptions` + NVBench fixture |
+| Operator-hint sweeping | none | per-kind axes via `LowerOptions` + NVBench fixture; one-hot break-down + `bench_defaults` baseline |
 | Per-step GPU timing | none | `StepProfileSink` (cudaEvent pairs) + Caliper-style CSV |
+| Axis-probe correctness coverage | none | 283/283/279 cells verified vs DuckDB golden at SF=1/10/30 (`tpch_ir_axis_probe --verify`) |
 | Q1 SF10 wall (cold) | 27.6 s | 6.6 s (Parquet column projection + threaded decode) |
 | Unit tests | ~220 | 620+ across ~45 binaries |
 | Pool OOMs on runnable queries | Multiple | 0 |
@@ -414,13 +415,61 @@ profiled.
   (`benchmarks/tpch/tpch_ir_axis_probe.cu`). NVBench has ~1 s
   per-cell overhead; for failure-mode coverage where the question
   is "which (q × hint) cells fail at all", that adds up to multi-
-  hour sweeps. The probe enumerates the full axis Cartesian itself,
+  hour sweeps. The probe enumerates the same valid axis configs the
+  bench fixture sweeps (one-hot + bench-local defaults, see below),
   calls IR `lower → execute` once per valid cell with try/catch,
-  emits one CSV row per cell. **Full SF=1 sweep runs in ~60 s**
-  (vs. NVBench's projected 8 hours). Wrapper script
-  `script/run_tpch_axis_probe.sh` spawns one subprocess per query
-  so a CUDA-context-corrupting cell only contaminates that query's
-  remaining cells.
+  emits one CSV row per cell. **Full SF=1 sweep runs in ~28 s**.
+  Wrapper script `script/run_tpch_axis_probe.sh` spawns one subprocess
+  per query so a CUDA-context-corrupting cell only contaminates that
+  query's remaining cells.
+
+- **Bench breakdown one-hot + bench-local defaults**. Five
+  operator-hint axes fully crossed gave up to 240 cells per query
+  (2·2·2·6·5 with the supported combinations) — most were redundant
+  for break-down analysis since operators are independent in the
+  plan. Three changes collapsed this:
+
+  - Each axis grew a `default` sentinel; a new `bench_defaults`
+    namespace pins the baseline locally (filter/project=nofuse,
+    sort=no_skf, group_by=HASH, eq_join=HASH+GFUR) so the baseline
+    is stable regardless of changes to the hidden engine defaults.
+  - At-most-one-set rule: any cell with two or more axes in algo
+    (non-default, non-n/a) mode is skipped. A query with all five
+    StepKinds present yields 1 + 2+2+2+6+5 = 18 cells per scale.
+  - Dropped `hash_gftr` from the eq_join axis values + parse table
+    — HASH+GFTR is not a supported (algo, mat) pair on the
+    inner_eq_join path.
+
+- **Multi-scale axis-probe verification (SF=1 / SF=10 / SF=30)**.
+  Probe gained `--verify` (compares each passing result against the
+  $TPCH_DATA_PATH/sf<N>/golden/q<NN>.parquet via the existing
+  `verify_result`) and `--use-cuda-mm`. Per-query resolver scoping
+  fixes the previously-broken pool reset path (the prior single-
+  resolver-per-process held device buffers carved from the slab;
+  `release_all_mem()` between cells freed the slab while the
+  resolver still pointed into it → cudaErrorIllegalAddress →
+  poisoned context → "Initializing memory pool fails"). Together
+  with `get_mm()`'s cold-context init (cudaMalloc(4)+cudaFree to
+  force the lazy-init driver to create the device context before
+  cudaMemGetInfo, which otherwise returns (0,0) and sizes the slab
+  to 0), the probe runs cleanly at SF=10/30 under both UserSpaceMM
+  and CudaMM. Findings:
+
+  | Scale | pass | verify_ok | mismatch | fail | runtime |
+  |-----:|----:|---------:|--------:|----:|-------:|
+  | SF=1  | 283 | 283 | 0 | 65 | 28 s |
+  | SF=10 | 283 | 283 | 0 | 65 | 51 s |
+  | SF=30 | 279 | 279 | 0 | 69 | 113 s |
+
+  All passing cells match the golden parquet within
+  `verify_result`'s default tolerances (abs_tol=0.01 / rel_tol=1e-6,
+  the TPC-H monetary spec). Failed cells are all the documented
+  categories: 24 sort-groupby multi-key, 15 sort-groupby STRING,
+  16+10 partition-groupby multi-key/STRING (tactical guards), and
+  at SF=30 only, 4 partition_hash_join build-bucket overflows on
+  Q9 / Q10 / Q21 (5540 / 12202 rows vs the cap of 4096) — same
+  documented kernel limitation; key skew per partition is dataset-
+  dependent so it doesn't trip at smaller scales.
 
 - **`use_cuda_mm()` runtime memory-manager switch**
   (`memory/mem_manager.{hpp,cu}`). Replaced the old
@@ -435,7 +484,9 @@ profiled.
 **Operator-hint sweeping found real bugs:**
 
 The IR-bench probe at SF=1 surfaced six distinct failure patterns
-across 2400+ cells. After triage:
+across 2400+ cells under the original full-Cartesian sweep. (The
+current one-hot probe yields 65 fails at SF=1/10 and 69 at SF=30 —
+same root patterns, narrower projection.) After triage:
 
 - *Pattern A* — sort-based groupby (`sort_gftr`,
   `sort_gftr_opt`, `sort_gfur`) fails on multi-key or STRING groups
