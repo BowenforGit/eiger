@@ -481,6 +481,50 @@ profiled.
   writing past its logical bucket but inside the slab looked
   legal. `run_tpch_ir --use-cuda-mm` exposes it.
 
+- **End-to-end + per-step bench at SF=10 (UserSpaceMM)**. NVBench
+  sweep with `--csv` for e2e GPU time and `GAMAX_BENCH_STEP_CSV` for
+  per-step breakdown. 283 sample-gathering cells, ~95 min wall.
+  Pre-flight try/catch in the bench fixture turns throwing cells
+  (multi-key/STRING groupby etc.) into clean state.skip without
+  poisoning NVBench's stream. Per-query baseline-vs-best summary
+  (best is the fastest single-axis variation under the one-hot
+  sweep — eq_join dominates; sort_merge / partition_hash variants
+  often beat the HASH+GFUR baseline):
+
+  | Q | baseline (ms) | best (ms) | win | best cfg |
+  |--:|--:|--:|--:|:--|
+  |  1 | 34.86 | 34.85 |  0.0% | filter=nofuse |
+  |  2 | 14.69 | 14.31 |  2.6% | eq_join=sort_merge_gfur |
+  |  3 |  8.98 |  7.75 | 13.7% | eq_join=partition_hash_gftr |
+  |  4 |  4.77 |  4.77 |  0.0% | baseline |
+  |  5 | 16.44 | 13.69 | 16.7% | eq_join=sort_merge_gftr |
+  |  6 |  1.68 |  1.68 |  0.0% | baseline |
+  |  7 | 11.22 | 10.54 |  6.0% | eq_join=sort_merge_gfur |
+  |  8 | 14.62 | 12.32 | 15.7% | eq_join=sort_merge_gftr |
+  |  9 | 23.77 | 20.81 | 12.5% | eq_join=sort_merge_gfur |
+  | 10 | 22.67 | 22.58 |  0.4% | filter=nofuse |
+  | 11 |  7.43 |  3.67 | 50.5% | eq_join=sort_merge_gfur |
+  | 12 |  5.42 |  5.40 |  0.4% | project=nofuse |
+  | 13 |  8.78 |  7.28 | 17.1% | eq_join=sort_merge_gfur |
+  | 14 |  2.29 |  2.29 |  0.2% | project=nofuse |
+  | 15 |  2.41 |  2.39 |  0.6% | project=nofuse |
+  | 16 |  6.81 |  6.73 |  1.1% | eq_join=sort_merge_gfur |
+  | 17 | 19.12 | 16.07 | 15.9% | eq_join=partition_hash_gftr |
+  | 18 | 16.96 | 13.92 | 18.0% | eq_join=partition_hash_gftr |
+  | 19 | 70.93 | 64.10 |  9.6% | eq_join=sort_merge_gfur |
+  | 20 |  9.46 |  8.05 | 14.9% | eq_join=sort_merge_gftr |
+  | 21 | 48.51 | 48.48 |  0.1% | sort=skf |
+  | 22 |  2.34 |  2.34 |  0.0% | filter=nofuse |
+
+  Plotted by `tools/visualize/plot_tpch_bench.py` as a 2×11 grid of
+  per-query bar charts (e2e and per-step-stacked breakdown). The
+  breakdown plot adds a "best-of-step" composite bar per query —
+  the per-step minimum across configs, summed — to show the lower
+  bound the engine could reach if it picked the best operator
+  implementation per step. The 50% win on Q11 surfaces a clear
+  case where HASH+GFUR (the bench-local default) is markedly
+  worse than SORT_MERGE+GFUR for this query's join shape.
+
 **Operator-hint sweeping found real bugs:**
 
 The IR-bench probe at SF=1 surfaced six distinct failure patterns
