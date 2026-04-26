@@ -499,7 +499,7 @@ NVBENCH_BENCH(bench_tpch_ir)
     .add_int64_axis("query",
         {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
          12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22})
-    .add_int64_axis("scale", {1, 10})
+    .add_int64_axis("scale", {1, 10, 30})
     .add_string_axis("filter",   {"fuse", "nofuse", "default", "n/a"})
     .add_string_axis("project",  {"fuse", "nofuse", "default", "n/a"})
     .add_string_axis("sort",     {"skf",  "no_skf", "default", "n/a"})
