@@ -138,7 +138,14 @@ while IFS=, read -r q fil prj srt grp ejn label; do
     [[ -z "$q" ]] && continue
     n_planned=$((n_planned + 1))
     out_prefix="$OUT_DIR/q$(printf '%02d' "$q")_${label}"
+    # GAMAX_BENCH_SKIP_PREFLIGHT=1 disables the pre-flight try/catch
+    # inside the bench fixture. Without it, the plan would execute
+    # twice per cell (pre-flight on cudaStreamDefault + state.exec on
+    # NVBench's stream) and nvtx_kern_sum's Total Time would
+    # double-count every step. Cells in this manifest already passed
+    # pre-flight in the timed run, so re-running the guard is wasteful.
     cmd=(
+        env GAMAX_BENCH_SKIP_PREFLIGHT=1
         nsys profile
             -o "$out_prefix"
             --trace=cuda,nvtx

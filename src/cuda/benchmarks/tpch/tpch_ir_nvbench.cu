@@ -413,17 +413,28 @@ void bench_tpch_ir(nvbench::state& state) {
     // throwing cell (multi-key/STRING groupby, partition_hash_join
     // bucket overflow, …) becomes a clean skip rather than tainting
     // NVBench's sample stats or leaving the stream in a bad state.
-    try {
-        gamax::phys::Context ctx_pre{cudaStreamDefault, /*sink=*/nullptr};
-        auto resolved_pre = gamax::exec::bench_resolve_sources(
-            ep, src_fn, cudaStreamDefault);
-        auto result_pre = gamax::exec::bench_run_steps(
-            ep, std::move(resolved_pre), ctx_pre);
-        cudaStreamSynchronize(cudaStreamDefault);
-        (void)result_pre;
-    } catch (const std::exception& e) {
-        state.skip(std::string{"execute throws: "} + e.what());
-        return;
+    //
+    // Skipped under GAMAX_BENCH_SKIP_PREFLIGHT=1. Use this when running
+    // under `nsys profile` — pre-flight would otherwise execute every
+    // step's NVTX range twice (once here, once in state.exec), so
+    // nvtx_kern_sum's Total Time would be 2× the actual per-execution
+    // value. Set the env var, accept that a throwing cell will fail
+    // ungracefully, and post-process accordingly.
+    static const bool skip_preflight =
+        std::getenv("GAMAX_BENCH_SKIP_PREFLIGHT") != nullptr;
+    if (!skip_preflight) {
+        try {
+            gamax::phys::Context ctx_pre{cudaStreamDefault, /*sink=*/nullptr};
+            auto resolved_pre = gamax::exec::bench_resolve_sources(
+                ep, src_fn, cudaStreamDefault);
+            auto result_pre = gamax::exec::bench_run_steps(
+                ep, std::move(resolved_pre), ctx_pre);
+            cudaStreamSynchronize(cudaStreamDefault);
+            (void)result_pre;
+        } catch (const std::exception& e) {
+            state.skip(std::string{"execute throws: "} + e.what());
+            return;
+        }
     }
 
     // NVBench's `exec_tag::timer` mode: we control timer.start/stop.
