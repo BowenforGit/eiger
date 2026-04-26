@@ -27,6 +27,14 @@ from pathlib import Path
 import matplotlib
 matplotlib.rcParams["pdf.fonttype"] = 42
 matplotlib.rcParams["ps.fonttype"] = 42
+matplotlib.rcParams["font.family"] = "DejaVu Sans"
+matplotlib.rcParams["axes.spines.top"]   = False
+matplotlib.rcParams["axes.spines.right"] = False
+matplotlib.rcParams["axes.linewidth"]    = 0.8
+matplotlib.rcParams["axes.edgecolor"]    = "#444444"
+matplotlib.rcParams["axes.labelcolor"]   = "#222222"
+matplotlib.rcParams["xtick.color"]       = "#222222"
+matplotlib.rcParams["ytick.color"]       = "#222222"
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
@@ -36,23 +44,26 @@ AXES = ["filter", "project", "sort", "group_by", "eq_join"]
 NA = "n/a"
 DEFAULT = "default"
 
-# Stable colour palette per StepKind. Step kinds beyond this list fall
-# back to matplotlib's default cycle.
+# Muted, paper-friendly palette per StepKind (Tableau-10 + a few
+# lighter complements for the rarer kinds). Hand-tuned so that the
+# join family (EqJoin / SemiJoin / AntiJoin) sit on a coherent warm
+# spectrum and the reduction family (GroupBy / ScalarAgg / Distinct)
+# stays cool — adjacent stack segments don't clash.
 STEP_COLORS = {
-    "Source":     "#888888",
-    "Filter":     "#1f77b4",
-    "Project":    "#ff7f0e",
-    "Reorder":    "#9467bd",
-    "Sort":       "#8c564b",
-    "TopK":       "#e377c2",
-    "GroupBy":    "#2ca02c",
-    "ScalarAgg":  "#bcbd22",
-    "EqJoin":     "#d62728",
-    "SemiJoin":   "#17becf",
-    "AntiJoin":   "#7f7f7f",
-    "Distinct":   "#aec7e8",
-    "Concat":     "#ffbb78",
-    "CrossJoin":  "#98df8a",
+    "Source":     "#bab0ac",   # muted gray
+    "Filter":     "#4e79a7",   # muted blue
+    "Project":    "#f28e2b",   # muted orange
+    "Reorder":    "#bab0ac",   # gray (low-cost glue step)
+    "Sort":       "#9c755f",   # muted brown
+    "TopK":       "#d37295",   # rose
+    "GroupBy":    "#59a14f",   # muted green
+    "ScalarAgg":  "#edc948",   # mustard
+    "EqJoin":     "#e15759",   # muted red
+    "SemiJoin":   "#76b7b2",   # muted teal
+    "AntiJoin":   "#b07aa1",   # muted purple
+    "Distinct":   "#a0cbe8",   # light blue
+    "Concat":     "#ffbe7d",   # light orange
+    "CrossJoin":  "#8cd17d",   # light green
 }
 
 
@@ -136,13 +147,15 @@ def load_steps(path: str) -> pd.DataFrame:
     return df
 
 
+# Axis-family palette (mirrors STEP_COLORS so the e2e bars use the
+# same colour as the stack segment for the operator they vary).
 AXIS_PALETTE = {
-    "baseline":  "#444444",
-    "filter":    "#1f77b4",
-    "project":   "#ff7f0e",
-    "sort":      "#8c564b",
-    "group_by":  "#2ca02c",
-    "eq_join":   "#d62728",
+    "baseline":  "#7f7f7f",
+    "filter":    "#4e79a7",
+    "project":   "#f28e2b",
+    "sort":      "#9c755f",
+    "group_by":  "#59a14f",
+    "eq_join":   "#e15759",
 }
 
 def axis_color(axis: str) -> str:
@@ -151,139 +164,162 @@ def axis_color(axis: str) -> str:
     return AXIS_PALETTE.get(axis, "#666666")
 
 
+E2E_PALETTE = {
+    "baseline": "#7f7f7f",   # neutral gray — same as the gray ring in the muted set
+    "worst":    "#e15759",   # muted red
+    "best":     "#59a14f",   # muted green
+}
+
 def plot_e2e(df: pd.DataFrame, out_path: Path, scale: int):
-    """22 subfigures, one bar per cell, coloured by which axis is set."""
-    queries = sorted(df["query"].unique())
-    fig, axes = plt.subplots(2, 11, figsize=(44, 11), sharey=False)
+    """22 subfigures, three bars per query (baseline / worst-cell /
+    best-cell), where each bar is the e2e GPU time of that
+    configuration. baseline = the all-default cell (which matches
+    bench_defaults: filter/project=nofuse, sort=no_skf, group_by=hash,
+    eq_join=hash_gfur). worst/best are the slowest and fastest cells
+    in the one-hot sweep for that query.
+    """
+    fig, axes = plt.subplots(2, 11, figsize=(28, 9), sharey=False)
     axes = axes.flatten()
+
+    BAR_LABELS = ["baseline", "worst", "best"]
+    BAR_COLORS = [E2E_PALETTE[k] for k in BAR_LABELS]
 
     for i, q in enumerate(range(1, 23)):
         ax = axes[i]
         sub = df[df["query"] == q].copy()
         if sub.empty:
-            ax.set_title(f"Q{q} (no data)", fontsize=10)
+            ax.set_title(f"Q{q}\n(no data)", fontsize=14)
             ax.axis("off")
             continue
-        sub = sub.sort_values("sort_key")
-        labels = sub["label"].tolist()
-        values = sub["gpu_ms"].tolist()
-        colors = [axis_color(a) for a in sub["axis"].tolist()]
-        ax.bar(range(len(labels)), values, color=colors, edgecolor="black",
-               linewidth=0.3)
-        ax.set_xticks(range(len(labels)))
-        ax.set_xticklabels(labels, rotation=70, fontsize=6.5,
-                           ha="right", rotation_mode="anchor")
-        ax.set_title(f"Q{q}", fontsize=10)
-        ax.tick_params(axis="y", labelsize=8)
-        ax.grid(True, axis="y", linestyle=":", alpha=0.6, zorder=0)
-        if i % 11 == 0:
-            ax.set_ylabel("GPU time (ms)", fontsize=9)
 
-    # Shared legend by axis-family colour.
+        baseline = sub[sub["axis"] == "baseline"]
+        if baseline.empty:
+            baseline = sub[sub["label"] == "default"]
+        base_ms  = float(baseline["gpu_ms"].iloc[0]) if len(baseline) else float("nan")
+        worst_ms = float(sub["gpu_ms"].max())
+        best_ms  = float(sub["gpu_ms"].min())
+        values   = [base_ms, worst_ms, best_ms]
+
+        bars = ax.bar(range(3), values, color=BAR_COLORS, width=0.7,
+                      edgecolor="white", linewidth=0.4)
+
+        # Numeric value above each bar, helps a paper reader pick out
+        # numbers without zooming.
+        ymax = max(values)
+        for b, v in zip(bars, values):
+            ax.text(b.get_x() + b.get_width()/2, v + ymax*0.025,
+                    f"{v:.1f}", ha="center", va="bottom", fontsize=10,
+                    color="#222222")
+
+        ax.set_xticks(range(3))
+        ax.set_xticklabels(BAR_LABELS, fontsize=11)
+        ax.set_title(f"Q{q}", fontsize=15, fontweight="bold")
+        ax.tick_params(axis="y", labelsize=11)
+        ax.grid(True, axis="y", linestyle=":", linewidth=0.6,
+                color="#bbbbbb", zorder=0)
+        ax.set_axisbelow(True)
+        # Headroom for the value labels.
+        ax.set_ylim(0, ymax * 1.2)
+        if i % 11 == 0:
+            ax.set_ylabel("GPU time (ms)", fontsize=13)
+
     legend_handles = [
-        mpatches.Patch(color="#444444", label="baseline (all default)"),
-        mpatches.Patch(color="#1f77b4", label="filter=*"),
-        mpatches.Patch(color="#ff7f0e", label="project=*"),
-        mpatches.Patch(color="#8c564b", label="sort=*"),
-        mpatches.Patch(color="#2ca02c", label="group_by=*"),
-        mpatches.Patch(color="#d62728", label="eq_join=*"),
+        mpatches.Patch(color=E2E_PALETTE["baseline"], label="baseline (all default)"),
+        mpatches.Patch(color=E2E_PALETTE["worst"],    label="worst single-axis variation"),
+        mpatches.Patch(color=E2E_PALETTE["best"],     label="best single-axis variation"),
     ]
-    fig.suptitle(f"TPC-H per-query end-to-end GPU time, SF={scale}, "
-                 f"H100 NVL, UserSpaceMM",
-                 fontsize=13)
-    fig.legend(handles=legend_handles, loc="lower center", ncol=6,
-               bbox_to_anchor=(0.5, -0.01), fontsize=9, frameon=False)
-    fig.tight_layout(rect=[0, 0.04, 1, 0.96])
+    fig.suptitle(f"TPC-H per-query end-to-end GPU time  ·  baseline / worst / "
+                 f"best  ·  SF={scale}  ·  H100 NVL",
+                 fontsize=17, fontweight="bold", y=0.99)
+    fig.legend(handles=legend_handles, loc="lower center", ncol=3,
+               bbox_to_anchor=(0.5, -0.005), fontsize=12, frameon=False)
+    fig.tight_layout(rect=[0, 0.05, 1, 0.95])
     fig.savefig(out_path, bbox_inches="tight")
-    # Also save a JPG sibling for quick inspection.
     jpg_path = out_path.with_suffix(".jpg")
     fig.savefig(jpg_path, bbox_inches="tight", dpi=150)
     print(f"wrote {out_path}")
 
 
 def plot_breakdown(df: pd.DataFrame, out_path: Path, scale: int):
-    """22 subfigures, stacked bars: each step contributes one segment.
-    An extra "best-of-each-step" bar is appended per query, composed of
-    the per-step minima across configs.
+    """22 subfigures, three stacked bars per query:
 
-    Step ordering uses (step_index) within a config — kinds may repeat
-    so we colour by step_kind but keep the index for stable ordering.
+      * baseline     — the all-default cell, which matches bench_defaults
+                       (filter=nofuse, project=nofuse, sort=no_skf,
+                        group_by=hash, eq_join=hash_gfur). Each segment
+                       is the actual mean_ms of that step under this
+                       cell.
+      * worst-per-step — composite. For each step_index, take
+                         max(mean_ms) across configs. Sum the maxes.
+      * best-per-step  — composite. For each step_index, take
+                         min(mean_ms) across configs. Sum the mins.
+                         An oracle lower bound assuming the engine
+                         could pick a different hint per step instance.
+
+    Per-step (not per-kind): repeated kinds (e.g. several EqJoins in
+    Q9) each pick their own winning/losing config independently.
     """
     queries = sorted(df["query"].unique())
-    fig, axes = plt.subplots(2, 11, figsize=(44, 11), sharey=False)
+    fig, axes = plt.subplots(2, 11, figsize=(28, 9), sharey=False)
     axes = axes.flatten()
 
     used_kinds = set()
+
+    BAR_LABELS = ["baseline", "worst", "best"]
 
     for i, q in enumerate(range(1, 23)):
         ax = axes[i]
         sub = df[df["query"] == q].copy()
         if sub.empty:
-            ax.set_title(f"Q{q} (no data)", fontsize=10)
+            ax.set_title(f"Q{q}\n(no data)", fontsize=14)
             ax.axis("off")
             continue
 
-        # Per-config sorted list.
-        configs = (sub[["label", "axis", "sort_key"]]
-                   .drop_duplicates()
-                   .sort_values("sort_key"))
-        labels = configs["label"].tolist()
-
-        # Per-step matrix: rows = configs, cols = step_index in
-        # plan-natural order. Cells = mean_ms (NaN if missing).
         step_indices = sorted(sub["step_index"].unique())
-        # step_kind label per step_index — take the first observed value.
+        # step_kind per step_index — stable across configs (lowering
+        # changes hints, not plan structure).
         step_kinds = {
             si: sub[sub["step_index"] == si]["step_kind"].iloc[0]
             for si in step_indices
         }
         used_kinds.update(step_kinds.values())
 
-        # Build per-config stack. Order by step_index ascending (matches
-        # plan-natural order in the executor).
-        bottom = np.zeros(len(labels))
+        # Baseline cell = all-default cell. The bench's bench_defaults
+        # binds default to the requested hints exactly.
+        baseline = sub[sub["axis"] == "baseline"]
+        if baseline.empty:
+            baseline = sub[sub["label"] == "default"]
+
+        bars = {label: [] for label in BAR_LABELS}
         for si in step_indices:
             kind = step_kinds[si]
-            colour = STEP_COLORS.get(kind, None)
-            heights = []
-            for lbl in labels:
-                cell = sub[(sub["label"] == lbl) & (sub["step_index"] == si)]
-                heights.append(float(cell["mean_ms"].iloc[0]) if len(cell) else 0.0)
-            ax.bar(range(len(labels)), heights, bottom=bottom,
-                   color=colour, edgecolor="black", linewidth=0.2)
-            bottom += np.array(heights)
+            step_rows = sub[sub["step_index"] == si]
+            b = baseline[baseline["step_index"] == si]
+            base_ms = float(b["mean_ms"].iloc[0]) if len(b) else 0.0
+            worst_ms = float(step_rows["mean_ms"].max()) if len(step_rows) else 0.0
+            best_ms  = float(step_rows["mean_ms"].min()) if len(step_rows) else 0.0
+            bars["baseline"].append((kind, base_ms))
+            bars["worst"].append((kind, worst_ms))
+            bars["best"].append((kind, best_ms))
 
-        # Best-of-each-step composite bar. For each step_index, take
-        # the min mean_ms across configs that exercised that step.
-        best_total_by_kind = {}
-        bottom_best = 0.0
-        x_best = len(labels)
-        for si in step_indices:
-            kind = step_kinds[si]
-            heights_for_step = sub[sub["step_index"] == si]["mean_ms"]
-            if heights_for_step.empty:
-                continue
-            best = float(heights_for_step.min())
-            ax.bar([x_best], [best], bottom=[bottom_best],
-                   color=STEP_COLORS.get(kind, None),
-                   edgecolor="black", linewidth=0.2)
-            bottom_best += best
-            best_total_by_kind[kind] = best_total_by_kind.get(kind, 0.0) + best
-        # Mark the composite bar with a thicker outline.
-        if x_best == len(labels):
-            ax.bar([x_best], [bottom_best], bottom=[0.0],
-                   facecolor="none", edgecolor="black", linewidth=1.5,
-                   linestyle="--")
+        # Render 3 bars; stack segments per step_index in plan order.
+        x_positions = list(range(len(BAR_LABELS)))
+        for x, label in zip(x_positions, BAR_LABELS):
+            bottom = 0.0
+            for kind, ms in bars[label]:
+                ax.bar([x], [ms], bottom=[bottom], width=0.7,
+                       color=STEP_COLORS.get(kind, "#aaaaaa"),
+                       edgecolor="white", linewidth=0.4)
+                bottom += ms
 
-        all_labels = labels + ["best-of-step"]
-        ax.set_xticks(range(len(all_labels)))
-        ax.set_xticklabels(all_labels, rotation=70, fontsize=6.5,
-                           ha="right", rotation_mode="anchor")
-        ax.set_title(f"Q{q}", fontsize=10)
-        ax.tick_params(axis="y", labelsize=8)
-        ax.grid(True, axis="y", linestyle=":", alpha=0.6, zorder=0)
+        ax.set_xticks(x_positions)
+        ax.set_xticklabels(BAR_LABELS, fontsize=11)
+        ax.set_title(f"Q{q}", fontsize=15, fontweight="bold")
+        ax.tick_params(axis="y", labelsize=11)
+        ax.grid(True, axis="y", linestyle=":", linewidth=0.6,
+                color="#bbbbbb", zorder=0)
+        ax.set_axisbelow(True)
         if i % 11 == 0:
-            ax.set_ylabel("GPU time (ms)", fontsize=9)
+            ax.set_ylabel("GPU time (ms)", fontsize=13)
 
     # Shared legend: one entry per used StepKind.
     used_sorted = [k for k in STEP_COLORS if k in used_kinds]
@@ -292,21 +328,175 @@ def plot_breakdown(df: pd.DataFrame, out_path: Path, scale: int):
         mpatches.Patch(color=STEP_COLORS.get(k, "#aaaaaa"), label=k)
         for k in used_sorted
     ]
-    legend_handles.append(
-        mpatches.Patch(facecolor="white", edgecolor="black", linestyle="--",
-                       label="best-of-step composite (dashed outline)")
-    )
-    fig.suptitle(f"TPC-H per-step breakdown, SF={scale}, H100 NVL, "
-                 f"UserSpaceMM",
-                 fontsize=13)
+    fig.suptitle(
+        f"TPC-H per-step breakdown  ·  baseline / worst-per-step / "
+        f"best-per-step  ·  SF={scale}  ·  H100 NVL",
+        fontsize=17, fontweight="bold", y=0.99)
+    # Split the StepKind legend into two roughly-equal rows: ceil(N/2)
+    # per row puts e.g. 13 entries as 7 + 6 instead of 10 + 3.
+    n_legend = len(legend_handles)
+    legend_ncol = (n_legend + 1) // 2
     fig.legend(handles=legend_handles, loc="lower center",
-               ncol=min(8, len(legend_handles)),
-               bbox_to_anchor=(0.5, -0.02), fontsize=9, frameon=False)
-    fig.tight_layout(rect=[0, 0.06, 1, 0.96])
+               ncol=legend_ncol,
+               bbox_to_anchor=(0.5, -0.01), fontsize=12, frameon=False)
+    fig.tight_layout(rect=[0, 0.07, 1, 0.95])
     fig.savefig(out_path, bbox_inches="tight")
     jpg_path = out_path.with_suffix(".jpg")
     fig.savefig(jpg_path, bbox_inches="tight", dpi=150)
     print(f"wrote {out_path}")
+
+
+def plot_kind_share(df: pd.DataFrame, out_path: Path, scale: int):
+    """One bar per StepKind that appears in the workload. Each bar's
+    height is the % contribution of that kind to the global
+    "best-per-step" workload total — i.e. for every (query,
+    step_index) we take min(mean_ms) across configs, then group those
+    minima by StepKind and sum. Bars are sorted descending by %, all
+    kinds shown (no truncation). Bar colour matches the breakdown
+    plot's STEP_COLORS palette.
+    """
+    best_idx = df.groupby(["query", "step_index"])["mean_ms"].idxmin()
+    step_best = df.loc[best_idx, ["step_kind", "mean_ms"]].rename(
+        columns={"step_kind": "kind", "mean_ms": "best_ms"})
+
+    by_kind = (step_best.groupby("kind")["best_ms"]
+               .agg(["sum", "count"])
+               .rename(columns={"sum": "total_ms", "count": "n_steps"})
+               .reset_index())
+    total = float(by_kind["total_ms"].sum())
+    by_kind["pct"] = by_kind["total_ms"] / total * 100.0
+    by_kind = by_kind.sort_values("pct", ascending=False).reset_index(drop=True)
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    colors = [STEP_COLORS.get(k, "#aaaaaa") for k in by_kind["kind"]]
+    bars = ax.bar(range(len(by_kind)), by_kind["pct"], color=colors,
+                  edgecolor="white", linewidth=0.6, width=0.72)
+
+    ymax = float(by_kind["pct"].max())
+    for b, pct, ms, n in zip(bars, by_kind["pct"], by_kind["total_ms"],
+                             by_kind["n_steps"]):
+        ax.text(b.get_x() + b.get_width()/2, pct + ymax*0.02,
+                f"{pct:.1f}%\n{ms:.1f} ms\n×{int(n)}",
+                ha="center", va="bottom", fontsize=10.5, color="#222222",
+                linespacing=1.15)
+
+    ax.set_xticks(range(len(by_kind)))
+    ax.set_xticklabels(by_kind["kind"], rotation=30, fontsize=12,
+                       ha="right", rotation_mode="anchor")
+    ax.set_ylabel("% of total best-per-step time across 22 queries",
+                  fontsize=13)
+    ax.tick_params(axis="y", labelsize=11)
+    ax.grid(True, axis="y", linestyle=":", linewidth=0.6,
+            color="#bbbbbb", zorder=0)
+    ax.set_axisbelow(True)
+    ax.set_ylim(0, ymax * 1.32)
+
+    ax.set_title(f"Time share per operator kind (best cfg per step)  "
+                 f"·  SF={scale}  ·  H100 NVL",
+                 fontsize=15, fontweight="bold", pad=12)
+
+    fig.tight_layout()
+    fig.savefig(out_path, bbox_inches="tight")
+    jpg_path = out_path.with_suffix(".jpg")
+    fig.savefig(jpg_path, bbox_inches="tight", dpi=150)
+    print(f"wrote {out_path}")
+    print(f"  {len(by_kind)} kinds · workload best-per-step total = "
+          f"{total:.2f} ms · top-3 share = "
+          f"{float(by_kind['pct'].head(3).sum()):.1f}%")
+
+
+def plot_top_steps(df: pd.DataFrame, out_path: Path, scale: int, top_n: int = 8):
+    """Top-N most expensive single steps across the entire 22-query
+    workload, assuming each step picks its own best configuration
+    (per-step min). Each bar's height is the % contribution of that
+    step to the global "best-per-step" workload total. Bar colour
+    encodes StepKind. Bar label encodes (query, kind, rank) so a
+    reader can identify the step uniquely. Annotation above each bar
+    includes the picked configuration (which axis hint won for that
+    step).
+    """
+    # Per-(query, step_index) best row — pick the config that
+    # achieved the minimum mean_ms.
+    best_idx = df.groupby(["query", "step_index"])["mean_ms"].idxmin()
+    step_best = df.loc[best_idx, [
+        "query", "step_index", "step_kind", "mean_ms",
+        "filter", "project", "sort", "group_by", "eq_join",
+    ]].rename(columns={"step_kind": "kind", "mean_ms": "best_ms"}).reset_index(drop=True)
+
+    # Rank repeated kinds within each query (1-based) so we can
+    # disambiguate e.g. Q9's five EqJoins.
+    step_best = step_best.sort_values(["query", "step_index"]).reset_index(drop=True)
+    step_best["kind_rank"] = step_best.groupby(["query", "kind"]).cumcount() + 1
+    step_best["kind_count"] = step_best.groupby(["query", "kind"])["kind"].transform("count")
+
+    def label(r):
+        q, k, r1, n = int(r["query"]), r["kind"], int(r["kind_rank"]), int(r["kind_count"])
+        return f"Q{q}·{k}" if n == 1 else f"Q{q}·{k}#{r1}"
+    step_best["label"] = step_best.apply(label, axis=1)
+
+    # Picked-cfg label: which single axis (if any) was non-default-non-na.
+    def cfg_label(r):
+        AXES_LOCAL = ["filter", "project", "sort", "group_by", "eq_join"]
+        set_axes = [a for a in AXES_LOCAL if r[a] not in ("default", "n/a")]
+        if not set_axes:
+            return "baseline"
+        # Use the same compact value formatting as elsewhere.
+        a = set_axes[0]
+        v = VALUE_SHORT.get(r[a], r[a])
+        return f"{AXIS_SHORT[a]}={v}"
+    step_best["cfg"] = step_best.apply(cfg_label, axis=1)
+
+    total = float(step_best["best_ms"].sum())
+    step_best["pct"] = step_best["best_ms"] / total * 100.0
+
+    top = step_best.nlargest(top_n, "pct").reset_index(drop=True)
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    colors = [STEP_COLORS.get(k, "#aaaaaa") for k in top["kind"]]
+    bars = ax.bar(range(len(top)), top["pct"], color=colors,
+                  edgecolor="white", linewidth=0.6, width=0.72)
+
+    # Annotation above each bar — % / ms / picked cfg (axis=value).
+    ymax = float(top["pct"].max())
+    for b, pct, ms, cfg in zip(bars, top["pct"], top["best_ms"], top["cfg"]):
+        ax.text(b.get_x() + b.get_width()/2, pct + ymax*0.02,
+                f"{pct:.1f}%\n{ms:.1f} ms\n[{cfg}]",
+                ha="center", va="bottom", fontsize=10.5, color="#222222",
+                linespacing=1.15)
+
+    ax.set_xticks(range(len(top)))
+    ax.set_xticklabels(top["label"], rotation=30, fontsize=12,
+                       ha="right", rotation_mode="anchor")
+    ax.set_ylabel("% of total best-per-step time across 22 queries",
+                  fontsize=13)
+    ax.tick_params(axis="y", labelsize=11)
+    ax.grid(True, axis="y", linestyle=":", linewidth=0.6,
+            color="#bbbbbb", zorder=0)
+    ax.set_axisbelow(True)
+    ax.set_ylim(0, ymax * 1.32)
+
+    ax.set_title(f"Top-{top_n} most expensive steps (best cfg per step)  "
+                 f"·  SF={scale}  ·  H100 NVL",
+                 fontsize=15, fontweight="bold", pad=12)
+
+    # Legend: only the kinds actually appearing in top-N.
+    kinds_in_plot = list(dict.fromkeys(top["kind"].tolist()))
+    legend_handles = [
+        mpatches.Patch(color=STEP_COLORS.get(k, "#aaaaaa"), label=k)
+        for k in kinds_in_plot
+    ]
+    ax.legend(handles=legend_handles, loc="upper right",
+              fontsize=11, frameon=False, ncol=1)
+
+    fig.tight_layout()
+    fig.savefig(out_path, bbox_inches="tight")
+    jpg_path = out_path.with_suffix(".jpg")
+    fig.savefig(jpg_path, bbox_inches="tight", dpi=150)
+    print(f"wrote {out_path}")
+    print(f"  workload best-per-step total = {total:.2f} ms across "
+          f"{len(step_best)} steps; top-{top_n} sum = "
+          f"{float(top['best_ms'].sum()):.2f} ms "
+          f"({float(top['pct'].sum()):.1f}%)")
 
 
 def main():
@@ -339,6 +529,8 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     plot_e2e(df_e2e, out_dir / f"tpch_e2e_sf{scale}.pdf", scale)
     plot_breakdown(df_steps, out_dir / f"tpch_breakdown_sf{scale}.pdf", scale)
+    plot_top_steps(df_steps, out_dir / f"tpch_top_steps_sf{scale}.pdf", scale)
+    plot_kind_share(df_steps, out_dir / f"tpch_kind_share_sf{scale}.pdf", scale)
 
 
 if __name__ == "__main__":
