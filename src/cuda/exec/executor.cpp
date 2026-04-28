@@ -26,16 +26,32 @@ namespace {
     throw std::runtime_error("exec::execute: " + what);
 }
 
-// Per-Value slot in the Executor. Holds either a caller-supplied
-// `table_view` (for SourceTable steps, whose `owned` is null) or an
-// owned `table_ptr` (for every other step).
+// Per-Value slot in the Executor. Three valid states:
+//   * SourceTable:  view set (caller-supplied), owned null.
+//   * Most steps:   owned set (produced by run_step), view default
+//                   (empty); view_of returns owned->view().
+//   * Reorder:      both set. owned holds an upstream table whose
+//                   ownership we moved into this slot; view is a
+//                   select_columns over those underlying columns.
+//                   view_of returns view, which is the consumer-
+//                   facing reordered shape. owned exists solely to
+//                   pin the underlying memory so the column_views
+//                   inside `view` stay valid until this slot is
+//                   freed.
 struct Slot {
     std::unique_ptr<gamax::table> owned;
     gamax::table_view view;
 };
 
+// Prefer an explicit view (set by SourceTable or by an aliasing
+// Reorder); fall back to owned->view() for the common owned-only
+// case. An explicit view is identified by having ≥1 column — both
+// SourceTable and Reorder always produce ≥1 column, and a
+// default-constructed view has 0 columns.
 gamax::table_view view_of(const Slot& s) {
-    return s.owned ? s.owned->view() : s.view;
+    if (s.view.num_columns() > 0) return s.view;
+    if (s.owned) return s.owned->view();
+    return s.view;
 }
 
 // Dispatch one step to the right `phys::*` call.
@@ -137,10 +153,17 @@ std::unique_ptr<gamax::table> run_step(
 // Both the production `execute()` path and the two-phase bench path
 // dispatch through this helper, so the per-step instrumentation lives
 // in exactly one place.
+//
+// `live` is mutable because Reorder is implemented as ownership
+// transfer: the upstream's `owned` table is moved into the Reorder
+// slot, leaving the upstream slot empty. Liveness analysis already
+// guarantees the upstream has no other consumers after the Reorder
+// step, so this is safe.
 Slot step_dispatch(
+    const ExecPlan& plan,
     gamax::size_type step_index,
     const Step& s,
-    const std::unordered_map<ValueId, Slot>& live,
+    std::unordered_map<ValueId, Slot>& live,
     const SourceResolver& source_resolver,
     const gamax::phys::Context& ctx)
 {
@@ -168,6 +191,49 @@ Slot step_dispatch(
         // run_step dispatch — the resolver is the work.
         const auto& pl = std::get<SourceTablePayload>(s.payload);
         slot.view = source_resolver(pl.table_name, pl.columns);
+    } else if (s.kind == StepKind::Reorder) {
+        // Aliasing Reorder: skip the gather kernel that
+        // `phys::reorder` would run and just take ownership of the
+        // upstream's columns + present a `select_columns` view. At
+        // SF=100 the original gather costs ~36 GiB of fresh
+        // contiguous allocations (one full-cardinality column per
+        // ordinal), and that single step is what OOMs Q1's slab.
+        // Aliasing makes Reorder a zero-allocation pointer shuffle.
+        //
+        // Two correctness conditions:
+        //
+        // 1. select_columns must reference the upstream's *consumer-
+        //    facing* shape. When the upstream is itself a Reorder
+        //    slot, its `owned` holds the original un-reordered table
+        //    moved up through the chain, while its `view` is the
+        //    reordered shape downstream actually sees. Use view_of()
+        //    so chained Reorders compose correctly.
+        //
+        // 2. We can only steal `owned` from the upstream if this
+        //    Reorder is the upstream's *last* consumer. Plan DAGs
+        //    that share a subexpression (e.g. a Project whose output
+        //    feeds both a Reorder and another step) would crash with
+        //    UAF if we moved out from under the other consumer.
+        //    `last_used_step` aggregates over all consumers, so
+        //    "Reorder is the last consumer" ⟺
+        //    "upstream.last_used_step == this step's index". When
+        //    that fails, fall back to the gather copy.
+        const auto& pl = std::get<ReorderPayload>(s.payload);
+        auto it = live.find(s.inputs.at(0));
+        if (it == live.end()) exec_error(
+            "Reorder: missing input value " +
+            std::to_string(s.inputs.at(0)));
+        const bool is_last_consumer =
+            plan.values[s.inputs.at(0)].last_used_step == step_index;
+        if (is_last_consumer) {
+            gamax::table_view src_view = view_of(it->second);
+            slot.view = src_view.select_columns(pl.ordinals);
+            slot.owned = std::move(it->second.owned);
+        } else {
+            // Shared subexpression — keep the upstream alive for
+            // its other consumers and pay the gather cost here.
+            slot.owned = run_step(s, live, source_resolver, ctx);
+        }
     } else {
         slot.owned = run_step(s, live, source_resolver, ctx);
     }
@@ -198,9 +264,10 @@ void free_dead_inputs(
 }
 
 // Pull the final result out of the live map. Used by execute() and
-// bench_run_steps(). For pure-Scan plans (final value is a non-owning
-// SourceTable view), materialize via identity reorder so the caller
-// receives a standalone owned table.
+// bench_run_steps(). When the final slot is a non-owning view (pure-
+// Scan plan ending at a SourceTable, or a plan whose final step is
+// an aliasing Reorder), materialize the view's column selection into
+// a fresh owned table so the caller gets a standalone result.
 std::unique_ptr<gamax::table> finalize_result(
     const ExecPlan& plan,
     std::unordered_map<ValueId, Slot>& live,
@@ -209,11 +276,20 @@ std::unique_ptr<gamax::table> finalize_result(
     auto final_id = plan.steps.back().output;
     auto it = live.find(final_id);
     if (it == live.end()) exec_error("final value missing");
-    if (it->second.owned) return std::move(it->second.owned);
-    auto v = it->second.view;
-    std::vector<gamax::size_type> identity(v.num_columns());
-    std::iota(identity.begin(), identity.end(), gamax::size_type{0});
-    return gamax::phys::reorder(v, std::move(identity), ctx);
+    auto& slot = it->second;
+    // Aliasing Reorder slot: explicit view + (possibly) owned. The
+    // view is the user-facing shape; owned only pins memory. We
+    // can't return owned directly because its column layout is the
+    // upstream's, not the reorder selection. Materialize via gather
+    // so the caller's table has the expected shape.
+    if (slot.view.num_columns() > 0) {
+        auto v = slot.view;
+        std::vector<gamax::size_type> identity(v.num_columns());
+        std::iota(identity.begin(), identity.end(), gamax::size_type{0});
+        return gamax::phys::reorder(v, std::move(identity), ctx);
+    }
+    if (slot.owned) return std::move(slot.owned);
+    exec_error("final value has neither owned nor view");
 }
 
 } // namespace
@@ -244,7 +320,7 @@ std::unique_ptr<gamax::table> execute(
          i < static_cast<gamax::size_type>(plan.steps.size()); ++i)
     {
         const auto& s = plan.steps[i];
-        live[s.output] = step_dispatch(i, s, live, source_resolver, ctx);
+        live[s.output] = step_dispatch(plan, i, s, live, source_resolver, ctx);
 
 #ifdef GAMAX_PHYS_DEBUG
         // Debug hook — fires for *every* step (including SourceTable)
@@ -326,7 +402,7 @@ BenchExecState bench_resolve_sources(
     {
         const auto& s = plan.steps[i];
         if (s.kind != StepKind::SourceTable) continue;
-        live[s.output] = step_dispatch(i, s, live, source_resolver, ctx);
+        live[s.output] = step_dispatch(plan, i, s, live, source_resolver, ctx);
     }
 
     cudaStreamSynchronize(stream);
@@ -362,7 +438,7 @@ std::unique_ptr<gamax::table> bench_run_steps(
     {
         const auto& s = plan.steps[i];
         if (s.kind == StepKind::SourceTable) continue;
-        live[s.output] = step_dispatch(i, s, live, null_resolver, ctx);
+        live[s.output] = step_dispatch(plan, i, s, live, null_resolver, ctx);
         free_dead_inputs(plan, s, i, live);
     }
 
