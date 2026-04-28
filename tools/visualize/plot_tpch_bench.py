@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Plot benchmark_tpch_ir results.
 
-Inputs:
-  --e2e   : NVBench --csv output (per-cell GPU Time)
-  --steps : GAMAX_BENCH_STEP_CSV output (per-step mean_ms breakdown)
+Inputs are derived from --machine and --scale by convention:
+  e2e CSV   : <data-dir>/<machine>/tpch/bench_e2e_sf<N>.csv
+  steps CSV : <data-dir>/<machine>/tpch/bench_steps_sf<N>.csv
 
-Two figures:
+Outputs land in <out>/<machine>/. Two figures:
   1) tpch_e2e        : 22 subfigures (2 rows × 11 cols), one bar per config
   2) tpch_breakdown  : same layout, stacked bars per step + an extra
                        "best-of-each-step" bar composed of per-step minima
@@ -43,6 +43,14 @@ import pandas as pd
 AXES = ["filter", "project", "sort", "group_by", "eq_join"]
 NA = "n/a"
 DEFAULT = "default"
+
+# Display names per machine identifier — used in plot titles. Falls
+# back to the raw identifier (e.g. for an unknown machine the title
+# just shows the directory name).
+MACHINE_NAMES = {
+    "h100":  "H100 NVL",
+    "gh200": "Grace Hopper GH200",
+}
 
 # Muted, paper-friendly palette per StepKind (Tableau-10 + a few
 # lighter complements for the rarer kinds). Hand-tuned so that the
@@ -170,7 +178,8 @@ E2E_PALETTE = {
     "best":     "#59a14f",   # muted green
 }
 
-def plot_e2e(df: pd.DataFrame, out_path: Path, scale: int):
+def plot_e2e(df: pd.DataFrame, out_path: Path, scale: int,
+             machine_display: str):
     """22 subfigures, three bars per query (baseline / worst-cell /
     best-cell), where each bar is the e2e GPU time of that
     configuration. baseline = the all-default cell (which matches
@@ -229,7 +238,7 @@ def plot_e2e(df: pd.DataFrame, out_path: Path, scale: int):
         mpatches.Patch(color=E2E_PALETTE["best"],     label="best single-axis variation"),
     ]
     fig.suptitle(f"TPC-H per-query end-to-end GPU time  ·  baseline / worst / "
-                 f"best  ·  SF={scale}  ·  H100 NVL",
+                 f"best  ·  SF={scale}  ·  {machine_display}",
                  fontsize=17, fontweight="bold", y=0.99)
     fig.legend(handles=legend_handles, loc="lower center", ncol=3,
                bbox_to_anchor=(0.5, -0.005), fontsize=12, frameon=False)
@@ -240,7 +249,8 @@ def plot_e2e(df: pd.DataFrame, out_path: Path, scale: int):
     print(f"wrote {out_path}")
 
 
-def plot_breakdown(df: pd.DataFrame, out_path: Path, scale: int):
+def plot_breakdown(df: pd.DataFrame, out_path: Path, scale: int,
+                   machine_display: str):
     """22 subfigures, three stacked bars per query:
 
       * baseline     — the all-default cell, which matches bench_defaults
@@ -330,7 +340,7 @@ def plot_breakdown(df: pd.DataFrame, out_path: Path, scale: int):
     ]
     fig.suptitle(
         f"TPC-H per-step breakdown  ·  baseline / worst-per-step / "
-        f"best-per-step  ·  SF={scale}  ·  H100 NVL",
+        f"best-per-step  ·  SF={scale}  ·  {machine_display}",
         fontsize=17, fontweight="bold", y=0.99)
     # Split the StepKind legend into two roughly-equal rows: ceil(N/2)
     # per row puts e.g. 13 entries as 7 + 6 instead of 10 + 3.
@@ -346,7 +356,8 @@ def plot_breakdown(df: pd.DataFrame, out_path: Path, scale: int):
     print(f"wrote {out_path}")
 
 
-def plot_kind_share(df: pd.DataFrame, out_path: Path, scale: int):
+def plot_kind_share(df: pd.DataFrame, out_path: Path, scale: int,
+                    machine_display: str):
     """One bar per StepKind that appears in the workload. Each bar's
     height is the % contribution of that kind to the global
     "best-per-step" workload total — i.e. for every (query,
@@ -392,7 +403,7 @@ def plot_kind_share(df: pd.DataFrame, out_path: Path, scale: int):
     ax.set_ylim(0, ymax * 1.32)
 
     ax.set_title(f"Time share per operator kind (best cfg per step)  "
-                 f"·  SF={scale}  ·  H100 NVL",
+                 f"·  SF={scale}  ·  {machine_display}",
                  fontsize=15, fontweight="bold", pad=12)
 
     fig.tight_layout()
@@ -405,7 +416,8 @@ def plot_kind_share(df: pd.DataFrame, out_path: Path, scale: int):
           f"{float(by_kind['pct'].head(3).sum()):.1f}%")
 
 
-def plot_top_steps(df: pd.DataFrame, out_path: Path, scale: int, top_n: int = 8):
+def plot_top_steps(df: pd.DataFrame, out_path: Path, scale: int,
+                   machine_display: str, top_n: int = 8):
     """Top-N most expensive single steps across the entire 22-query
     workload, assuming each step picks its own best configuration
     (per-step min). Each bar's height is the % contribution of that
@@ -476,7 +488,7 @@ def plot_top_steps(df: pd.DataFrame, out_path: Path, scale: int, top_n: int = 8)
     ax.set_ylim(0, ymax * 1.32)
 
     ax.set_title(f"Top-{top_n} most expensive steps (best cfg per step)  "
-                 f"·  SF={scale}  ·  H100 NVL",
+                 f"·  SF={scale}  ·  {machine_display}",
                  fontsize=15, fontweight="bold", pad=12)
 
     # Legend: only the kinds actually appearing in top-N.
@@ -501,36 +513,54 @@ def plot_top_steps(df: pd.DataFrame, out_path: Path, scale: int, top_n: int = 8)
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--e2e",   required=True, help="NVBench --csv output")
-    p.add_argument("--steps", required=True, help="per-step CSV from "
-                   "GAMAX_BENCH_STEP_CSV")
-    p.add_argument("--out",   default="tools/results/pdf/tpch_bench",
-                   help="output directory (figures named tpch_e2e.pdf "
-                        "and tpch_breakdown.pdf)")
+    p.add_argument("--machine", required=True,
+                   help="machine identifier (subdir name under "
+                        "<data-dir> and <out>); known names get a "
+                        "pretty title, unknown ones use the raw value")
+    p.add_argument("--scale", required=True, type=int,
+                   help="scale factor (must match the CSVs)")
+    p.add_argument("--data-dir", default="tools/results/data",
+                   help="base dir holding "
+                        "<machine>/tpch/bench_{e2e,steps}_sf<N>.csv "
+                        "(default: tools/results/data)")
+    p.add_argument("--out", default="tools/results/pdf/tpch_bench",
+                   help="base output dir; figures land in "
+                        "<out>/<machine>/ (default: "
+                        "tools/results/pdf/tpch_bench)")
     args = p.parse_args()
 
-    df_e2e = load_e2e(args.e2e)
-    df_steps = load_steps(args.steps)
+    machine = args.machine
+    scale = int(args.scale)
+    display = MACHINE_NAMES.get(machine, machine)
+
+    csv_dir = Path(args.data_dir) / machine / "tpch"
+    e2e_csv = csv_dir / f"bench_e2e_sf{scale}.csv"
+    steps_csv = csv_dir / f"bench_steps_sf{scale}.csv"
+    if not e2e_csv.exists():
+        sys.exit(f"error: missing e2e CSV: {e2e_csv}")
+    if not steps_csv.exists():
+        sys.exit(f"error: missing steps CSV: {steps_csv}")
+
+    df_e2e = load_e2e(str(e2e_csv))
+    df_steps = load_steps(str(steps_csv))
 
     if df_e2e.empty:
         print("error: e2e CSV has no non-skipped rows", file=sys.stderr)
         sys.exit(1)
-    scales = sorted(df_e2e["scale"].unique())
-    if len(scales) != 1:
-        # The plot title is per-scale; if multiple scales are present,
-        # caller should slice the CSV. Pick the first and warn.
-        print(f"note: multiple scales present {scales}; using scale={scales[0]}",
-              file=sys.stderr)
-    scale = int(scales[0])
     df_e2e = df_e2e[df_e2e["scale"] == scale]
     df_steps = df_steps[df_steps["scale"] == scale]
+    if df_e2e.empty:
+        sys.exit(f"error: no rows at scale={scale} in {e2e_csv}")
 
-    out_dir = Path(args.out)
+    out_dir = Path(args.out) / machine
     out_dir.mkdir(parents=True, exist_ok=True)
-    plot_e2e(df_e2e, out_dir / f"tpch_e2e_sf{scale}.pdf", scale)
-    plot_breakdown(df_steps, out_dir / f"tpch_breakdown_sf{scale}.pdf", scale)
-    plot_top_steps(df_steps, out_dir / f"tpch_top_steps_sf{scale}.pdf", scale)
-    plot_kind_share(df_steps, out_dir / f"tpch_kind_share_sf{scale}.pdf", scale)
+    plot_e2e(df_e2e, out_dir / f"tpch_e2e_sf{scale}.pdf", scale, display)
+    plot_breakdown(df_steps, out_dir / f"tpch_breakdown_sf{scale}.pdf",
+                   scale, display)
+    plot_top_steps(df_steps, out_dir / f"tpch_top_steps_sf{scale}.pdf",
+                   scale, display)
+    plot_kind_share(df_steps, out_dir / f"tpch_kind_share_sf{scale}.pdf",
+                    scale, display)
 
 
 if __name__ == "__main__":

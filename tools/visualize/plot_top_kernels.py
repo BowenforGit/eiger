@@ -7,7 +7,7 @@ Pipeline:
      best-cfg config that minimizes mean_ms for each (query, step_index).
   2) Group those (q, si) by (q, cfg_label) so we open each
      .nsys-rep at most once. Label format matches run_tpch_nsys.sh:
-       q<NN>_<label>.nsys-rep   under  /scratch/.../sf<scale>/
+       q<NN>_<label>.nsys-rep   under  <nsys-base>/<machine>/sf<scale>/
   3) For each report, run `nsys stats --report nvtx_kern_sum --format csv`
      once. Result rows are (NVTX range, kernel name, total ns, ...).
   4) Filter rows whose NVTX range matches `:step[<si>]:*` for any
@@ -56,6 +56,13 @@ AXIS_SHORT = {"filter":"fil","project":"prj","sort":"srt",
               "group_by":"grp","eq_join":"ejn"}
 NEUTRAL = ("default", "n/a")
 NVTX_RE = re.compile(r":step\[(\d+)\]:")
+
+# Display names per machine identifier — used in plot titles. Falls
+# back to the raw identifier for unknown machines.
+MACHINE_NAMES = {
+    "h100":  "H100 NVL",
+    "gh200": "Grace Hopper GH200",
+}
 
 
 def cfg_label(row) -> str:
@@ -280,6 +287,16 @@ def aggregate_kernels(steps_csv: Path, scale: int, nsys_dir: Path,
             "n_invocs":     int(round(kern_invocs[kname])),
             "n_step_rows":  kern_steps[kname],
         })
+    if not rows:
+        # Common cause: nsys version on this host is older than the
+        # one used to record the reports — `nsys stats` then fails the
+        # .nsys-rep → .sqlite export and yields no kernel rows.
+        sys.exit(
+            f"error: no kernel rows aggregated from {processed} report(s) "
+            f"under {nsys_dir}. Verify `nsys stats --report nvtx_kern_sum "
+            f"--format csv <report>` produces a populated CSV (a version "
+            f"mismatch between recording and analysis nsys will silently "
+            f"export-fail).")
     out = pd.DataFrame(rows).sort_values("total_ns", ascending=False)
     return out
 
@@ -293,7 +310,8 @@ KERNEL_FAMILY_COLORS = [
 
 
 def plot_top_kernels(agg: pd.DataFrame, out_path: Path, scale: int,
-                    top_n: int = 8, cfg_mode: str = "best"):
+                    machine_display: str, top_n: int = 8,
+                    cfg_mode: str = "best"):
     top = agg.head(top_n).reset_index(drop=True)
     total = float(agg["total_ms"].sum())
     top["pct"] = top["total_ms"] / total * 100.0
@@ -328,7 +346,7 @@ def plot_top_kernels(agg: pd.DataFrame, out_path: Path, scale: int,
                  else "default cfg, bench baseline")
     ax.set_title(
         f"Top-{top_n} most expensive CUDA kernels  ·  {cfg_blurb}  "
-        f"·  SF={scale}  ·  H100 NVL",
+        f"·  SF={scale}  ·  {machine_display}",
         fontsize=15, fontweight="bold", pad=12)
 
     fig.tight_layout()
@@ -343,36 +361,56 @@ def plot_top_kernels(agg: pd.DataFrame, out_path: Path, scale: int,
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--steps", required=True,
-                   help="per-step CSV (GAMAX_BENCH_STEP_CSV output)")
+    p.add_argument("--machine", required=True,
+                   help="machine identifier — picks the input CSV "
+                        "under <data-dir>/<machine>/tpch/ and the "
+                        "nsys reports under <nsys-base>/<machine>/")
     p.add_argument("--scale", required=True, type=int,
                    help="scale factor (must match the steps CSV)")
-    p.add_argument("--nsys-dir", required=True,
-                   help="base dir holding sf<N>/q<NN>_<label>.nsys-rep")
-    p.add_argument("--out", required=True,
-                   help="output PDF path")
-    p.add_argument("--top-n", type=int, default=8)
     p.add_argument("--cfg-mode", choices=["best", "default"], default="best",
                    help="`best`: per-step min over all cfgs (oracle). "
                         "`default`: always use the baseline cell.")
-    p.add_argument("--csv-out",
-                   help="optional path to dump the full kernel "
-                        "aggregation table for paper / spreadsheet use")
+    p.add_argument("--data-dir", default="tools/results/data",
+                   help="base dir for input/output CSVs (default: "
+                        "tools/results/data)")
+    p.add_argument("--nsys-base", default="/scratch/wubo/gamax_tpch_nsys",
+                   help="base dir holding "
+                        "<machine>/sf<N>/q<NN>_<label>.nsys-rep "
+                        "(default: /scratch/wubo/gamax_tpch_nsys)")
+    p.add_argument("--out-base", default="tools/results/pdf/tpch_bench",
+                   help="base output dir; figures land in "
+                        "<out-base>/<machine>/ (default: "
+                        "tools/results/pdf/tpch_bench)")
+    p.add_argument("--top-n", type=int, default=8)
     args = p.parse_args()
 
-    agg = aggregate_kernels(Path(args.steps), args.scale,
-                            Path(args.nsys_dir), cfg_mode=args.cfg_mode)
+    machine = args.machine
+    scale = int(args.scale)
+    mode = args.cfg_mode
+    display = MACHINE_NAMES.get(machine, machine)
+
+    steps_csv = (Path(args.data_dir) / machine / "tpch"
+                 / f"bench_steps_sf{scale}.csv")
+    if not steps_csv.exists():
+        sys.exit(f"error: missing steps CSV: {steps_csv}")
+    nsys_dir = Path(args.nsys_base) / machine
+
+    out_pdf = (Path(args.out_base) / machine
+               / f"tpch_top_kernels_{mode}_sf{scale}.pdf")
+    csv_out = (Path(args.data_dir) / machine / "tpch"
+               / f"top_kernels_{mode}_sf{scale}.csv")
+
+    agg = aggregate_kernels(steps_csv, scale, nsys_dir, cfg_mode=mode)
     if agg.empty:
         sys.exit("no kernel rows aggregated — check report paths + steps CSV")
 
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    plot_top_kernels(agg, out, args.scale, args.top_n,
-                     cfg_mode=args.cfg_mode)
+    out_pdf.parent.mkdir(parents=True, exist_ok=True)
+    plot_top_kernels(agg, out_pdf, scale, display, args.top_n,
+                     cfg_mode=mode)
 
-    if args.csv_out:
-        agg.to_csv(args.csv_out, index=False)
-        print(f"wrote {args.csv_out}")
+    csv_out.parent.mkdir(parents=True, exist_ok=True)
+    agg.to_csv(csv_out, index=False)
+    print(f"wrote {csv_out}")
 
 
 if __name__ == "__main__":

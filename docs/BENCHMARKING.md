@@ -13,6 +13,16 @@ build is portable across architectures, just retarget
 > Every command below is run from the worktree root unless stated
 > otherwise. Replace `/scratch/<you>` with your data path; everything
 > hangs off `TPCH_DATA_PATH`.
+>
+> Result files are organized per machine. Pick a short identifier for
+> the platform (`h100`, `gh200`, etc.) and pass it as `--machine` to
+> the plot scripts and `GAMAX_MACHINE=...` to `script/run_tpch_nsys.sh`.
+> All artefacts land under `tools/results/data/<machine>/tpch/`,
+> `tools/results/pdf/tpch_bench/<machine>/`, and
+> `/scratch/wubo/gamax_tpch_nsys/<machine>/sf<N>/`. The reference
+> machine for the numbers in `docs/TPCH_JOURNEY.md` is `h100` (one
+> NVIDIA H100 NVL); examples below use `<machine>` as a placeholder
+> — substitute your identifier on the new platform.
 
 ## 1. Prerequisites
 
@@ -168,16 +178,17 @@ Two outputs from one run: NVBench's per-cell GPU-time CSV (e2e) and
 a side-channel per-step CSV (breakdown).
 
 ```bash
-mkdir -p tools/results/data
+MACHINE=<machine>                                     # e.g. h100, gh200
+mkdir -p tools/results/data/$MACHINE/tpch
 TPCH_DATA_PATH=/scratch/<you> \
-GAMAX_BENCH_STEP_CSV=tools/results/data/bench_steps_sf10.csv \
+GAMAX_BENCH_STEP_CSV=tools/results/data/$MACHINE/tpch/bench_steps_sf10.csv \
 ./build/src/cuda/benchmarks/benchmark_tpch_ir \
   -a scale=10 \
   --min-samples 3 \
   --max-noise 5 \
   --timeout 8 \
   --quiet \
-  --csv tools/results/data/bench_e2e_sf10.csv
+  --csv tools/results/data/$MACHINE/tpch/bench_e2e_sf10.csv
 
 # Repeat for SF=30 (replace `10` → `30` in three places).
 ```
@@ -197,22 +208,26 @@ Knobs:
   pruned cheaply by the at-most-one-set rule + skip-by-presence. Of
   the rest, ~283 actually gather samples per scale.
 
-CSVs land in `tools/results/data/` (gitignored — your raw numbers).
-Save them somewhere persistent if you want to share.
+CSVs land in `tools/results/data/<machine>/tpch/` (gitignored — your
+raw numbers). Save them somewhere persistent if you want to share.
 
 ## 7. Plot
 
 ```bash
-cd tools/visualize
-python3 plot_tpch_bench.py \
-  --e2e   ../results/data/bench_e2e_sf10.csv \
-  --steps ../results/data/bench_steps_sf10.csv \
-  --out   ../results/pdf/tpch_bench
-# Repeat with sf30 CSVs.
+# From the worktree root.
+for sf in 10 30; do
+  python3 tools/visualize/plot_tpch_bench.py \
+    --machine <machine> \
+    --scale   $sf
+done
 ```
 
-Produces four figures per scale into `tools/results/pdf/tpch_bench/`,
-each as both PDF (paper-ready) and JPG (quick review):
+CSV inputs are derived from `tools/results/data/<machine>/tpch/`;
+overrides via `--data-dir <path>` and `--out <path>`.
+
+Produces four figures per scale into
+`tools/results/pdf/tpch_bench/<machine>/`, each as both PDF (paper-
+ready) and JPG (quick review):
 
 - `tpch_e2e_sf<N>.pdf` — 22 subfigures (2 rows × 11 cols), one bar
   per cell coloured by the axis it varies. Three-bar version
@@ -241,14 +256,14 @@ spread, we run `nsys profile` once with the bench fixture in
 `--profile` mode (single execution, no convergence loop):
 
 ```bash
-TPCH_DATA_PATH=/scratch/<you> \
-GAMAX_NSYS_EXECUTE=1 \
-./script/run_tpch_nsys.sh \
-  tools/results/data/bench_e2e_sf10.csv 10
-TPCH_DATA_PATH=/scratch/<you> \
-GAMAX_NSYS_EXECUTE=1 \
-./script/run_tpch_nsys.sh \
-  tools/results/data/bench_e2e_sf30.csv 30
+MACHINE=<machine>                                     # e.g. h100, gh200
+for sf in 10 30; do
+  TPCH_DATA_PATH=/scratch/<you> \
+  GAMAX_MACHINE=$MACHINE \
+  GAMAX_NSYS_EXECUTE=1 \
+  ./script/run_tpch_nsys.sh \
+    tools/results/data/$MACHINE/tpch/bench_e2e_sf$sf.csv $sf
+done
 ```
 
 The driver reads the e2e CSV from §6 (it's the source of truth for
@@ -258,9 +273,10 @@ baseline-vs-best e2e ratios, and skips queries with no axis spread
 
 | env var               | default                          | purpose                                            |
 |-----------------------|----------------------------------|----------------------------------------------------|
+| `GAMAX_MACHINE`       | _required_                       | machine subdir under `GAMAX_NSYS_OUT` (e.g. `h100`)|
 | `GAMAX_NSYS_EXECUTE`  | `0` (dry-run prints commands)    | set to `1` to actually run nsys                    |
 | `GAMAX_NSYS_GAP`      | `0.95`                           | profile all cells of queries with `best/baseline < GAP` |
-| `GAMAX_NSYS_OUT`      | `/scratch/wubo/gamax_tpch_nsys`  | output base dir; `sf<N>/q<NN>_<label>.nsys-rep` underneath |
+| `GAMAX_NSYS_OUT`      | `/scratch/wubo/gamax_tpch_nsys`  | output base; `<machine>/sf<N>/q<NN>_<label>.nsys-rep` underneath |
 
 Per cell: `--trace=cuda,nvtx --force-overwrite=true --stats=false`.
 The CUDA + NVTX trace combination captures kernel launches plus the
@@ -284,7 +300,7 @@ budget ~10 GiB of free disk under `GAMAX_NSYS_OUT`.
 Open one in the GUI:
 
 ```bash
-nsys-ui /scratch/<you>/gamax_tpch_nsys/sf10/q11_ejn-sort_merge_gfur.nsys-rep
+nsys-ui /scratch/wubo/gamax_tpch_nsys/<machine>/sf10/q11_ejn-sort_merge_gfur.nsys-rep
 ```
 
 For batch post-processing (e.g. extract top-kernel tables to CSV):
@@ -302,19 +318,23 @@ step optionally attributed to either the best-per-step cfg or the
 default cfg.
 
 ```bash
-cd tools/visualize
+# From the worktree root.
 for sf in 10 30; do
   for mode in best default; do
-    python3 plot_top_kernels.py \
-      --steps   ../results/data/bench_steps_sf$sf.csv \
-      --scale   $sf \
-      --nsys-dir /scratch/<you>/gamax_tpch_nsys \
-      --cfg-mode $mode \
-      --out      ../results/pdf/tpch_bench/tpch_top_kernels_${mode}_sf$sf.pdf \
-      --csv-out  ../results/data/top_kernels_${mode}_sf$sf.csv
+    python3 tools/visualize/plot_top_kernels.py \
+      --machine  <machine> \
+      --scale    $sf \
+      --cfg-mode $mode
   done
 done
 ```
+
+CSV inputs and PDF outputs are derived from the machine identifier:
+the steps CSV is read from `tools/results/data/<machine>/tpch/`, nsys
+reports from `/scratch/wubo/gamax_tpch_nsys/<machine>/`, and outputs
+land in `tools/results/pdf/tpch_bench/<machine>/` plus
+`tools/results/data/<machine>/tpch/`. Override with `--data-dir`,
+`--nsys-base`, `--out-base`.
 
 For each `(query, step_index)`:
 - `--cfg-mode best` picks the cfg that minimized `mean_ms` for that
@@ -333,8 +353,8 @@ iff their fully-demangled names are bit-equal.
 Outputs (PDF + JPG sidecar + CSV) per scale × mode:
 
 ```
-tools/results/pdf/tpch_bench/tpch_top_kernels_{best,default}_sf{10,30}.pdf
-tools/results/data/top_kernels_{best,default}_sf{10,30}.csv
+tools/results/pdf/tpch_bench/<machine>/tpch_top_kernels_{best,default}_sf{10,30}.pdf
+tools/results/data/<machine>/tpch/top_kernels_{best,default}_sf{10,30}.csv
 ```
 
 The CSV has `kernel_full, kernel_short, total_ns, total_ms,
@@ -349,16 +369,19 @@ Wall: ~10–15 s on first call per report (nsys generates the
 
 For a perf comparison or a paper figure, the canonical artefacts are:
 
-- **CSVs**: `bench_e2e_sf{10,30}.csv` + `bench_steps_sf{10,30}.csv`
-  + `top_kernels_{best,default}_sf{10,30}.csv`.
+- **CSVs** (from `tools/results/data/<machine>/tpch/`):
+  `bench_e2e_sf{10,30}.csv` + `bench_steps_sf{10,30}.csv` +
+  `top_kernels_{best,default}_sf{10,30}.csv`.
 - **Verify CSVs**: `sf{1,10,30}_verify.csv` from §5 (proves
   correctness on the new platform).
-- **Plots**: `tools/results/pdf/tpch_bench/tpch_*_sf{10,30}.pdf`
-  (e2e, breakdown, top-steps, kind-share, top-kernels {best,default}).
-- **A few representative `.nsys-rep`** files (full-set is ~120 MiB
-  on the reference machine but can grow on slower GPUs — cherry-pick
-  the queries with the biggest baseline-vs-best gap, e.g. Q3, Q5,
-  Q11, Q17 at SF=30).
+- **Plots** (from `tools/results/pdf/tpch_bench/<machine>/`):
+  `tpch_*_sf{10,30}.pdf` (e2e, breakdown, top-steps, kind-share,
+  top-kernels {best,default}).
+- **A few representative `.nsys-rep`** files from
+  `/scratch/wubo/gamax_tpch_nsys/<machine>/sf{10,30}/` (full-set is
+  ~120 MiB on the reference machine but can grow on slower GPUs —
+  cherry-pick the queries with the biggest baseline-vs-best gap, e.g.
+  Q3, Q5, Q11, Q17 at SF=30).
 - **Run metadata**: GPU model + driver, CUDA version, CMake config
   (`build/CMakeCache.txt` → grep `CMAKE_CUDA_ARCHITECTURES`,
   `CMAKE_BUILD_TYPE`, Arrow/Parquet versions), and the host's
