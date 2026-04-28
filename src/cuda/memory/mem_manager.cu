@@ -55,7 +55,14 @@ std::shared_ptr<MemoryManager> get_mm() {
             cudaGetLastError();
             std::size_t free = 0, total = 0;
             cudaMemGetInfo(&free, &total);
-            auto mem_pool_size = 0.95 * free;
+            // free - 256 MiB leaves a fixed scratch margin for the
+            // CUDA driver, NCCL, etc. Earlier 0.95×free squeezed the
+            // slab by ~4 GiB of unnecessary headroom; at SF=100 every
+            // GiB matters because column sizes (~4.5 GiB) approach the
+            // largest free hole the slab allocator can satisfy.
+            constexpr std::size_t kDriverReserve = std::size_t{256} << 20;
+            auto mem_pool_size = (free > kDriverReserve)
+                                 ? (free - kDriverReserve) : free;
             mm = std::make_shared<UserSpaceMM>(mem_pool_size);
         }
     }
@@ -141,11 +148,20 @@ UserSpaceMM::block_type UserSpaceMM::find_block(const size_t sz) {
     }
 
     size_t i = 0;
+    size_t total_free = 0, largest_free = 0;
     for(auto b = free_list.begin(); b != free_list.end(); b++, i++) {
         std::cout << "Block " << i << ": " << b->sz << " bytes\n";
+        total_free += b->sz;
+        if (b->sz > largest_free) largest_free = b->sz;
     }
     std::cout << "Peak memory usage: " << peak_mem_used << " bytes (" << peak_mem_used / 1024 / 1024 / 1024 << " GB)\n";
     std::cout << "Cuurent memory usage: " << mem_used << " bytes (" << mem_used / 1024 / 1024 / 1024 << " GB)\n";
+    std::cout << "Failed alloc: requested=" << sz << " bytes ("
+              << (sz + 1024*1024 - 1) / (1024*1024) << " MiB)"
+              << ", total_free=" << total_free
+              << " (" << total_free / (1024*1024) << " MiB)"
+              << ", largest_free=" << largest_free
+              << " (" << largest_free / (1024*1024) << " MiB)\n";
     throw std::bad_alloc();
 }
 
