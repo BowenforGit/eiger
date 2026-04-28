@@ -170,40 +170,63 @@ PlanPtr build_q1(const QueryBuilder& qb) {
         "l_quantity", "l_extendedprice", "l_discount", "l_tax",
     });
 
-    // Project derived columns so that the subsequent aggregate's
-    // bodies become pure ColRef references (what the emitter expects).
-    auto projected = li.project({
-        {"l_returnflag",     li.c("l_returnflag")},
-        {"l_linestatus",     li.c("l_linestatus")},
-        {"l_quantity",       li.c("l_quantity")},
-        {"l_extendedprice",  li.c("l_extendedprice")},
-        {"l_discount",       li.c("l_discount")},
+    // Filter on l_shipdate first — at SF=100 this drops the project's
+    // input from 600 M to ~570 M rows, but more importantly it consumes
+    // l_shipdate immediately so the project never has to carry an
+    // extra 2.4 GiB int32 column. Then project derived disc_price /
+    // charge so that the subsequent aggregate's bodies become pure
+    // ColRef references (what the emitter expects).
+    auto filtered = li.filter(
+        li.c("l_shipdate") <= lit(19980902));  // arbitrary cutoff
+    auto projected = filtered.project({
+        {"l_returnflag",     filtered.c("l_returnflag")},
+        {"l_linestatus",     filtered.c("l_linestatus")},
+        {"l_quantity",       filtered.c("l_quantity")},
+        {"l_extendedprice",  filtered.c("l_extendedprice")},
+        {"l_discount",       filtered.c("l_discount")},
         {"disc_price",
-            li.c("l_extendedprice") * (lit(1.0) - li.c("l_discount"))},
+            filtered.c("l_extendedprice") *
+            (lit(1.0) - filtered.c("l_discount"))},
         {"charge",
-            li.c("l_extendedprice") *
-            (lit(1.0) - li.c("l_discount")) *
-            (lit(1.0) + li.c("l_tax"))},
-        {"l_shipdate",       li.c("l_shipdate")},
+            filtered.c("l_extendedprice") *
+            (lit(1.0) - filtered.c("l_discount")) *
+            (lit(1.0) + filtered.c("l_tax"))},
     });
 
-    auto filtered = projected.filter(
-        projected.c("l_shipdate") <= lit(19980902));  // arbitrary cutoff
-
-    auto agg = filtered.aggregate(
+    // sum_qty / sum_base_price already cover l_quantity and
+    // l_extendedprice; running avg(l_quantity) and avg(l_extendedprice)
+    // alongside their sums forces the pre-groupby project to
+    // materialize each of those columns twice — at SF=100 that
+    // duplication blows ~8.8 GiB of intermediates and OOMs the slab.
+    // Keep one materialization per source column here, and recover
+    // avg_qty / avg_price downstream from sum/count.
+    auto agg = projected.aggregate(
         {"l_returnflag", "l_linestatus"},
         {
-            {"sum_qty",        AggKind::Sum, filtered.c("l_quantity")},
-            {"sum_base_price", AggKind::Sum, filtered.c("l_extendedprice")},
-            {"sum_disc_price", AggKind::Sum, filtered.c("disc_price")},
-            {"sum_charge",     AggKind::Sum, filtered.c("charge")},
-            {"avg_qty",        AggKind::Avg, filtered.c("l_quantity")},
-            {"avg_price",      AggKind::Avg, filtered.c("l_extendedprice")},
-            {"avg_disc",       AggKind::Avg, filtered.c("l_discount")},
+            {"sum_qty",        AggKind::Sum, projected.c("l_quantity")},
+            {"sum_base_price", AggKind::Sum, projected.c("l_extendedprice")},
+            {"sum_disc_price", AggKind::Sum, projected.c("disc_price")},
+            {"sum_charge",     AggKind::Sum, projected.c("charge")},
+            {"avg_disc",       AggKind::Avg, projected.c("l_discount")},
             {"count_order",    AggKind::CountAll, lit(int64_t{0})},
         });
 
-    auto sorted = agg.sort({asc("l_returnflag"), asc("l_linestatus")});
+    // Compute avg_qty / avg_price after the aggregate. count_order is
+    // int64; the division promotes to double automatically.
+    auto post = agg.project({
+        {"l_returnflag",   agg.c("l_returnflag")},
+        {"l_linestatus",   agg.c("l_linestatus")},
+        {"sum_qty",        agg.c("sum_qty")},
+        {"sum_base_price", agg.c("sum_base_price")},
+        {"sum_disc_price", agg.c("sum_disc_price")},
+        {"sum_charge",     agg.c("sum_charge")},
+        {"avg_qty",        agg.c("sum_qty")        / agg.c("count_order")},
+        {"avg_price",      agg.c("sum_base_price") / agg.c("count_order")},
+        {"avg_disc",       agg.c("avg_disc")},
+        {"count_order",    agg.c("count_order")},
+    });
+
+    auto sorted = post.sort({asc("l_returnflag"), asc("l_linestatus")});
     return sorted.plan();
 }
 
@@ -1107,21 +1130,34 @@ PlanPtr build_q18(const QueryBuilder& qb) {
 // ── Q19: Discounted Revenue ────────────────────────────────────────
 //
 // Three disjunctive branches over brand/container/qty/size with a
-// shared shipmode+shipinstruct prefix. Tests the IR's ability to
-// compose deep boolean structure.
+// shared shipmode+shipinstruct prefix. The shared prefix is highly
+// selective (~1% of lineitem) and depends only on lineitem columns,
+// so we apply it before the join — shrinking the build/probe input
+// and dropping the string columns from the join's gather payload.
+// The three brand/container/qty/size branches still need post-join
+// columns (p_brand, p_container, p_size + l_quantity), so they stay
+// as a post-join filter.
 PlanPtr build_q19(const QueryBuilder& qb) {
     auto l = qb.scan("lineitem",
         {"l_partkey", "l_quantity", "l_extendedprice", "l_discount",
          "l_shipmode", "l_shipinstruct"});
+    auto l_filt = l.filter(
+            string_op(StringOpKind::In, l.c("l_shipmode"),
+                      {"AIR", "AIR REG"})
+         && string_op(StringOpKind::Equal, l.c("l_shipinstruct"),
+                      {"DELIVER IN PERSON"}));
+    // Drop the string columns that only the pre-filter needed; the
+    // join + post-filter only need the four numeric/key columns.
+    auto l_proj = l_filt.project({
+        {"l_partkey",       l_filt.c("l_partkey")},
+        {"l_quantity",      l_filt.c("l_quantity")},
+        {"l_extendedprice", l_filt.c("l_extendedprice")},
+        {"l_discount",      l_filt.c("l_discount")},
+    });
+
     auto p = qb.scan("part",
         {"p_partkey", "p_brand", "p_container", "p_size"});
-    auto j = l.inner_join(p, l.c("l_partkey") == p.c("p_partkey"));
-
-    auto common =
-            string_op(StringOpKind::In, j.c("l_shipmode"),
-                      {"AIR", "AIR REG"})
-         && string_op(StringOpKind::Equal, j.c("l_shipinstruct"),
-                      {"DELIVER IN PERSON"});
+    auto j = l_proj.inner_join(p, l_proj.c("l_partkey") == p.c("p_partkey"));
 
     auto branch = [&](const char* brand,
                       std::vector<std::string> containers,
@@ -1136,7 +1172,6 @@ PlanPtr build_q19(const QueryBuilder& qb) {
             && (j.c("p_size") <= lit(sz_hi));
     };
     auto filter =
-        common && (
             branch("Brand#12",
                    {"SM CASE","SM BOX","SM PACK","SM PKG"}, 1.0, 11.0, 1, 5)
          || branch("Brand#23",
@@ -1144,7 +1179,7 @@ PlanPtr build_q19(const QueryBuilder& qb) {
                    10.0, 20.0, 1, 10)
          || branch("Brand#34",
                    {"LG CASE","LG BOX","LG PACK","LG PKG"},
-                   20.0, 30.0, 1, 15));
+                   20.0, 30.0, 1, 15);
     auto filtered = j.filter(std::move(filter));
     auto projected = filtered.project({
         {"disc_price",
