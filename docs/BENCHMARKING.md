@@ -150,27 +150,60 @@ right correctness gate before measuring perf.
 ```bash
 TPCH_DATA_PATH=/scratch/<you> \
   ./build/src/cuda/benchmarks/tpch_ir_axis_probe \
-  --scale 1  --verify --out /tmp/sf1_verify.csv  --quiet
+  --scale 1  --verify --out /tmp/sf1_verify.csv   --quiet
 TPCH_DATA_PATH=/scratch/<you> \
   ./build/src/cuda/benchmarks/tpch_ir_axis_probe \
-  --scale 10 --verify --out /tmp/sf10_verify.csv --quiet
+  --scale 10 --verify --out /tmp/sf10_verify.csv  --quiet
 TPCH_DATA_PATH=/scratch/<you> \
   ./build/src/cuda/benchmarks/tpch_ir_axis_probe \
-  --scale 30 --verify --out /tmp/sf30_verify.csv --quiet
+  --scale 30 --verify --out /tmp/sf30_verify.csv  --quiet
+TPCH_DATA_PATH=/scratch/<you> \
+  ./build/src/cuda/benchmarks/tpch_ir_axis_probe \
+  --scale 100 --verify --out /tmp/sf100_verify.csv --quiet
 ```
 
-Expected on the H100 reference:
-| Scale | pass | verify_ok | mismatch | fail | runtime |
-|--:|--:|--:|--:|--:|--:|
-| SF=1  | 283 | 283 | 0 | 65 | 28 s |
-| SF=10 | 283 | 283 | 0 | 65 | 51 s |
-| SF=30 | 279 | 279 | 0 | 69 | 113 s |
+Expected on the H100 reference (after the SF=100 readiness arc;
+see `docs/TPCH_JOURNEY.md`):
 
-`fail` cells are the documented unsupported shapes: multi-key/STRING
-groupby (pattern A/B in `docs/PARTITION_KERNEL_BUGS.md`) and 4 SF=30-
-only `partition_hash_join` build-bucket overflows (Q9/Q10/Q21). All
-pass cells must verify-OK; any `mismatch` is a real regression — open
-a bug.
+| Scale  | pass | verify_ok | mismatch | fail | total | runtime |
+|--:|--:|--:|--:|--:|--:|--:|
+| SF=1   | 277  | 277       | 0        | 65   | 342   |  29 s   |
+| SF=10  | 277  | 277       | 0        | 65   | 342   |  53 s   |
+| SF=30  | 273  | 273       | 0        | 69   | 342   | 117 s   |
+| SF=100 | 267  | 267       | 0        | 81   | 348   | 460 s   |
+
+All `pass` cells verify byte-for-byte against the parquet golden;
+any `mismatch` is a real regression — open a bug. The `fail` cells
+are documented unsupported shapes:
+
+- multi-key / STRING groupby on `sort_*` and `partition_*` algos
+  (pattern A/B in `docs/PARTITION_KERNEL_BUGS.md`),
+- `partition_hash_join` build-bucket overflows (4 cells at SF=30
+  on Q9/Q10/Q21; 8 cells at SF=100 on Q8/Q11/Q12/Q20 — the
+  cardinality-driven bucket-skew shifts which queries trip),
+- `Invalid type_id: 12` under `project=fuse` on date columns,
+- **SF=100 only:** all 13 cells of Q1 fail with `std::bad_alloc`
+  from the slab allocator — fragmentation OOM (root-caused,
+  blocked on AVG-without-explicit-ones-column; details in
+  `docs/TPCH_JOURNEY.md` §"SF=100 readiness").
+
+The SF=1/10/30 totals dropped from `348 → 342` after the SF=100
+arc landed: queries whose Aggregate previously synthesized a
+`Project(items=[..., lit(1)])` (which made the `project=fuse/nofuse`
+axis applicable) now synthesize a `Reorder` instead, so those
+project-axis variants are reclassified as `n/a` rather than
+running. Same coverage, just labelled differently.
+
+**Every SF=100 failure is a host-side C++ exception**
+(`std::bad_alloc`, `std::runtime_error` from a guard) — the bench
+fixture's pre-flight `try/catch` catches each one as
+`state.skip(...)` and the run continues. No cell observed at
+SF=100 produces a CUDA-level error in the default
+(`UserSpaceMM`) allocator path, so failures don't cascade. The
+one CUDA-level error worth knowing about — `cudaErrorInvalidDevice:
+invalid device ordinal` from `fill_n` inside CUB — is reachable
+via `--use-cuda-mm` at SF=100; don't use that flag at this scale
+(see §11).
 
 ## 6. End-to-end + per-step benchmark (NVBench)
 
@@ -459,6 +492,23 @@ For a perf comparison or a paper figure, the canonical artefacts are:
   `GAMAX_BENCH_SKIP_PREFLIGHT=1` to disable pre-flight under
   `nsys profile`. If you invoke `nsys` manually, set this env var.
   The §9 plotter normalizes by `NVTX Inst` so it works either way.
+- **At SF=100, Q1 (all 13 cells) and a handful of partition_hash
+  variants fail with `std::bad_alloc`.** Expected — host-side
+  throw from `UserSpaceMM`'s slab allocator when fragmentation
+  prevents a contiguous ≥4.5 GiB allocation. Caught by the bench
+  fixture's pre-flight `try/catch`, doesn't cascade, doesn't
+  corrupt the run. See `docs/TPCH_JOURNEY.md` §"SF=100 readiness"
+  for root cause + the residual AVG-ones-column blocker. **Do
+  NOT use `--use-cuda-mm` to "work around" this** — that path
+  has its own `cudaErrorInvalidDevice: invalid device ordinal`
+  bug from `fill_n` inside CUB at SF=100, and unlike the
+  default-allocator throws, a sticky CUDA error WILL cascade
+  across subsequent cells.
+- **All SF=100 axis-probe failures are host-side C++
+  exceptions.** No CUDA-level errors with the default allocator.
+  This means a partial run is recoverable (re-run with a fresh
+  `--tag`) and SLURM can interrupt without leaving the GPU in
+  an unusable state.
 
 ## Reference pointers
 
