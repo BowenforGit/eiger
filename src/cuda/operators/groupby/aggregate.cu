@@ -39,6 +39,13 @@ struct agg_output_data_type_helper {
 }
 
 gamax::data_type agg_output_data_type(aggregation_id const& agg_kind, gamax::data_type const& type) {
+    // COUNT_ALL's output is INT64 regardless of input type — it
+    // doesn't read an input column at all. Short-circuit before the
+    // type_dispatcher to avoid forcing callers to supply a valid
+    // `type` for this kind.
+    if (agg_kind == aggregation_id::COUNT_ALL) {
+        return gamax::data_type{gamax::type_id::INT64};
+    }
     return type_dispatcher(
         type,
         agg_output_data_type_helper{},
@@ -129,8 +136,20 @@ std::unique_ptr<gamax::table> aggregate(
     std::vector<std::unique_ptr<gamax::column>> final_columns;
 
     for (auto const& ar : agg_requests) {
-        auto col = input[ar.column_index];
         auto agg_kind = ar.agg_kind;
+        // COUNT_ALL doesn't read an input column — the result is the
+        // table's row count emitted as a single INT64. Handle it
+        // before touching `input[ar.column_index]` because callers
+        // pass column_index=-1 by convention.
+        if (agg_kind == gamax::groupby::aggregation_id::COUNT_ALL) {
+            auto res_col = gamax::make_column<int64_t>(1, false, stream);
+            int64_t n = static_cast<int64_t>(input.num_rows());
+            cudaMemcpyAsync(res_col->data<int64_t>(), &n, sizeof(int64_t),
+                            cudaMemcpyHostToDevice, stream);
+            final_columns.push_back(std::move(res_col));
+            continue;
+        }
+        auto col = input[ar.column_index];
         auto res_col = gamax::make_column(agg_output_data_type(agg_kind, col.type()), 1);
         if (agg_kind == gamax::groupby::aggregation_id::AVG) {
             dispatch_avg(col, res_col->mutable_view(), stream);

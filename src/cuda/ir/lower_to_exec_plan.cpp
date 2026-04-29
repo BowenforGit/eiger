@@ -286,13 +286,19 @@ gamax::groupby::aggregation_id to_physical_agg(AggKind k) {
         case AggKind::Avg: return gamax::groupby::aggregation_id::AVG;
         case AggKind::Count:
         case AggKind::CountAll:
-            // G4a (rule_count_to_sum) rewrites these to Sum(lit(1)).
-            // Reaching here means G4a is disabled in RuleConfig.
-            not_implemented("COUNT / COUNT(*) reached lowering — expected "
-                            "rule_count_to_sum (G4a) to have rewritten "
-                            "these to Sum(lit(1)). Enable the rule in "
-                            "RuleConfig or run apply_rules() before "
-                            "lowering.");
+            // Both lower to the phys COUNT_ALL kind. Spec-level
+            // Count(x) is "count non-null x"; we treat it the same
+            // because TPC-H data has no nulls and the engine doesn't
+            // propagate null masks anyway. A future null-aware engine
+            // would need to split these (Count via mask popcount,
+            // CountAll via row-count broadcast). The G4a rewrite
+            // (rule_count_to_sum) used to materialize a full-
+            // cardinality lit(1) column to feed Sum here — at SF=100
+            // that allocation OOMed the slab. Native COUNT_ALL skips
+            // the materialization entirely; the agg layer reuses the
+            // internal "ones" column already built for AVG's
+            // denominator.
+            return gamax::groupby::aggregation_id::COUNT_ALL;
         case AggKind::CountDistinct:
             // Only a `rule_count_distinct_to_distinct_plus_count`-
             // rewritten Aggregate lowers today (single CountDistinct as
@@ -322,24 +328,29 @@ std::pair<ValueId, gamax::size_type> materialize_keys_and_values(
     const Schema& in_schema, Lowering& lo)
 {
     // Decide between a pure-ColRef path (Reorder) and a mixed path
-    // (Project) based on whether any agg body is computed.
+    // (Project) based on whether any agg body is computed. Count /
+    // CountAll items don't materialize a body column at all (the phys
+    // layer computes them from the row count internally), so they
+    // never tip the decision toward Project.
     bool all_col_refs = true;
     for (const auto& ag : node.agg_items) {
-        if (ag.agg == AggKind::CountAll) continue;
+        if (ag.agg == AggKind::CountAll || ag.agg == AggKind::Count) continue;
         if (ag.body.kind != ExprKind::ColRef) { all_col_refs = false; break; }
     }
 
     // Build the materialized value's output schema: keys first, then
-    // one field per agg body (types pulled from the exprs).
+    // one field per non-CountAll agg body. CountAll/Count items
+    // produce an output column at the agg step but consume nothing
+    // from the materialized table, so they're absent here. The phys
+    // layer's COUNT_ALL handler synthesizes its result column from
+    // the internal "ones" column it builds for AVG's denominator.
     Schema mat_schema;
     for (auto kid : node.agg_keys) {
         auto ordinal = resolve_ordinal(in_schema, kid);
         mat_schema.append(in_schema[ordinal]);
     }
     for (const auto& ag : node.agg_items) {
-        if (ag.agg == AggKind::CountAll) {
-            not_implemented("COUNT(*)");
-        }
+        if (ag.agg == AggKind::CountAll || ag.agg == AggKind::Count) continue;
         Field f;
         f.id = ColumnId{};
         f.type = ag.body.type;
@@ -360,6 +371,9 @@ std::pair<ValueId, gamax::size_type> materialize_keys_and_values(
             ordinals.push_back(resolve_ordinal(in_schema, kid));
         }
         for (const auto& ag : node.agg_items) {
+            if (ag.agg == AggKind::CountAll || ag.agg == AggKind::Count) {
+                continue;
+            }
             ordinals.push_back(resolve_ordinal(in_schema, ag.body.col_ref));
         }
         lo.push_step(StepKind::Reorder, {input_id}, mat_id,
@@ -377,6 +391,9 @@ std::pair<ValueId, gamax::size_type> materialize_keys_and_values(
                 ordinal, in_schema[ordinal].type));
         }
         for (const auto& ag : node.agg_items) {
+            if (ag.agg == AggKind::CountAll || ag.agg == AggKind::Count) {
+                continue;
+            }
             items.emplace_back(lower_expr_to_tree(ag.body, in_schema));
         }
         exec::ProjectPayload mat_pl;
@@ -394,20 +411,23 @@ ValueId lower_aggregate(const PlanNode& node, Lowering& lo) {
     auto [mat_id, n_keys] =
         materialize_keys_and_values(node, input_id, in_schema, lo);
 
-    // Build AggSpecs. Specs' column ordinals reference the
-    // materialized value's columns: value-only indices run 0..N-1
-    // when passed to phys::group_by (keys/values are split at the
-    // Executor); they run n_keys..end-1 for phys::scalar_aggregate
-    // (the whole table is the "values" view).
+    // Build AggSpecs. Spec.column is val-relative (val is the part of
+    // the materialized table after the n_keys keys for groupby; for
+    // scalar aggregate, n_keys is 0 so val == whole table). For each
+    // non-CountAll agg, increment val_col so the indices line up with
+    // the columns we actually placed in the materialized table. For
+    // CountAll/Count, use -1 — the phys layer's COUNT_ALL handler
+    // ignores spec.column and emits an INT64 row-count column.
     std::vector<gamax::phys::AggSpec> specs;
     specs.reserve(node.agg_items.size());
-    for (gamax::size_type i = 0;
-         i < static_cast<gamax::size_type>(node.agg_items.size()); ++i)
-    {
-        specs.push_back({
-            n_keys + i,  // scalar-aggregate view index
-            to_physical_agg(node.agg_items[i].agg),
-        });
+    gamax::size_type next_val_col = 0;
+    for (const auto& ag : node.agg_items) {
+        if (ag.agg == AggKind::CountAll || ag.agg == AggKind::Count) {
+            specs.push_back({/*column=*/-1,
+                             gamax::groupby::aggregation_id::COUNT_ALL});
+        } else {
+            specs.push_back({next_val_col++, to_physical_agg(ag.agg)});
+        }
     }
 
     ValueId out_id = lo.next_value(node.output_schema);
@@ -415,12 +435,6 @@ ValueId lower_aggregate(const PlanNode& node, Lowering& lo) {
         lo.push_step(StepKind::ScalarAgg, {mat_id}, out_id,
                      exec::ScalarAggPayload{std::move(specs)});
     } else {
-        // Rebase specs onto the value-only view (0-indexed).
-        for (gamax::size_type i = 0;
-             i < static_cast<gamax::size_type>(specs.size()); ++i)
-        {
-            specs[i].column = i;
-        }
         exec::GroupByPayload pl;
         pl.n_keys = n_keys;
         pl.specs = std::move(specs);

@@ -653,6 +653,16 @@ table_ptr scalar_aggregate(gamax::table_view values,
         std::vector<gamax::column_ptr> cols;
         cols.reserve(specs.size());
         for (const auto& s : specs) {
+            // COUNT_ALL doesn't reference an input column (its
+            // spec.column is a sentinel); its output is INT64 [0]
+            // for an empty input. Short-circuit before touching
+            // values.get_column.
+            if (s.agg == gamax::groupby::aggregation_id::COUNT_ALL) {
+                cols.push_back(make_one_row_zero_column(
+                    gamax::data_type{gamax::type_id::INT64},
+                    ctx.stream));
+                continue;
+            }
             auto in_type  = values.get_column(s.column).type();
             auto out_type = gamax::groupby::agg_output_data_type(s.agg, in_type);
             cols.push_back(make_one_row_zero_column(out_type, ctx.stream));
@@ -682,6 +692,14 @@ table_ptr group_by(gamax::table_view keys,
                 keys.get_column(i).type(), ctx.stream));
         }
         for (const auto& s : specs) {
+            // COUNT_ALL doesn't reference an input column; output is
+            // INT64. Short-circuit before touching values.get_column.
+            if (s.agg == gamax::groupby::aggregation_id::COUNT_ALL) {
+                cols.push_back(make_zero_row_column(
+                    gamax::data_type{gamax::type_id::INT64},
+                    ctx.stream));
+                continue;
+            }
             auto in_type  = values.get_column(s.column).type();
             auto out_type = gamax::groupby::agg_output_data_type(s.agg, in_type);
             cols.push_back(make_zero_row_column(out_type, ctx.stream));

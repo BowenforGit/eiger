@@ -12,6 +12,13 @@ enum class aggregation_id {
     MIN,
     AVG,
     ANY,
+    // Count rows in each group (or in the whole input for the
+    // scalar-aggregate path). The agg request's `column_index` is
+    // ignored — pass any value (-1 by convention). Output type is
+    // INT64. The grouped path reuses the same internal "ones" column
+    // it already builds for AVG's denominator, so adding a
+    // COUNT_ALL alongside an AVG costs zero extra allocation.
+    COUNT_ALL,
     NOT_SUPPORTED_AGGREGATION
 };
 

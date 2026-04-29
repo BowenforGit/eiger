@@ -1,5 +1,6 @@
 #include "groupby.hpp"
 
+#include <algorithm>
 #include <cuda.h>
 #include <memory>
 #include <unordered_map>
@@ -144,7 +145,16 @@ std::unique_ptr<gamax::table> groupby_noskf(
     }
     
     bool has_avg = !avg_column_indices.empty();
-    bool needs_count = hint.agg_count || has_avg;
+    bool has_count_all = std::any_of(
+        agg_requests.begin(), agg_requests.end(),
+        [](auto const& r) {
+            return r.agg_kind == gamax::groupby::aggregation_id::COUNT_ALL;
+        });
+    // The internal "ones" column built for AVG's denominator also
+    // serves COUNT_ALL — so adding COUNT_ALL alongside AVG costs
+    // nothing extra. Allocate it whenever any of the three
+    // count-needers is present.
+    bool needs_count = hint.agg_count || has_avg || has_count_all;
     
     // Build internal aggregation requests: replace AVG with SUM, avoid duplicates
     std::vector<gamax::groupby::aggregation_request> internal_agg_requests;
@@ -156,7 +166,7 @@ std::unique_ptr<gamax::table> groupby_noskf(
     gamax::size_type internal_result_idx = 0; // Start after the key column
     for (size_t i = 0; i < agg_requests.size(); ++i) {
         auto const& req = agg_requests[i];
-        
+
         if (req.agg_kind == gamax::groupby::aggregation_id::AVG) {
             // Check if we already have a SUM for this column
             auto it = sum_result_col_index.find(req.column_index);
@@ -171,6 +181,13 @@ std::unique_ptr<gamax::table> groupby_noskf(
                 result_col_mapping.push_back(internal_result_idx);
                 internal_result_idx++;
             }
+        } else if (req.agg_kind == gamax::groupby::aggregation_id::COUNT_ALL) {
+            // COUNT_ALL maps to the shared internal count column,
+            // whose index is only known after the existing
+            // (AVG/SUM/MAX) requests are placed. Stash a placeholder
+            // and patch it up below once count_col_internal_idx is
+            // assigned.
+            result_col_mapping.push_back(/*placeholder*/ -1);
         } else {
             // SUM, MAX, etc. - add directly
             internal_agg_requests.push_back(req);
@@ -192,12 +209,18 @@ std::unique_ptr<gamax::table> groupby_noskf(
         for (gamax::size_type i = 0; i < val.num_columns(); ++i) {
             extended_val_cols.push_back(val.get_column(i));
         }
-        
-        // Create ones column and add to extended val
-        ones = gamax::make_column<int64_t>(val.num_rows(), false, stream);
+
+        // Use key.num_rows() to size the ones column. val.num_rows()
+        // returns 0 when val has 0 columns (e.g. an Aggregate whose
+        // only request is COUNT_ALL — common after the rule layer
+        // stops materializing the lit(1) body), which would zero
+        // out every count. Keys always carry the input row count.
+        const gamax::size_type n_rows = key.num_rows();
+        ones = gamax::make_column<int64_t>(n_rows, false, stream);
         // Fill with 1s
         auto ones_ptr = ones->data<int64_t>();
-        thrust::fill(thrust::cuda::par.on(stream), ones_ptr, ones_ptr + val.num_rows(), static_cast<int64_t>(1));
+        thrust::fill(thrust::cuda::par.on(stream), ones_ptr,
+                     ones_ptr + n_rows, static_cast<int64_t>(1));
         extended_val_cols.push_back(ones->view());
         
         // Add count aggregation request (SUM of ones column)
@@ -205,6 +228,19 @@ std::unique_ptr<gamax::table> groupby_noskf(
         internal_agg_requests.push_back(
             gamax::groupby::aggregation_request(val.num_columns(), gamax::groupby::aggregation_id::SUM));
         internal_result_idx++;
+    }
+
+    // Patch up COUNT_ALL placeholders now that count_col_internal_idx
+    // is assigned. Safe to do unconditionally: if no COUNT_ALL items
+    // were present, this loop is a no-op.
+    if (has_count_all) {
+        for (size_t i = 0; i < agg_requests.size(); ++i) {
+            if (agg_requests[i].agg_kind ==
+                gamax::groupby::aggregation_id::COUNT_ALL)
+            {
+                result_col_mapping[i] = count_col_internal_idx;
+            }
+        }
     }
     
     // Create extended val table view
@@ -297,14 +333,22 @@ std::unique_ptr<gamax::table> groupby_noskf(
         if (req.agg_kind == gamax::groupby::aggregation_id::AVG) {
             // Create AVG column (always double)
             auto avg_col = gamax::make_column<double>(num_groups, false, stream);
-            
+
             // Get the SUM column for this AVG
             auto sum_col_view = internal_result->get_column(internal_col_idx).view();
-            
+
             // Compute AVG = SUM / count
             compute_avg_from_sum(sum_col_view, count_col_view, avg_col->mutable_view(), stream);
-            
+
             final_columns.push_back(std::move(avg_col));
+        } else if (req.agg_kind == gamax::groupby::aggregation_id::COUNT_ALL) {
+            // COUNT_ALL items share the internal count column
+            // (already populated as SUM of the ones-broadcast). Copy
+            // it out so each COUNT_ALL output is independently
+            // owned.
+            final_columns.push_back(
+                internal_result->get_column(
+                    num_key_cols + count_col_internal_idx).deep_copy(stream));
         } else {
             // For SUM, MAX, etc., copy the column directly
             // TODO: check again, why copying?

@@ -31,17 +31,24 @@ namespace gamax::ir {
 // rather than changing the single-pass default.
 struct RuleConfig {
     // G4a. Rewrite `Aggregate` items whose kind is `Count` or
-    // `CountAll` into `Sum(lit(int64_t{1}))`. Semantically equivalent
-    // under TPC-H's no-NULL assumption; the backend has no native
-    // count aggregation, so this rule is what lets Q1/Q4/Q13/Q21/Q22
-    // lower at all.
+    // `CountAll` into `Sum(lit(int64_t{1}))`. Now disabled by
+    // default — the phys agg layer handles
+    // `aggregation_id::COUNT_ALL` natively (via the same internal
+    // ones-broadcast it already builds for AVG's denominator), so
+    // there's no need to materialize a full-cardinality lit(1)
+    // column. Lit-1 materialization at SF=100 was a 4.5 GiB
+    // allocation that pushed Q1 over the slab budget. Leaving the
+    // rule defined (just unhooked) so that it can still be enabled
+    // via RuleConfig if someone wants the old behavior — e.g. for
+    // null-aware semantics where `Count(x)` and `CountAll` need to
+    // diverge.
     //
-    // CountDistinct is handled by `rewrite_count_distinct` below —
-    // that rule emits a CountAll on top of a Distinct subtree, which
-    // this rule then catches on the same pass (G4a runs AFTER
-    // rewrite_count_distinct so the emitted CountAll is picked up in
-    // one apply_rules call).
-    bool rewrite_count_to_sum {true};
+    // CountDistinct is still rewritten by `rewrite_count_distinct`
+    // below, which emits a `CountAll` on top of a `Distinct` subtree.
+    // That CountAll now flows directly through to the phys layer's
+    // native COUNT_ALL handler instead of being further rewritten
+    // by G4a.
+    bool rewrite_count_to_sum {false};
 
     // Rewrite a single-item Aggregate with `CountDistinct` into
     // Aggregate(keys=K, aggs=[CountAll], input=Distinct(K∪{x})).
