@@ -55,12 +55,14 @@ std::shared_ptr<MemoryManager> get_mm() {
             cudaGetLastError();
             std::size_t free = 0, total = 0;
             cudaMemGetInfo(&free, &total);
-            // free - 256 MiB leaves a fixed scratch margin for the
+            // free - 128 MiB leaves a fixed scratch margin for the
             // CUDA driver, NCCL, etc. Earlier 0.95×free squeezed the
-            // slab by ~4 GiB of unnecessary headroom; at SF=100 every
-            // GiB matters because column sizes (~4.5 GiB) approach the
-            // largest free hole the slab allocator can satisfy.
-            constexpr std::size_t kDriverReserve = std::size_t{256} << 20;
+            // slab by ~4 GiB of unnecessary headroom; 256 MiB still
+            // left Q1 SF=100 ~kB short of fitting after Project
+            // aliasing. 128 MiB is enough scratch in practice
+            // (cudaMalloc itself uses much less) and gives the slab
+            // another 128 MiB of working space.
+            constexpr std::size_t kDriverReserve = std::size_t{128} << 20;
             auto mem_pool_size = (free > kDriverReserve)
                                  ? (free - kDriverReserve) : free;
             mm = std::make_shared<UserSpaceMM>(mem_pool_size);

@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 
 #include <cuda_runtime_api.h>
@@ -232,6 +233,103 @@ Slot step_dispatch(
         } else {
             // Shared subexpression — keep the upstream alive for
             // its other consumers and pay the gather cost here.
+            slot.owned = run_step(s, live, source_resolver, ctx);
+        }
+    } else if (s.kind == StepKind::Project) {
+        // Mixed-alias Project: ColRef items pass through by *moving*
+        // the matching column out of upstream's owned table; only
+        // non-trivial items (Computed ExprTree, Predicate, Substring)
+        // run through phys::project. Saves the redundant
+        // copy_any_column on every passthrough column — at SF=100
+        // this is multiple GiB per step on Q1-shaped wide projects.
+        //
+        // Conditions to take the alias path:
+        //   1. Last consumer (DAG safety; mirrors Reorder).
+        //   2. Upstream is pure-owned (`owned` set, `view` default-
+        //      empty). SourceTable upstreams (no `owned`) and
+        //      Reorder-aliased upstreams (explicit view) fall back.
+        //      That naturally protects source-table data — Scan
+        //      upstreams always copy because there's nothing to
+        //      move from.
+        //
+        // Other subtleties:
+        //   * If two ColRef items reference the same source ordinal,
+        //     only the first can be moved; later refs go through
+        //     phys::project's existing copy path. Tracked via a
+        //     small seen-ordinals set.
+        //   * phys::project must run on the *intact* upstream view —
+        //     it reads source columns by ordinal, and a moved-out
+        //     slot is nullptr. So we evaluate first, *then* move.
+        const auto& pl = std::get<ProjectPayload>(s.payload);
+        auto it = live.find(s.inputs.at(0));
+        if (it == live.end()) exec_error(
+            "Project: missing input value " +
+            std::to_string(s.inputs.at(0)));
+        const bool is_last_consumer =
+            plan.values[s.inputs.at(0)].last_used_step == step_index;
+        const bool upstream_pure_owned =
+            it->second.owned && it->second.view.num_columns() == 0;
+
+        if (is_last_consumer && upstream_pure_owned) {
+            const auto n = pl.items.size();
+            std::vector<gamax::column_ptr> output(n);
+
+            // Pass 1: split items into "moved" (first-ref ColRef) vs
+            // "remaining" (everything else, including duplicate
+            // ColRefs and all non-trivial items).
+            std::vector<gamax::phys::ProjectItem> remaining;
+            std::vector<size_t> remaining_positions;
+            std::vector<size_t> moved_positions;
+            std::vector<gamax::size_type> moved_ordinals;
+            std::unordered_set<gamax::size_type> seen_ordinals;
+            remaining.reserve(n);
+            remaining_positions.reserve(n);
+            moved_positions.reserve(n);
+            moved_ordinals.reserve(n);
+
+            for (size_t i = 0; i < n; ++i) {
+                const auto& item = pl.items[i];
+                if (std::holds_alternative<gamax::expression::ExprTree>(item)) {
+                    const auto& e =
+                        std::get<gamax::expression::ExprTree>(item);
+                    if (e.is_column_ref()) {
+                        const auto src = e.get_column_index();
+                        if (seen_ordinals.insert(src).second) {
+                            moved_positions.push_back(i);
+                            moved_ordinals.push_back(src);
+                            continue;
+                        }
+                    }
+                }
+                remaining.push_back(item);
+                remaining_positions.push_back(i);
+            }
+
+            // Pass 2: evaluate the non-trivial items via phys::project
+            // on the *intact* upstream view. Run before any moves so
+            // the view sees all source columns.
+            if (!remaining.empty()) {
+                gamax::table_view in_view = it->second.owned->view();
+                auto sub = gamax::phys::project(
+                    in_view, remaining, ctx, pl.hint);
+                for (size_t k = 0; k < remaining_positions.size(); ++k) {
+                    output[remaining_positions[k]] = sub->remove_column(0);
+                }
+            }
+
+            // Pass 3: move ColRef columns out of upstream's owned
+            // table into their target output positions. release_column
+            // leaves a nullptr behind, preserving the column indices
+            // that earlier-evaluated kernels (in pass 2) referenced.
+            for (size_t k = 0; k < moved_positions.size(); ++k) {
+                output[moved_positions[k]] =
+                    it->second.owned->release_column(moved_ordinals[k]);
+            }
+
+            slot.owned = std::make_unique<gamax::table>(std::move(output));
+        } else {
+            // Shared subexpression or non-pure-owned upstream — fall
+            // back to the original full-copy phys::project behaviour.
             slot.owned = run_step(s, live, source_resolver, ctx);
         }
     } else {
