@@ -228,15 +228,15 @@ rewrites — `COUNT → SUM(1)`, non-equi-in-inner-join lifting,
 multi-key decomposition — as distinct from *backend quirks*,
 which live inside `phys::*`.
 
-### `RuleConfig` knobs (all default-on)
+### `RuleConfig` knobs (most default-on)
 
-| Rule | Field | Target | Effect |
-|---|---|---|---|
-| **CountDistinct rewrite** | `rewrite_count_distinct` | single-agg `Aggregate` with `CountDistinct` over a ColRef body | emit `Aggregate(K, [CountAll], Distinct(K∪{x}))`, preserving the original agg-output ColumnId; runs BEFORE G4a. |
-| **G4a** | `rewrite_count_to_sum` | `Aggregate` items with `Count` / `CountAll` | rewrite the body to `Sum(lit(int64_t{1}))`; `output_schema` unchanged. |
-| **G7** | `split_non_equi_join_conditions` | **Inner** join whose ON is a conjunction with at least one non-equi clause | lift non-equi residuals into a post-join `Filter`; keep pure-equi clauses in the join. |
-| **G1-rule** | `split_multi_key_equi_join` | **Inner** join whose ON is 2+ pure-equi conjuncts | keep first equi in the join, lift the rest into a post-join `Filter`. |
-| **Scan pushdown** | `scan_column_pushdown` | `Scan` | drop `scan_columns` entries whose output ColumnId is not live at this Scan's output; narrow the Scan's `output_schema` to match. |
+| Rule | Field | Default | Target | Effect |
+|---|---|---|---|---|
+| **CountDistinct rewrite** | `rewrite_count_distinct` | on | single-agg `Aggregate` with `CountDistinct` over a ColRef body | emit `Aggregate(K, [CountAll], Distinct(K∪{x}))`, preserving the original agg-output ColumnId. Runs BEFORE G4a (which is now off, so the emitted `CountAll` flows directly to the phys layer's native `aggregation_id::COUNT_ALL`). |
+| **G4a** | `rewrite_count_to_sum` | **off** | `Aggregate` items with `Count` / `CountAll` | (disabled) Used to rewrite the body to `Sum(lit(int64_t{1}))`. Disabled in favor of native `aggregation_id::COUNT_ALL` in the phys agg layer — the Sum(lit(1)) rewrite forced a full-cardinality int64 column to be materialized (4.5 GiB at SF=100 for Q1) just to be summed. The rule body is preserved in the source as a fallback for null-aware semantics that need to split `Count(x)` from `CountAll`. |
+| **G7** | `split_non_equi_join_conditions` | on | **Inner** join whose ON is a conjunction with at least one non-equi clause | lift non-equi residuals into a post-join `Filter`; keep pure-equi clauses in the join. |
+| **G1-rule** | `split_multi_key_equi_join` | on | **Inner** join whose ON is 2+ pure-equi conjuncts | keep first equi in the join, lift the rest into a post-join `Filter`. |
+| **Scan pushdown** | `scan_column_pushdown` | on | `Scan` | drop `scan_columns` entries whose output ColumnId is not live at this Scan's output; narrow the Scan's `output_schema` to match. |
 
 Ordering within `apply_local_rules`: CountDistinct rewrite runs
 FIRST so the emitted `CountAll` can be picked up by G4a on the
@@ -336,6 +336,23 @@ Notable special cases:
   (mixed / computed), then emits `ScalarAgg` (0 keys) or
   `GroupBy` (≥1 keys) consuming that intermediate. Decouples
   ColumnId resolution from the phys layer's positional expectation.
+  Two refinements live here:
+  * **ColRef-body dedup** (`dedup_agg_bodies`): if multiple agg
+    items have ColRef bodies pointing at the same `ColumnId`,
+    only the first emits a fresh body column; subsequent items
+    share its `body_position`. This pairs with `groupby_noskf`'s
+    existing AVG-reuses-SUM dedup at the phys layer — same
+    `column_index` → same internal SUM result. So Q1's natural
+    `sum(l_quantity) + avg(l_quantity) + avg(l_disc) + sum(...)`
+    form materializes l_quantity exactly once.
+  * **CountAll / Count** items are routed directly to the phys
+    layer's `aggregation_id::COUNT_ALL` — `to_physical_agg`
+    maps both to the same kind. The materialize step emits no
+    body column for them (count comes from the internal "ones"
+    column the phys layer already builds for AVG's denominator),
+    and `lower_aggregate` sets `spec.column = -1` (sentinel) on
+    those agg specs so phys::group_by knows not to read an
+    input column.
 - **Inner join** assembles single-key equi (G1-rule already
   split multi-key); emits `EqJoin` followed by a `Reorder` that
   restores the IR-declared column order.
@@ -395,14 +412,17 @@ printing and occasional switch-based lookups.
    1. SourceTable special case: `Slot.view = source_resolver(name,
       cols)` — aliased caller-owned view, Executor doesn't take
       ownership.
-   2. Everything else: `Slot.owned = run_step(step, live, ...)`.
-   3. **Value lifecycle.** After the step runs, drop any input
+   2. Reorder / Project special cases: see "Aliasing fast paths"
+      below.
+   3. Everything else: `Slot.owned = run_step(step, live, ...)`.
+   4. **Value lifecycle.** After the step runs, drop any input
       `live` entry whose `last_used_step ≤ current_step_index`.
       Skip source views (aliased). Returned blocks re-enter the
       memory pool's free list; no `cudaFree` in the hot path.
 2. At end: move the final Value's `owned` table out to the caller
-   (or materialize the aliased source view via a pure Reorder, if
-   the entire plan was a single Scan).
+   (or materialize the aliased view via a pure Reorder, if the
+   final Slot has an explicit view from a SourceTable or aliasing
+   step).
 
 **Table ownership boundaries:**
 
@@ -412,6 +432,60 @@ printing and occasional switch-based lookups.
   `ValueId` in a `live` map; drops it as soon as the current step
   index passes each Value's `last_used_step`.
 - **Final result** — `std::move`'d out of the `live` map.
+
+**Slot states.** A `Slot` carries `unique_ptr<table> owned` and
+`table_view view`. The two fields define three valid states:
+
+| State | `owned` | `view` | When | view_of() returns |
+|---|---|---|---|---|
+| SourceTable | null | set (≥1 col) | resolver hand-off | `view` |
+| Standard | set | default (0 cols) | most ops; produced by `run_step` | `owned->view()` |
+| Aliasing | set | set (≥1 col) | Reorder / mixed-Project alias paths | `view` (pinned by `owned`) |
+
+`view_of()` prefers an explicit view (>=1 column) over
+`owned->view()`. Backwards-compatible because non-aliasing steps
+leave `view` default-constructed (0 cols) and fall through to
+`owned->view()`.
+
+### Aliasing fast paths
+
+Two step kinds get special-cased in `step_dispatch` to skip the
+gather/copy that the corresponding `phys::*` call would normally
+do, at the cost of pinning their upstream's data slightly longer.
+
+**Reorder.** When `plan.values[in].last_used_step == step_index`
+(i.e. this Reorder is the upstream's last consumer) AND the
+upstream Slot is pure-owned (has `owned`, no explicit `view`),
+move the upstream's `owned` table into the Reorder's Slot and
+build the Reorder's `view` as `select_columns(ordinals)` over the
+moved-in table. Output is the same `view` downstream consumers
+would have read from a copying `phys::reorder`, but the gather
+kernel doesn't run and no allocations happen.
+
+If the upstream has further consumers (DAG share — fairly rare in
+TPC-H but the lowering is permitted to share), or the upstream
+is a SourceTable (no `owned` to move) or itself an aliasing
+Reorder (would need ordinal remapping that the Slot doesn't
+currently carry), fall back to `phys::reorder`'s gather copy.
+Both fallback cases preserve correctness; they just pay the copy.
+
+**Project.** Same shape as Reorder but mixed: the agg items are
+classified into ColRef passthroughs vs. non-trivial (Computed
+ExprTree / Predicate / Substring). The non-trivial subset goes
+through `phys::project` on the *intact* upstream view (must run
+first — it reads source columns by ordinal); then the ColRef
+columns are *moved* out of upstream's owned table directly into
+their target output positions. Same single-consumer + pure-owned
+guards as Reorder; same fallback to today's full-copy
+`phys::project` when either fails. Two ColRef items hitting the
+same source ordinal: first ref moves, subsequent refs go through
+`phys::project`'s copy path, deduped via a small seen-set.
+
+The structural consequence of "alias only when upstream is
+pure-owned" is that the database convention "scan output is
+untouched" is enforced *for free*: SourceTable upstreams have no
+`owned`, so Project-after-Scan always copies. No config flag
+needed.
 
 **Debug hook.** If `GAMAX_PHYS_DEBUG` lists a kind (case-
 insensitive, comma-separated), the executor prints a summary +
@@ -462,6 +536,22 @@ table_ptr left_outer_join(L, lkeys, R, rkeys, ctx); // throws "not yet implement
   because `thrust::inclusive_scan` on a zero-element range
   raised `cudaErrorInvalidDevice` on some CUDA/thrust combos
   during temp-storage sizing.
+- **Native `aggregation_id::COUNT_ALL`.** The agg layer's
+  `aggregation_id` enum has a `COUNT_ALL` kind that produces
+  per-group row counts (or, in the scalar-aggregate path, a
+  single INT64 = input row count). The grouped path reuses the
+  internal "ones" column that `groupby_noskf` already builds for
+  AVG's denominator: when `has_avg || has_count_all || hint.agg_count`,
+  one ones-column + one internal SUM serves all three purposes.
+  COUNT_ALL agg requests pass `column_index = -1` (sentinel —
+  not read; the kind alone disambiguates) and are routed to the
+  count column at result-build time. `agg_output_data_type`
+  short-circuits COUNT_ALL → INT64 before its `type_dispatcher`
+  so callers don't need a valid input type. Critical sizing
+  detail in `groupby_noskf`: `ones` is allocated by
+  `key.num_rows()`, not `val.num_rows()` — `val` has 0 columns
+  when COUNT_ALL is the only agg with no other val-bearing
+  sibling, and `val.num_rows()` returns 0 in that case.
 - **Tight output bounds.** `ieq_hash_join` previously allocated
   1B-row tid buffers by default. Now calls `multiset::count`
   first (when no tight hint is supplied), then allocates tids at

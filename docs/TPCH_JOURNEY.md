@@ -830,10 +830,190 @@ breakage:
   measuring the GFTR-equivalent narrow path. Worth flagging
   if you ever need a clean GFUR vs GFTR comparison.
 
+## SF=100 readiness — engine optimizations (2026-04-28..29)
+
+The SF=100 axis probe (`tpch_ir_axis_probe --scale 100 --verify`)
+turned out to surface fragmentation OOMs rather than capacity
+problems on its own. The 88 GiB user-space slab couldn't satisfy
+contiguous-allocation requests of 4–5 GiB even when 10–13 GiB of
+total free space remained. Pulling on that thread led to a chain
+of engine-level optimizations that pay off across all scales,
+not just SF=100.
+
+**SF=100 probe baseline (2026-04-28).** 267 / 348 non-skipped
+cells pass · 81 fail · 0 mismatches · 460 s wall. The 81 fails
+break down as: 21 multi-key/STRING groupby on `sort_*`/`partition_*`
+algos (pre-existing limitations, same as SF=30); 18 PARTITION
+groupby on multi-col / STRING keys (same); 15 `Invalid type_id: 12`
+under `project=fuse` (pre-existing); 8 `partition_hash_join`
+build-bucket overflows on Q8/Q11/Q12/Q20 (different queries
+than SF=30 — the cardinality-driven bucket skew shifts);
+**13 `std::bad_alloc` on Q1**, the new SF=100-specific failure.
+
+### Q19 plan rewrite (commit `09021a0`)
+
+Q19's predicate factors as `shipmode ∈ {AIR,AIR REG} ∧ shipinstruct
+= 'DELIVER IN PERSON' ∧ (three brand/container/qty/size disjunctive
+branches)`. The shared shipmode/shipinstruct prefix is highly
+selective (~0.3% of lineitem at SF=100) and depends only on
+lineitem columns. The original plan applied it post-join, which
+forced the eq-join to build/probe over the full 600 M lineitem
+rows.
+
+Pushed the prefix down to a pre-scan filter; followed by a project
+that drops `l_shipmode` / `l_shipinstruct` from the join payload.
+The disjunctive branches still touch both sides post-join and stay
+post-join. Wall: SF=10 baseline 70.93 → 19.84 ms (3.6×); SF=30
+baseline 215 → 31 ms (~7×). The SF=30 hash_gfur baseline now
+beats every alternative the operator-hint sweep had previously
+found at SF=30 — the filter pushdown saves so much that the
+default join algo wins outright.
+
+### Q1 OOM root-cause and the four engine fixes that came out of it
+
+`Q1 SF=100 --verify` failed with a 4514 MiB allocation that the
+slab couldn't satisfy. The OOM-dump diagnostic (`mem_manager.cu`,
+extended to print requested-size + total/largest free; commit
+`1d84c77`) made the failure mode visible: 6 GiB free across 8
+holes, largest 2.3 GiB, so any single 4.5 GiB column allocation
+is unsatisfiable. NSight Systems profiling showed the failing
+step was step[3] — the synthetic Project before GroupBy that the
+lowering inserts via `materialize_keys_and_values`.
+
+Step[3] existed because the G4a rule (`rule_count_to_sum`)
+rewrites `count_all(*)` to `Sum(lit(int64_t{1}))`, which has a
+non-ColRef body. `materialize_keys_and_values` then picked the
+Project path (mixed bodies) instead of Reorder, materializing
+8 fresh ~4.5 GiB columns at filter cardinality. Fixing this
+turned into four cumulative engine changes:
+
+**1. Aliasing Reorder (commit `d32f5fe`).** `phys::reorder` used
+to gather every requested ordinal into a fresh column —
+`copy_any_column` per ordinal. But `Reorder` is purely a
+column-set / column-order rearrangement; it doesn't transform
+data. Refactored the executor so that when a Reorder step is
+its upstream's last consumer (`plan.values[in].last_used_step ==
+step_index`), we *move* the upstream's `owned` table into the
+Reorder slot and present a `select_columns` view of it. Slot's
+`view` field becomes load-bearing for non-SourceTable steps for
+the first time; `view_of()` prefers an explicit view (>=1 column)
+over `owned->view()`. DAG-shared upstreams fall back to the
+gather copy. Multi-join queries benefit by 1.05–1.45× on
+post-join reshape (Q2 1.36×, Q10 1.45× at SF=10).
+
+**2. Aliasing Project (commit `fe41631`).** Same trick, applied
+to mixed Projects. When the Project is single-consumer and the
+upstream is pure-owned, classify items into ColRef passthroughs
+vs. non-trivial (Computed / Predicate / Substring); evaluate the
+non-trivial subset via a slimmed `phys::project` call on the
+intact upstream view, then *move* the ColRef columns out of
+upstream's owned table into the output's column slots. The
+non-trivial pass runs *first* so the view it sees is unmodified.
+Two ColRef items hitting the same source ordinal: first ref
+moves, subsequent refs go through the original copy path
+(tracked via a small seen-set). SourceTable upstreams have no
+`owned` to move, so the alias path naturally falls back to copy
+for Project-after-Scan — preserving the database convention
+"scan output is untouched" without a config flag. Q1 SF=10
+baseline 31.09 → 22.78 ms (1.36×); the wide pre-groupby Project
+is mostly ColRef passthroughs.
+
+**3. Native `aggregation_id::COUNT_ALL` (commit `c253888`).**
+The G4a rewrite was disabled by default; `to_physical_agg` now
+maps both `AggKind::Count` and `CountAll` to a new phys agg
+kind. Phys side: `groupby_noskf` already builds an internal
+"ones" column for AVG's denominator (`needs_count = hint.agg_count
+|| has_avg`), so we just thread `has_count_all` through the same
+flag — no new allocation. COUNT_ALL items skip
+`internal_agg_requests` entirely and are routed to the count
+column at result-build time via a placeholder + patch-up pattern.
+`scalar_aggregate` short-circuits COUNT_ALL to an INT64 [N]
+column directly (no input column access). Critical fix in
+`groupby_noskf`: size the ones column by `key.num_rows()` instead
+of `val.num_rows()` — when COUNT_ALL is the only agg with no AVG
+sibling, `val` has 0 columns and `val.num_rows()` returns 0,
+which would zero out every count. `materialize_keys_and_values`
+emits no body column for CountAll/Count items; `lower_aggregate`
+sets `spec.column = -1` (sentinel) for them. Lowering's previous
+"rebase specs onto value-only view" loop is gone — specs are now
+built val-relative directly. Disabled `rule_count_to_sum` in
+`RuleConfig` (kept the rule defined for null-aware-future use).
+
+**4. Materialize-time ColRef body dedup (commit `3c60a14`).**
+`materialize_keys_and_values` used to emit one body column per
+agg item, even when two items targeted the same source. Q1's
+natural form has `sum(l_quantity) + avg(l_quantity)` — the same
+l_quantity got materialized twice (a 4.4 GiB cost at SF=100).
+`groupby_noskf`'s existing AVG-reuses-SUM dedup at the algorithm
+layer was a no-op because the materialize step had already
+made them physically distinct columns at different
+`column_index`. New `dedup_agg_bodies()` walks `agg_items` once,
+builds a `ColumnId → body-position` map; subsequent ColRef
+references reuse the prior position. Computed bodies are not
+deduped (no expression-equivalence test attempted). The two
+layers now coordinate: same `body_position` → same `spec.column`
+→ algorithm-layer dedup fires. Q1's IR reverts to the natural
+three-avg form without the post-aggregate-divide hack.
+
+### Net
+
+SF=1 / SF=10 / SF=30 axis probes match prior baselines cell-for-
+cell (277 / 277 / 273 pass, 0 mismatches). The 6-cell delta vs the
+283 / 283 / 279 prior counts is cosmetic — queries whose Aggregate
+previously synthesized a `Project(items=[..., lit(1)])` (forcing
+the project axis to apply) now synthesize a `Reorder` instead, so
+the project-axis labels for those queries are `n/a` rather than
+`fuse`/`nofuse`. Same coverage; just labelled differently.
+
+SF=10 baselines, head-to-head against pre-work HEAD on the same
+machine: 21 / 22 queries faster, 1 within noise (Q11 0.98×), 0
+regressed. Total wall 947 → 791 ms (1.20×) — Q19's 5× pulls
+most of that, but Q1 1.07×, Q2 1.36×, Q7 1.26×, Q10 1.45×,
+Q12 1.24×, Q14 1.24×, Q15 1.24× are all genuine engine wins.
+
+**Q1 SF=100 still doesn't fit.** The four fixes above shift the
+failing allocation from step[3] (the synthetic Project's lit-1
+column) to step[4] (the GroupBy's `ones` column for AVG's
+denominator) — the same 4.5 GiB shape, same fragmentation wall.
+The lit-1 cost is genuinely gone, but Q1 has `avg(l_discount)`,
+which independently requires a full-cardinality ones column for
+the AVG denominator. The per-group count is implicit in the
+hash/sort/partition group structure; eliminating the explicit
+ones column is an algorithm-level change inside each groupby
+implementation. Out of scope for this iteration.
+
+### Memory pool sizing knobs
+
+`UserSpaceMM` was sized at `0.95 × cudaMemGetInfo's free`. On a
+94 GiB H100 NVL that's ~4.7 GiB of headroom the slab didn't need;
+the explicit 256 MiB margin (later 128 MiB) covers cudaMalloc /
+NCCL scratch with room to spare. The OOM-dump diagnostic now
+prints requested-size + total/largest free alongside the existing
+free-list dump, so future fragmentation OOMs are diagnosable
+without instrumentation. Both changes ship with `1d84c77` /
+`fe41631`.
+
+### What didn't work, briefly
+
+- **Bumping pool to 0.99×free / 1.0×free.** Made the failing
+  allocation 88 bytes short instead of 800 MiB short. The
+  limiting hole was bounded by adjacent allocations, not by
+  the pool tail.
+- **Pre-projecting `count_one` (a lit-1 column in step[2])** to
+  force a Reorder instead of Project at step[3]. Reorder COPIES
+  by default — at the time. Net effect was just shifting the
+  4.5 GiB allocation from step[3] to step[2]. Subsumed by the
+  Reorder-aliasing change.
+- **`--use-cuda-mm` at SF=100.** Fails with `cudaErrorInvalidDevice:
+  invalid device ordinal` from `fill_n` inside CUB. Separate
+  CudaMM bug, not pursued.
+
 ## What's next (if you're picking up the work)
 
 Nothing is "required" for TPC-H. The engine is complete for that
-workload. Strong next directions, in rough priority:
+workload at SF=10 and SF=30; SF=100 is one algorithm-level fix
+away (the AVG-without-explicit-ones-column path). Strong next
+directions, in rough priority:
 
 1. **Partition-kernel bug fixes.** `partition_hash_join`'s shared-
    memory OOB is currently host-side-guarded; the kernel itself
@@ -845,11 +1025,17 @@ workload. Strong next directions, in rough priority:
    which is acceptable but limits what the operator-axis sweep
    can compare.
 
-2. **SF100 readiness.** Q5's join-order fix was manual; a join-
-   order optimizer would be the cleanest way to make arbitrary
-   future queries scale to SF100 and beyond. Also: the 88 GiB
-   pool is a hard ceiling — spilling intermediates to host
-   memory is a precondition for SF100.
+2. **AVG-without-explicit-ones for SF=100 readiness.** The hash /
+   sort / partition groupby implementations build a full-cardinality
+   `ones` column to feed AVG's denominator (now also COUNT_ALL,
+   shared between them). For Q1 SF=100 that's 4.5 GiB —
+   the single remaining contiguous allocation that the slab
+   can't satisfy. Per-group counts are already implicit in the
+   group structure (cuco bucket counters / sort-group boundaries
+   / partition counts); exposing them as a side output would
+   eliminate the ones column. Once that's in, Q1 SF=100 fits.
+   Beyond that, host-memory spilling is the cleanest way to get
+   to scales the slab can't accommodate even with no waste.
 
 3. **Non-equi residual rule for semi/anti joins (the general
    case).** Q21's rewrite covers a specific algebraic shape. A
