@@ -1,72 +1,159 @@
 #!/usr/bin/env bash
 # Per-cell Nsight Systems profiling for benchmark_tpch_ir.
 #
+# Mirrors run_tpch_perf.sh's CLI surface — same (machine, date,
+# tag, scale) identifies one logical run; the e2e CSV path is
+# derived from those rather than passed in.
+#
 # Strategy:
-#   * Manifest comes from an existing benchmark_tpch_ir --csv output
-#     (e.g. tools/results/data/<machine>/tpch/<date>/<tag>/bench_e2e_sf<N>.csv,
-#     produced by `script/run_tpch_perf.sh`). Re-extracted fresh on
+#   * Manifest comes from the bench's e2e CSV at
+#     <csv-base>/<machine>/tpch/<date>/<tag>/bench_e2e_sf<N>.csv,
+#     produced by `script/run_tpch_perf.sh`. Re-extracted fresh on
 #     every invocation so it tracks the latest sweep.
-#   * For each query, we keep:
+#   * For each query we keep:
 #       - the baseline cell (always), AND
 #       - all cells of queries whose best/baseline ratio is below
-#         GAP_THRESHOLD (default 0.95 — i.e. ≥5% potential win).
+#         --gap (default 0.95 — i.e. ≥5% potential win).
 #     Queries with no meaningful spread get only their baseline
 #     profiled, dropping ~566 cells (full sweep) to ~150–180.
-#   * One `nsys profile` invocation per cell (NVBench --profile mode
-#     runs each cell exactly once, no convergence loop), reports go
-#     to <out-base>/<machine>/<date>/<tag>/sf<N>/q<NN>_<label>.nsys-rep
-#     — mirroring the bench layout so a (machine, date, tag, scale)
-#     identifies one logical run end-to-end.
-#   * Pre-flight throwers (multi-key/STRING groupby etc.) are already
-#     marked Skipped=Yes by the bench fixture, so they're naturally
-#     absent from the manifest.
+#   * One `nsys profile` invocation per cell (NVBench --profile
+#     mode runs each cell exactly once, no convergence loop).
+#     Reports land at
+#     <out-base>/<machine>/<date>/<tag>/sf<N>/q<NN>_<label>.nsys-rep
+#     — mirroring the bench layout.
+#   * Pre-flight throwers (multi-key/STRING groupby etc.) are
+#     already marked Skipped=Yes by the bench fixture, so they're
+#     naturally absent from the manifest.
 #
-# Usage:
-#   GAMAX_MACHINE=<name> GAMAX_TAG=<name> \
-#     ./script/run_tpch_nsys.sh <e2e-csv> <scale>
+# Required:
+#   --machine <name>      e.g. h100, gh200 — must match the
+#                         --machine the bench was run with.
+#   --scale <N>           TPC-H scale factor.
+#   --tag <name>          run identifier — must match the bench's
+#                         --tag.
+#   --tpch-data <path>    TPC-H parquet root (forwarded as
+#                         TPCH_DATA_PATH to the bench binary).
 #
-#   GAMAX_MACHINE=...      # required — subdir under <out-base> for
-#                          # the machine's reports (e.g. h100, gh200)
-#   GAMAX_TAG=...          # required — same tag used by run_tpch_perf.sh
-#                          # for the bench run we're now profiling
-#   GAMAX_DATE=YYYYMMDD    # override date (default: today). Use this
-#                          # when profiling a bench run from a previous
-#                          # day; the resulting nsys reports still go
-#                          # under that day's dated folder.
-#   GAMAX_GPU=N            # GPU index for `nsys profile -d` (default 0)
-#   GAMAX_NSYS_EXECUTE=1   # actually run nsys (default: dry-run, prints
-#                          # the manifest + planned commands)
-#   GAMAX_NSYS_GAP=0.90    # tighter gap threshold (default 0.95)
-#   GAMAX_NSYS_OUT=/path   # override output base (default
-#                          # /scratch/wubo/gamax_tpch_nsys)
+# Optional:
+#   --date <YYYYMMDD>     run date; default: today. Use this to
+#                         profile a bench run from a previous day.
+#   --gpu <id>            GPU index for nvbench's -d (default: 0).
+#                         Should match the --gpu used at bench
+#                         time, otherwise the cells profile on a
+#                         different device than they timed on.
+#   --csv-base <path>     base for the bench CSV input (default:
+#                         tools/results/data).
+#   --out-base <path>     base for nsys-rep output (default:
+#                         /scratch/wubo/gamax_tpch_nsys).
+#   --gap <ratio>         keep all cells of queries with
+#                         best/baseline < ratio (default 0.95).
+#                         Set to 1.0 to profile everything.
+#   --execute             actually run nsys. Default is dry-run:
+#                         prints the manifest + planned commands.
+#   --conda-env <env>     conda env to activate before running.
+#
+# Output:
+#   <out-base>/<machine>/<date>/<tag>/sf<N>/q<NN>_<label>.nsys-rep
 #
 # Examples:
 #   # dry-run for SF=10 on h100, tag "after-count-all"
-#   GAMAX_MACHINE=h100 GAMAX_TAG=after-count-all \
 #   ./script/run_tpch_nsys.sh \
-#     tools/results/data/h100/tpch/20260429/after-count-all/bench_e2e_sf10.csv 10
+#       --machine h100 --scale 10 --tag after-count-all \
+#       --tpch-data /scratch/wubo
 #
 #   # actually profile SF=30 on gh200
-#   GAMAX_MACHINE=gh200 GAMAX_TAG=after-count-all \
-#   GAMAX_NSYS_EXECUTE=1 \
 #   ./script/run_tpch_nsys.sh \
-#     tools/results/data/gh200/tpch/20260429/after-count-all/bench_e2e_sf30.csv 30
+#       --machine gh200 --scale 30 --tag after-count-all \
+#       --tpch-data /scratch/wubo --execute
 
 set -euo pipefail
 
-CSV=${1:?"path to bench_e2e_sf<N>.csv"}
-SF=${2:?"scale factor (must match the CSV)"}
-MACHINE=${GAMAX_MACHINE:?"GAMAX_MACHINE must be set (e.g. h100, gh200)"}
-TAG=${GAMAX_TAG:?"GAMAX_TAG must be set (matches the run_tpch_perf.sh --tag)"}
-DATE=${GAMAX_DATE:-$(date +%Y%m%d)}
-GPU=${GAMAX_GPU:-0}
-OUT_BASE=${GAMAX_NSYS_OUT:-/scratch/wubo/gamax_tpch_nsys}
-GAP=${GAMAX_NSYS_GAP:-0.95}
-EXECUTE=${GAMAX_NSYS_EXECUTE:-0}
+MACHINE=""
+SCALE=""
+TAG=""
+TPCH_DATA=""
+DATE=""
+GPU="0"
+CSV_BASE="tools/results/data"
+OUT_BASE="/scratch/wubo/gamax_tpch_nsys"
+GAP="0.95"
+EXECUTE=0
+CONDA_ENV=""
+
+usage() {
+    sed -n '2,/^set -e/p' "$0" | sed -e 's/^# \{0,1\}//' -e '/^set -e/d'
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --machine)    MACHINE="$2"; shift 2;;
+        --scale)      SCALE="$2"; shift 2;;
+        --tag)        TAG="$2"; shift 2;;
+        --tpch-data)  TPCH_DATA="$2"; shift 2;;
+        --date)       DATE="$2"; shift 2;;
+        --gpu)        GPU="$2"; shift 2;;
+        --csv-base)   CSV_BASE="$2"; shift 2;;
+        --out-base)   OUT_BASE="$2"; shift 2;;
+        --gap)        GAP="$2"; shift 2;;
+        --execute)    EXECUTE=1; shift;;
+        --conda-env)  CONDA_ENV="$2"; shift 2;;
+        -h|--help)    usage; exit 0;;
+        *) echo "error: unknown argument: $1" >&2; usage >&2; exit 2;;
+    esac
+done
+
+# Required-arg validation. Same shape as run_tpch_perf.sh so error
+# messages name the missing flag in user-facing form.
+missing=()
+[[ -z "$MACHINE"   ]] && missing+=("--machine")
+[[ -z "$SCALE"     ]] && missing+=("--scale")
+[[ -z "$TAG"       ]] && missing+=("--tag")
+[[ -z "$TPCH_DATA" ]] && missing+=("--tpch-data")
+if (( ${#missing[@]} > 0 )); then
+    echo "error: missing required args: ${missing[*]}" >&2
+    usage >&2
+    exit 2
+fi
+
+# Default the date to today when not overridden — matches
+# run_tpch_perf.sh's behaviour.
+if [[ -z "$DATE" ]]; then
+    DATE=$(date +%Y%m%d)
+fi
+
+if [[ ! -d "$TPCH_DATA" ]]; then
+    echo "error: --tpch-data does not exist: $TPCH_DATA" >&2; exit 2
+fi
+
+# Same tag-shape guard as run_tpch_perf.sh.
+if [[ "$TAG" =~ ^sf[0-9]+$ ]] || [[ "$TAG" =~ ^sf[0-9]+_ ]]; then
+    echo "error: --tag must not encode the scale factor (got '$TAG')." >&2
+    exit 2
+fi
+
+# Derive the e2e CSV path from machine/date/tag/scale.
+CSV="$CSV_BASE/$MACHINE/tpch/$DATE/$TAG/bench_e2e_sf$SCALE.csv"
+SF="$SCALE"
 
 if [[ ! -f "$CSV" ]]; then
-    echo "error: CSV not found: $CSV" >&2
+    echo "error: bench e2e CSV not found at the derived path:" >&2
+    echo "       $CSV" >&2
+    echo "       Did you run run_tpch_perf.sh with the same" >&2
+    echo "       --machine / --date / --tag / --scale? Or pass" >&2
+    echo "       --csv-base if your bench output isn't under" >&2
+    echo "       tools/results/data." >&2
     exit 2
+fi
+
+# Conda activation (same pattern as run_tpch_perf.sh).
+if [[ -n "$CONDA_ENV" ]]; then
+    if ! command -v conda >/dev/null 2>&1; then
+        echo "error: conda not on PATH; cannot activate '$CONDA_ENV'" >&2
+        exit 2
+    fi
+    # shellcheck disable=SC1091
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    conda activate "$CONDA_ENV"
 fi
 
 # Resolve the bench binary relative to the script's worktree root.
@@ -166,7 +253,7 @@ while IFS=, read -r q fil prj srt grp ejn label; do
     # double-count every step. Cells in this manifest already passed
     # pre-flight in the timed run, so re-running the guard is wasteful.
     cmd=(
-        env GAMAX_BENCH_SKIP_PREFLIGHT=1
+        env "TPCH_DATA_PATH=$TPCH_DATA" GAMAX_BENCH_SKIP_PREFLIGHT=1
         nsys profile
             -o "$out_prefix"
             --trace=cuda,nvtx
@@ -198,6 +285,6 @@ if [[ "$EXECUTE" -eq 1 ]]; then
     echo "Output: $OUT_DIR"
 else
     echo ""
-    echo "DRY RUN: planned=$n_planned cells. Set GAMAX_NSYS_EXECUTE=1 to profile."
+    echo "DRY RUN: planned=$n_planned cells. Add --execute to actually profile."
     echo "Output would land in: $OUT_DIR"
 fi

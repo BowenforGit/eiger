@@ -14,12 +14,14 @@ build is portable across architectures, just retarget
 > otherwise. Replace `/scratch/<you>` with your data path; everything
 > hangs off `TPCH_DATA_PATH`.
 >
-> Result files are organized per machine. Pick a short identifier for
-> the platform (`h100`, `gh200`, etc.) and pass it as `--machine` to
-> the plot scripts and `GAMAX_MACHINE=...` to `script/run_tpch_nsys.sh`.
-> All artefacts land under `tools/results/data/<machine>/tpch/`,
-> `tools/results/pdf/tpch_bench/<machine>/`, and
-> `/scratch/wubo/gamax_tpch_nsys/<machine>/sf<N>/`. The reference
+> Result files are organized per machine, dated, and tagged. Pick a
+> short identifier for the platform (`h100`, `gh200`, etc.) and pass
+> it as `--machine` to every script in this doc; pick a tag for each
+> round of experiments (`baseline`, `after-count-all`, etc.) and
+> pass it as `--tag`. All artefacts land under
+> `tools/results/data/<machine>/tpch/<DATE>/<TAG>/`,
+> `tools/results/pdf/tpch_bench/<machine>/<DATE>/<TAG>/`, and
+> `/scratch/wubo/gamax_tpch_nsys/<machine>/<DATE>/<TAG>/sf<N>/`. The reference
 > machine for the numbers in `docs/TPCH_JOURNEY.md` is `h100` (one
 > NVIDIA H100 NVL); examples below use `<machine>` as a placeholder
 > — substitute your identifier on the new platform.
@@ -315,34 +317,36 @@ spread, we run `nsys profile` once with the bench fixture in
 `--profile` mode (single execution, no convergence loop):
 
 ```bash
-MACHINE=<machine>                                     # e.g. h100, gh200
-DATE=20260429                                         # same DATE as §6
-TAG=<your-tag>                                        # same TAG as §6
+TAG=<your-tag>                              # same --tag as §6
 for sf in 10 30; do
-  TPCH_DATA_PATH=/scratch/<you> \
-  GAMAX_MACHINE=$MACHINE \
-  GAMAX_TAG=$TAG \
-  GAMAX_DATE=$DATE \
-  GAMAX_NSYS_EXECUTE=1 \
   ./script/run_tpch_nsys.sh \
-    tools/results/data/$MACHINE/tpch/$DATE/$TAG/bench_e2e_sf$sf.csv $sf
+    --machine    <machine> \
+    --scale      $sf \
+    --tag        $TAG \
+    --tpch-data  /scratch/<you> \
+    --execute
 done
 ```
 
-The driver reads the e2e CSV from §6 (it's the source of truth for
-which cells made it through pre-flight), computes per-query
-baseline-vs-best e2e ratios, and skips queries with no axis spread
-(except their baseline). Defaults:
+CLI mirrors `run_tpch_perf.sh`'s flag surface — same
+`(machine, date, tag, scale)` identifies one logical run.
+The bench's e2e CSV is read from
+`tools/results/data/<machine>/tpch/<date>/<tag>/bench_e2e_sf<N>.csv`
+and the path is derived, not passed in.
 
-| env var               | default                          | purpose                                            |
-|-----------------------|----------------------------------|----------------------------------------------------|
-| `GAMAX_MACHINE`       | _required_                       | machine subdir under `GAMAX_NSYS_OUT` (e.g. `h100`)|
-| `GAMAX_TAG`           | _required_                       | run tag — same as `--tag` passed to `run_tpch_perf.sh` |
-| `GAMAX_DATE`          | today (`YYYYMMDD`)               | run date; override when profiling a bench from a previous day |
-| `GAMAX_GPU`           | `0`                              | GPU index for `-d` (must match the bench run)      |
-| `GAMAX_NSYS_EXECUTE`  | `0` (dry-run prints commands)    | set to `1` to actually run nsys                    |
-| `GAMAX_NSYS_GAP`      | `0.95`                           | profile all cells of queries with `best/baseline < GAP` |
-| `GAMAX_NSYS_OUT`      | `/scratch/wubo/gamax_tpch_nsys`  | output base; `<machine>/<date>/<tag>/sf<N>/q<NN>_<label>.nsys-rep` underneath |
+| flag                 | default                          | purpose                                                       |
+|----------------------|----------------------------------|---------------------------------------------------------------|
+| `--machine <name>`   | _required_                       | machine subdir; must match the bench run                      |
+| `--scale <N>`        | _required_                       | TPC-H scale factor                                            |
+| `--tag <name>`       | _required_                       | run tag — same as `--tag` passed to `run_tpch_perf.sh`        |
+| `--tpch-data <path>` | _required_                       | TPC-H parquet root; forwarded as `TPCH_DATA_PATH`             |
+| `--date <YYYYMMDD>`  | today                            | run date; override to profile a bench from a previous day     |
+| `--gpu <id>`         | `0`                              | GPU index for `-d` (should match the bench run)               |
+| `--csv-base <path>`  | `tools/results/data`             | base for the bench e2e CSV input                              |
+| `--out-base <path>`  | `/scratch/wubo/gamax_tpch_nsys`  | base for nsys-rep output; `<machine>/<date>/<tag>/sf<N>/q<NN>_<label>.nsys-rep` underneath |
+| `--gap <ratio>`      | `0.95`                           | profile all cells of queries with `best/baseline < gap` (set `1.0` to profile every passing cell) |
+| `--execute`          | _absent (dry-run)_               | flag — actually run nsys. Default prints the manifest + planned commands. |
+| `--conda-env <env>`  | _none_                           | conda env to activate before launching                        |
 
 Per cell: `--trace=cuda,nvtx --force-overwrite=true --stats=false`.
 The CUDA + NVTX trace combination captures kernel launches plus the
@@ -359,9 +363,9 @@ the manifest already passed it during §6) and the raw nsys numbers
 match the bench's GPU Time within overhead.
 
 Wall on the H100 reference: ~7 s/cell + ~3 s nsys overhead ≈ 25 min
-per scale at default `GAP=0.95` (≈170 cells/scale), ~35 min per
-scale at `GAP=1` (≈260 cells/scale). Reports range 5–30 MB each;
-budget ~10 GiB of free disk under `GAMAX_NSYS_OUT`.
+per scale at default `--gap 0.95` (≈170 cells/scale), ~35 min per
+scale at `--gap 1.0` (≈260 cells/scale). Reports range 5–30 MB each;
+budget ~10 GiB of free disk under `--out-base`.
 
 Open one in the GUI:
 
@@ -524,9 +528,11 @@ For a perf comparison or a paper figure, the canonical artefacts are:
   `(machine, scale, tag, gpu)`; outputs to a dated/tagged folder
   and refuses to overwrite. The convention every downstream tool
   reads from.
-- `script/run_tpch_nsys.sh` — Nsight Systems driver. Same
-  `(machine, date, tag)` keyed layout; required env vars
-  `GAMAX_MACHINE`, `GAMAX_TAG`.
+- `script/run_tpch_nsys.sh` — Nsight Systems driver. Same flag
+  surface as `run_tpch_perf.sh` (`--machine --scale --tag
+  --tpch-data` required, `--execute` to actually profile,
+  default is dry-run); derives the bench's e2e CSV path from the
+  `(machine, date, tag, scale)` triple.
 - `tools/visualize/plot_tpch_bench.py` — the plot script for the
   e2e/breakdown/top-steps/kind-share figures. Takes
   `--machine --date --tag --scale`. Extending the plots usually
