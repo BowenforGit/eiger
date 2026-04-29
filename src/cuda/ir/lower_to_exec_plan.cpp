@@ -316,41 +316,105 @@ gamax::groupby::aggregation_id to_physical_agg(AggKind k) {
     lower_error("unknown AggKind");
 }
 
+// Result of materialize_keys_and_values.
+//   * value_id      — the materialized intermediate that GroupBy /
+//                     ScalarAgg consumes by column index.
+//   * n_keys        — number of group-by keys (== first n_keys
+//                     columns of the materialized table).
+//   * body_position — for each agg item, its body column's position
+//                     in the *value-only* slice of the materialized
+//                     table (i.e. 0 maps to the first column AFTER
+//                     the keys). -1 for COUNT_ALL/Count items
+//                     (which materialize no body column). When two
+//                     agg items reference the same source ColRef,
+//                     they share a body_position — a deduplication
+//                     that drops the redundant materialization for
+//                     patterns like Sum(x) + Avg(x) on the same x.
+struct AggMaterialization {
+    ValueId mat_id;
+    gamax::size_type n_keys;
+    std::vector<gamax::size_type> body_position;
+};
+
+// Walk agg_items, assign each a body-column position. Agg items
+// whose body is a ColRef referring to a ColumnId we've already seen
+// reuse the prior position (no fresh column emitted). Computed
+// bodies always emit a fresh column. CountAll/Count emit nothing
+// and get sentinel -1.
+struct DedupResult {
+    std::vector<gamax::size_type> body_position;     // per agg item
+    std::vector<gamax::size_type> emit_for_item;     // indices of items
+                                                     // that DRIVE a fresh
+                                                     // body emission (in
+                                                     // emission order)
+};
+
+DedupResult dedup_agg_bodies(const PlanNode& node) {
+    DedupResult r;
+    r.body_position.assign(node.agg_items.size(), -1);
+    std::unordered_map<ColumnId, gamax::size_type> col_ref_pos;
+    gamax::size_type next_pos = 0;
+    for (gamax::size_type i = 0;
+         i < static_cast<gamax::size_type>(node.agg_items.size()); ++i)
+    {
+        const auto& ag = node.agg_items[i];
+        if (ag.agg == AggKind::CountAll || ag.agg == AggKind::Count) {
+            continue;
+        }
+        if (ag.body.kind == ExprKind::ColRef) {
+            auto it = col_ref_pos.find(ag.body.col_ref);
+            if (it != col_ref_pos.end()) {
+                r.body_position[i] = it->second;
+                continue;
+            }
+            col_ref_pos[ag.body.col_ref] = next_pos;
+        }
+        r.body_position[i] = next_pos++;
+        r.emit_for_item.push_back(i);
+    }
+    return r;
+}
+
 // Materialize `[keys..., agg-body-columns...]` as an intermediate
 // value that `phys::group_by` / `phys::scalar_aggregate` can consume
 // via column-index. Matches the shape the current emit.cpp builds
 // inline; hoisted into the ExecPlan so it's visible and reusable.
 //
-// Returns `(value_id, n_keys)`. `in_schema` must be the EXEC schema of
-// the aggregate's input (i.e., the actual column layout of `input_id`).
-std::pair<ValueId, gamax::size_type> materialize_keys_and_values(
+// `in_schema` must be the EXEC schema of the aggregate's input
+// (i.e., the actual column layout of `input_id`).
+AggMaterialization materialize_keys_and_values(
     const PlanNode& node, ValueId input_id,
     const Schema& in_schema, Lowering& lo)
 {
+    auto dedup = dedup_agg_bodies(node);
+
     // Decide between a pure-ColRef path (Reorder) and a mixed path
-    // (Project) based on whether any agg body is computed. Count /
-    // CountAll items don't materialize a body column at all (the phys
-    // layer computes them from the row count internally), so they
-    // never tip the decision toward Project.
+    // (Project) based on whether any item that drives a fresh body
+    // emission has a non-ColRef body. Items deduped to an earlier
+    // ColRef (or skipped because they're CountAll/Count) don't
+    // affect the decision — they emit nothing of their own.
     bool all_col_refs = true;
-    for (const auto& ag : node.agg_items) {
-        if (ag.agg == AggKind::CountAll || ag.agg == AggKind::Count) continue;
-        if (ag.body.kind != ExprKind::ColRef) { all_col_refs = false; break; }
+    for (auto i : dedup.emit_for_item) {
+        if (node.agg_items[i].body.kind != ExprKind::ColRef) {
+            all_col_refs = false;
+            break;
+        }
     }
 
     // Build the materialized value's output schema: keys first, then
-    // one field per non-CountAll agg body. CountAll/Count items
-    // produce an output column at the agg step but consume nothing
-    // from the materialized table, so they're absent here. The phys
-    // layer's COUNT_ALL handler synthesizes its result column from
-    // the internal "ones" column it builds for AVG's denominator.
+    // one field per UNIQUE body column (deduped across agg items by
+    // ColRef ColumnId). CountAll/Count items produce an output column
+    // at the agg step but consume nothing from the materialized
+    // table — the phys layer's COUNT_ALL handler synthesizes its
+    // result column from the internal "ones" column it builds for
+    // AVG's denominator.
     Schema mat_schema;
     for (auto kid : node.agg_keys) {
         auto ordinal = resolve_ordinal(in_schema, kid);
         mat_schema.append(in_schema[ordinal]);
     }
-    for (const auto& ag : node.agg_items) {
-        if (ag.agg == AggKind::CountAll || ag.agg == AggKind::Count) continue;
+    for (auto i : dedup.emit_for_item) {
+        const auto& ag = node.agg_items[i];
         Field f;
         f.id = ColumnId{};
         f.type = ag.body.type;
@@ -364,82 +428,85 @@ std::pair<ValueId, gamax::size_type> materialize_keys_and_values(
         static_cast<gamax::size_type>(node.agg_keys.size());
 
     if (all_col_refs) {
-        // Pure-ColRef materialization → Reorder.
+        // Pure-ColRef materialization → Reorder. One ordinal per
+        // unique body (dedup-driven) plus one per key.
         std::vector<gamax::size_type> ordinals;
-        ordinals.reserve(node.agg_keys.size() + node.agg_items.size());
+        ordinals.reserve(node.agg_keys.size() + dedup.emit_for_item.size());
         for (auto kid : node.agg_keys) {
             ordinals.push_back(resolve_ordinal(in_schema, kid));
         }
-        for (const auto& ag : node.agg_items) {
-            if (ag.agg == AggKind::CountAll || ag.agg == AggKind::Count) {
-                continue;
-            }
+        for (auto i : dedup.emit_for_item) {
+            const auto& ag = node.agg_items[i];
             ordinals.push_back(resolve_ordinal(in_schema, ag.body.col_ref));
         }
         lo.push_step(StepKind::Reorder, {input_id}, mat_id,
                      exec::ReorderPayload{std::move(ordinals)});
     } else {
         // Mixed / computed → Project. Agg keys are always ColRefs;
-        // agg bodies are ColRefs or numeric computed — no StringOps
-        // flow through here, so every item is an ExprTree wrapped in
-        // the ProjectItem variant.
+        // agg bodies are ColRefs (deduped) or numeric computed — no
+        // StringOps flow through here, so every item is an ExprTree
+        // wrapped in the ProjectItem variant.
         std::vector<gamax::phys::ProjectItem> items;
-        items.reserve(node.agg_keys.size() + node.agg_items.size());
+        items.reserve(node.agg_keys.size() + dedup.emit_for_item.size());
         for (auto kid : node.agg_keys) {
             auto ordinal = resolve_ordinal(in_schema, kid);
             items.emplace_back(gamax::expression::ExprTree::column(
                 ordinal, in_schema[ordinal].type));
         }
-        for (const auto& ag : node.agg_items) {
-            if (ag.agg == AggKind::CountAll || ag.agg == AggKind::Count) {
-                continue;
-            }
-            items.emplace_back(lower_expr_to_tree(ag.body, in_schema));
+        for (auto i : dedup.emit_for_item) {
+            items.emplace_back(
+                lower_expr_to_tree(node.agg_items[i].body, in_schema));
         }
         exec::ProjectPayload mat_pl;
         mat_pl.items = std::move(items);
         mat_pl.hint = lo.opts.project.value_or(gamax::project::project_options{});
         lo.push_step(StepKind::Project, {input_id}, mat_id, std::move(mat_pl));
     }
-    return {mat_id, n_keys};
+    return AggMaterialization{
+        mat_id, n_keys, std::move(dedup.body_position)};
 }
 
 ValueId lower_aggregate(const PlanNode& node, Lowering& lo) {
     auto input_id = lower_node(*node.inputs[0], lo);
     const auto& in_schema = lo.exec_schema(input_id);
 
-    auto [mat_id, n_keys] =
-        materialize_keys_and_values(node, input_id, in_schema, lo);
+    auto mat = materialize_keys_and_values(node, input_id, in_schema, lo);
 
     // Build AggSpecs. Spec.column is val-relative (val is the part of
     // the materialized table after the n_keys keys for groupby; for
-    // scalar aggregate, n_keys is 0 so val == whole table). For each
-    // non-CountAll agg, increment val_col so the indices line up with
-    // the columns we actually placed in the materialized table. For
-    // CountAll/Count, use -1 — the phys layer's COUNT_ALL handler
-    // ignores spec.column and emits an INT64 row-count column.
+    // scalar aggregate, n_keys is 0 so val == whole table). The
+    // dedup pass in materialize_keys_and_values produced
+    // `body_position[i]` — the val-relative index of the body column
+    // for agg item i, with -1 for COUNT_ALL/Count. Two agg items
+    // sharing a ColRef body share a body_position, so the spec
+    // points to the single materialized column for both — and
+    // groupby_noskf's existing AVG-reuses-SUM dedup catches it from
+    // there.
     std::vector<gamax::phys::AggSpec> specs;
     specs.reserve(node.agg_items.size());
-    gamax::size_type next_val_col = 0;
-    for (const auto& ag : node.agg_items) {
+    for (gamax::size_type i = 0;
+         i < static_cast<gamax::size_type>(node.agg_items.size()); ++i)
+    {
+        const auto& ag = node.agg_items[i];
         if (ag.agg == AggKind::CountAll || ag.agg == AggKind::Count) {
             specs.push_back({/*column=*/-1,
                              gamax::groupby::aggregation_id::COUNT_ALL});
         } else {
-            specs.push_back({next_val_col++, to_physical_agg(ag.agg)});
+            specs.push_back({mat.body_position[i],
+                             to_physical_agg(ag.agg)});
         }
     }
 
     ValueId out_id = lo.next_value(node.output_schema);
-    if (n_keys == 0) {
-        lo.push_step(StepKind::ScalarAgg, {mat_id}, out_id,
+    if (mat.n_keys == 0) {
+        lo.push_step(StepKind::ScalarAgg, {mat.mat_id}, out_id,
                      exec::ScalarAggPayload{std::move(specs)});
     } else {
         exec::GroupByPayload pl;
-        pl.n_keys = n_keys;
+        pl.n_keys = mat.n_keys;
         pl.specs = std::move(specs);
         pl.hint = lo.opts.group_by.value_or(gamax::groupby::groupby_hint{});
-        lo.push_step(StepKind::GroupBy, {mat_id}, out_id, std::move(pl));
+        lo.push_step(StepKind::GroupBy, {mat.mat_id}, out_id, std::move(pl));
     }
     return out_id;
 }

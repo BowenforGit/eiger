@@ -193,13 +193,13 @@ PlanPtr build_q1(const QueryBuilder& qb) {
             (lit(1.0) + filtered.c("l_tax"))},
     });
 
-    // sum_qty / sum_base_price already cover l_quantity and
-    // l_extendedprice; running avg(l_quantity) and avg(l_extendedprice)
-    // alongside their sums forces the pre-groupby project to
-    // materialize each of those columns twice — at SF=100 that
-    // duplication blows ~8.8 GiB of intermediates and OOMs the slab.
-    // Keep one materialization per source column here, and recover
-    // avg_qty / avg_price downstream from sum/count.
+    // The natural Q1 form: sum + avg both directly. The lowering's
+    // materialize_keys_and_values dedups ColRef-bodied agg items by
+    // ColumnId, so sum(l_quantity) and avg(l_quantity) share a
+    // single materialized body column (saving ~4.4 GiB of duplicate
+    // intermediate at SF=100); same for sum(l_extendedprice) /
+    // avg(l_extendedprice). count_order goes through the phys
+    // layer's native COUNT_ALL — no lit-1 column materialization.
     auto agg = projected.aggregate(
         {"l_returnflag", "l_linestatus"},
         {
@@ -207,26 +207,13 @@ PlanPtr build_q1(const QueryBuilder& qb) {
             {"sum_base_price", AggKind::Sum, projected.c("l_extendedprice")},
             {"sum_disc_price", AggKind::Sum, projected.c("disc_price")},
             {"sum_charge",     AggKind::Sum, projected.c("charge")},
+            {"avg_qty",        AggKind::Avg, projected.c("l_quantity")},
+            {"avg_price",      AggKind::Avg, projected.c("l_extendedprice")},
             {"avg_disc",       AggKind::Avg, projected.c("l_discount")},
             {"count_order",    AggKind::CountAll, lit(int64_t{0})},
         });
 
-    // Compute avg_qty / avg_price after the aggregate. count_order is
-    // int64; the division promotes to double automatically.
-    auto post = agg.project({
-        {"l_returnflag",   agg.c("l_returnflag")},
-        {"l_linestatus",   agg.c("l_linestatus")},
-        {"sum_qty",        agg.c("sum_qty")},
-        {"sum_base_price", agg.c("sum_base_price")},
-        {"sum_disc_price", agg.c("sum_disc_price")},
-        {"sum_charge",     agg.c("sum_charge")},
-        {"avg_qty",        agg.c("sum_qty")        / agg.c("count_order")},
-        {"avg_price",      agg.c("sum_base_price") / agg.c("count_order")},
-        {"avg_disc",       agg.c("avg_disc")},
-        {"count_order",    agg.c("count_order")},
-    });
-
-    auto sorted = post.sort({asc("l_returnflag"), asc("l_linestatus")});
+    auto sorted = agg.sort({asc("l_returnflag"), asc("l_linestatus")});
     return sorted.plan();
 }
 
