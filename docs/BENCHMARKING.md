@@ -174,60 +174,86 @@ a bug.
 
 ## 6. End-to-end + per-step benchmark (NVBench)
 
-Two outputs from one run: NVBench's per-cell GPU-time CSV (e2e) and
-a side-channel per-step CSV (breakdown).
+`script/run_tpch_perf.sh` wraps `benchmark_tpch_ir` with the
+calibration this doc's numbers came from, organizes outputs into
+a dated/tagged folder, and refuses to overwrite an existing CSV
+(so the same `--tag` can't silently merge into an older run).
 
 ```bash
-MACHINE=<machine>                                     # e.g. h100, gh200
-mkdir -p tools/results/data/$MACHINE/tpch
-TPCH_DATA_PATH=/scratch/<you> \
-GAMAX_BENCH_STEP_CSV=tools/results/data/$MACHINE/tpch/bench_steps_sf10.csv \
-./build/src/cuda/benchmarks/benchmark_tpch_ir \
-  -a scale=10 \
-  --min-samples 3 \
-  --max-noise 5 \
-  --timeout 8 \
-  --quiet \
-  --csv tools/results/data/$MACHINE/tpch/bench_e2e_sf10.csv
-
-# Repeat for SF=30 (replace `10` → `30` in three places).
+TAG=<your-tag>                              # e.g. baseline, after-count-all
+for sf in 10 30; do
+  ./script/run_tpch_perf.sh \
+    --machine    <machine> \
+    --scale      $sf \
+    --tag        $TAG \
+    --tpch-data  /scratch/<you> \
+    --conda-env  <env> \
+    --gpu        0
+done
 ```
 
 Wall on the H100 reference: ~95 min per scale.
 
-Knobs:
-- `--min-samples 3 --max-noise 5 --timeout 8` is the calibration that
-  produced the numbers in `docs/TPCH_JOURNEY.md`'s SF=10 table. It
-  trades a bit of noise (≤5%) for a 3–4× speedup over NVBench's
-  defaults (`--min-samples 10 --max-noise 0.5`).
-- `GAMAX_BENCH_STEP_CSV=<path>` enables per-step CSV output. Schema:
-  `query, scale, filter, project, sort, group_by, eq_join,
-   step_index, step_kind, n_samples, mean_ms, min_ms, max_ms,
-   stddev_ms`. Drop the env var to skip the breakdown overhead.
-- The bench iterates ~78 k Cartesian cells, ~99% of which are
-  pruned cheaply by the at-most-one-set rule + skip-by-presence. Of
-  the rest, ~283 actually gather samples per scale.
+Inputs / knobs:
+- `--machine` — short identifier (`h100`, `gh200`, …). Picks the
+  subdir under `tools/results/data/`.
+- `--scale` — TPC-H scale factor (1 / 10 / 30 / 100). One run per
+  invocation; the same `--tag` is meant to span multiple scales,
+  so the SF goes in the filename, not the tag.
+- `--tag` — your run identifier. Caller's choice; must NOT encode
+  the scale factor (the script rejects `sfN` / `sfN_…` tags).
+- `--tpch-data` — TPC-H parquet root (the dir containing
+  `sf<N>/<table>.parquet`). The script forwards this as
+  `TPCH_DATA_PATH`.
+- `--conda-env` (optional) — conda env to activate before running.
+- `--gpu` (optional, default `0`) — GPU index, passed to NVBench's
+  `-d` flag.
 
-CSVs land in `tools/results/data/<machine>/tpch/` (gitignored — your
-raw numbers). Save them somewhere persistent if you want to share.
+Outputs:
+
+```
+tools/results/data/<machine>/tpch/<YYYYMMDD>/<TAG>/bench_e2e_sf<N>.csv
+tools/results/data/<machine>/tpch/<YYYYMMDD>/<TAG>/bench_steps_sf<N>.csv
+```
+
+The bench is hardcoded to `--min-samples 3 --max-noise 5
+--timeout 8` (the calibration that produced the numbers in
+`docs/TPCH_JOURNEY.md`'s SF=10 table — trades ≤5% noise for a
+3–4× speedup over NVBench's defaults). Per-step CSV schema:
+`query, scale, filter, project, sort, group_by, eq_join,
+step_index, step_kind, n_samples, mean_ms, min_ms, max_ms,
+stddev_ms`.
+
+CSVs are gitignored (these are your raw numbers — save somewhere
+persistent if you want to share). The dated/tagged structure is
+the convention every downstream tool (`run_tpch_nsys.sh`, the
+plotters) reads from, so use the same `--machine` / `--tag` /
+`--scale` triple consistently across one round of experiments.
 
 ## 7. Plot
 
 ```bash
-# From the worktree root.
+# From the worktree root. DATE matches the dated folder produced
+# by run_tpch_perf.sh (use `ls tools/results/data/<machine>/tpch/`
+# to find it); TAG matches the --tag used at bench time.
+DATE=20260429
+TAG=<your-tag>
 for sf in 10 30; do
   python3 tools/visualize/plot_tpch_bench.py \
     --machine <machine> \
+    --date    $DATE \
+    --tag     $TAG \
     --scale   $sf
 done
 ```
 
-CSV inputs are derived from `tools/results/data/<machine>/tpch/`;
-overrides via `--data-dir <path>` and `--out <path>`.
+CSV inputs are derived from
+`tools/results/data/<machine>/tpch/<DATE>/<TAG>/`; overrides via
+`--data-dir <path>` and `--out <path>`.
 
 Produces four figures per scale into
-`tools/results/pdf/tpch_bench/<machine>/`, each as both PDF (paper-
-ready) and JPG (quick review):
+`tools/results/pdf/tpch_bench/<machine>/<DATE>/<TAG>/`, each as
+both PDF (paper-ready) and JPG (quick review):
 
 - `tpch_e2e_sf<N>.pdf` — 22 subfigures (2 rows × 11 cols), one bar
   per cell coloured by the axis it varies. Three-bar version
@@ -257,12 +283,16 @@ spread, we run `nsys profile` once with the bench fixture in
 
 ```bash
 MACHINE=<machine>                                     # e.g. h100, gh200
+DATE=20260429                                         # same DATE as §6
+TAG=<your-tag>                                        # same TAG as §6
 for sf in 10 30; do
   TPCH_DATA_PATH=/scratch/<you> \
   GAMAX_MACHINE=$MACHINE \
+  GAMAX_TAG=$TAG \
+  GAMAX_DATE=$DATE \
   GAMAX_NSYS_EXECUTE=1 \
   ./script/run_tpch_nsys.sh \
-    tools/results/data/$MACHINE/tpch/bench_e2e_sf$sf.csv $sf
+    tools/results/data/$MACHINE/tpch/$DATE/$TAG/bench_e2e_sf$sf.csv $sf
 done
 ```
 
@@ -274,9 +304,12 @@ baseline-vs-best e2e ratios, and skips queries with no axis spread
 | env var               | default                          | purpose                                            |
 |-----------------------|----------------------------------|----------------------------------------------------|
 | `GAMAX_MACHINE`       | _required_                       | machine subdir under `GAMAX_NSYS_OUT` (e.g. `h100`)|
+| `GAMAX_TAG`           | _required_                       | run tag — same as `--tag` passed to `run_tpch_perf.sh` |
+| `GAMAX_DATE`          | today (`YYYYMMDD`)               | run date; override when profiling a bench from a previous day |
+| `GAMAX_GPU`           | `0`                              | GPU index for `-d` (must match the bench run)      |
 | `GAMAX_NSYS_EXECUTE`  | `0` (dry-run prints commands)    | set to `1` to actually run nsys                    |
 | `GAMAX_NSYS_GAP`      | `0.95`                           | profile all cells of queries with `best/baseline < GAP` |
-| `GAMAX_NSYS_OUT`      | `/scratch/wubo/gamax_tpch_nsys`  | output base; `<machine>/sf<N>/q<NN>_<label>.nsys-rep` underneath |
+| `GAMAX_NSYS_OUT`      | `/scratch/wubo/gamax_tpch_nsys`  | output base; `<machine>/<date>/<tag>/sf<N>/q<NN>_<label>.nsys-rep` underneath |
 
 Per cell: `--trace=cuda,nvtx --force-overwrite=true --stats=false`.
 The CUDA + NVTX trace combination captures kernel launches plus the
@@ -300,7 +333,7 @@ budget ~10 GiB of free disk under `GAMAX_NSYS_OUT`.
 Open one in the GUI:
 
 ```bash
-nsys-ui /scratch/wubo/gamax_tpch_nsys/<machine>/sf10/q11_ejn-sort_merge_gfur.nsys-rep
+nsys-ui /scratch/wubo/gamax_tpch_nsys/<machine>/<DATE>/<TAG>/sf10/q11_ejn-sort_merge_gfur.nsys-rep
 ```
 
 For batch post-processing (e.g. extract top-kernel tables to CSV):
@@ -318,23 +351,28 @@ step optionally attributed to either the best-per-step cfg or the
 default cfg.
 
 ```bash
-# From the worktree root.
+# From the worktree root. DATE / TAG match the run from §6.
+DATE=20260429
+TAG=<your-tag>
 for sf in 10 30; do
   for mode in best default; do
     python3 tools/visualize/plot_top_kernels.py \
       --machine  <machine> \
+      --date     $DATE \
+      --tag      $TAG \
       --scale    $sf \
       --cfg-mode $mode
   done
 done
 ```
 
-CSV inputs and PDF outputs are derived from the machine identifier:
-the steps CSV is read from `tools/results/data/<machine>/tpch/`, nsys
-reports from `/scratch/wubo/gamax_tpch_nsys/<machine>/`, and outputs
-land in `tools/results/pdf/tpch_bench/<machine>/` plus
-`tools/results/data/<machine>/tpch/`. Override with `--data-dir`,
-`--nsys-base`, `--out-base`.
+CSV inputs, nsys reports, and outputs are all keyed off
+`(machine, date, tag)`: steps CSV from
+`tools/results/data/<machine>/tpch/<DATE>/<TAG>/`, nsys reports
+from `/scratch/wubo/gamax_tpch_nsys/<machine>/<DATE>/<TAG>/`, PDFs
+to `tools/results/pdf/tpch_bench/<machine>/<DATE>/<TAG>/`,
+top-kernels CSV alongside the steps CSV. Override base dirs with
+`--data-dir`, `--nsys-base`, `--out-base`.
 
 For each `(query, step_index)`:
 - `--cfg-mode best` picks the cfg that minimized `mean_ms` for that
@@ -353,8 +391,8 @@ iff their fully-demangled names are bit-equal.
 Outputs (PDF + JPG sidecar + CSV) per scale × mode:
 
 ```
-tools/results/pdf/tpch_bench/<machine>/tpch_top_kernels_{best,default}_sf{10,30}.pdf
-tools/results/data/<machine>/tpch/top_kernels_{best,default}_sf{10,30}.csv
+tools/results/pdf/tpch_bench/<machine>/<DATE>/<TAG>/tpch_top_kernels_{best,default}_sf{10,30}.pdf
+tools/results/data/<machine>/tpch/<DATE>/<TAG>/top_kernels_{best,default}_sf{10,30}.csv
 ```
 
 The CSV has `kernel_full, kernel_short, total_ns, total_ms,
@@ -369,19 +407,20 @@ Wall: ~10–15 s on first call per report (nsys generates the
 
 For a perf comparison or a paper figure, the canonical artefacts are:
 
-- **CSVs** (from `tools/results/data/<machine>/tpch/`):
+- **CSVs** (from `tools/results/data/<machine>/tpch/<DATE>/<TAG>/`):
   `bench_e2e_sf{10,30}.csv` + `bench_steps_sf{10,30}.csv` +
   `top_kernels_{best,default}_sf{10,30}.csv`.
 - **Verify CSVs**: `sf{1,10,30}_verify.csv` from §5 (proves
   correctness on the new platform).
-- **Plots** (from `tools/results/pdf/tpch_bench/<machine>/`):
+- **Plots** (from
+  `tools/results/pdf/tpch_bench/<machine>/<DATE>/<TAG>/`):
   `tpch_*_sf{10,30}.pdf` (e2e, breakdown, top-steps, kind-share,
   top-kernels {best,default}).
 - **A few representative `.nsys-rep`** files from
-  `/scratch/wubo/gamax_tpch_nsys/<machine>/sf{10,30}/` (full-set is
-  ~120 MiB on the reference machine but can grow on slower GPUs —
-  cherry-pick the queries with the biggest baseline-vs-best gap, e.g.
-  Q3, Q5, Q11, Q17 at SF=30).
+  `/scratch/wubo/gamax_tpch_nsys/<machine>/<DATE>/<TAG>/sf{10,30}/`
+  (full-set is ~120 MiB on the reference machine but can grow on
+  slower GPUs — cherry-pick the queries with the biggest
+  baseline-vs-best gap, e.g. Q3, Q5, Q11, Q17 at SF=30).
 - **Run metadata**: GPU model + driver, CUDA version, CMake config
   (`build/CMakeCache.txt` → grep `CMAKE_CUDA_ARCHITECTURES`,
   `CMAKE_BUILD_TYPE`, Arrow/Parquet versions), and the host's
@@ -431,12 +470,21 @@ For a perf comparison or a paper figure, the canonical artefacts are:
 - `docs/PARTITION_KERNEL_BUGS.md` — the unsupported shapes the
   axis probe surfaces (multi-key groupby, partition_hash bucket
   overflow). Tactical guards turn them into clean errors.
+- `script/run_tpch_perf.sh` — bench wrapper. One run per
+  `(machine, scale, tag, gpu)`; outputs to a dated/tagged folder
+  and refuses to overwrite. The convention every downstream tool
+  reads from.
+- `script/run_tpch_nsys.sh` — Nsight Systems driver. Same
+  `(machine, date, tag)` keyed layout; required env vars
+  `GAMAX_MACHINE`, `GAMAX_TAG`.
 - `tools/visualize/plot_tpch_bench.py` — the plot script for the
-  e2e/breakdown/top-steps/kind-share figures. Has its own module
-  docstring; extending the plots usually means adding a function and
-  wiring it into `main()`.
+  e2e/breakdown/top-steps/kind-share figures. Takes
+  `--machine --date --tag --scale`. Extending the plots usually
+  means adding a function and wiring it into `main()`.
 - `tools/visualize/plot_top_kernels.py` — the top-kernel attribution
-  plot. Reads the per-step CSV + the nsys-rep tree; supports both
-  `--cfg-mode best` and `--cfg-mode default`.
-- `script/run_tpch_nsys.sh` — Nsight Systems driver. Self-contained,
-  no project-specific deps beyond the bench binary + CSV manifest.
+  plot. Reads the per-step CSV + the nsys-rep tree under the same
+  `(machine, date, tag)` keys; supports `--cfg-mode best` /
+  `--cfg-mode default`.
+- `tools/visualize/extract_kernel_times.py` — small utility that
+  emits a per-query baseline / best-cfg pure-kernel-time CSV from
+  the nsys reports. Same `--machine --date --tag --scale` triple.

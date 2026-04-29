@@ -100,18 +100,25 @@ def kernel_time_ns(report: Path) -> float:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--machine", required=True,
-                   help="machine identifier — picks the e2e CSV under "
-                        "<data-dir>/<machine>/tpch/ and the nsys reports "
-                        "under <nsys-base>/<machine>/")
+                   help="machine identifier — picks the e2e CSV "
+                        "under <data-dir>/<machine>/tpch/<date>/<tag>/ "
+                        "and the nsys reports under "
+                        "<nsys-base>/<machine>/<date>/<tag>/")
+    p.add_argument("--date", required=True,
+                   help="run date as YYYYMMDD; matches the dated "
+                        "folder produced by run_tpch_perf.sh")
+    p.add_argument("--tag", required=True,
+                   help="run tag (the --tag passed to run_tpch_perf.sh)")
     p.add_argument("--scale", required=True, type=int)
     p.add_argument("--data-dir", default="tools/results/data")
     p.add_argument("--nsys-base", default="/scratch/wubo/gamax_tpch_nsys")
     args = p.parse_args()
 
-    machine, scale = args.machine, int(args.scale)
-    e2e_csv = (Path(args.data_dir) / machine / "tpch"
-               / f"bench_e2e_sf{scale}.csv")
-    nsys_dir = Path(args.nsys_base) / machine
+    machine, date, tag = args.machine, args.date, args.tag
+    scale = int(args.scale)
+    run_dir = Path(args.data_dir) / machine / "tpch" / date / tag
+    e2e_csv = run_dir / f"bench_e2e_sf{scale}.csv"
+    nsys_dir = Path(args.nsys_base) / machine / date / tag
     if not e2e_csv.exists():
         sys.exit(f"error: missing e2e CSV: {e2e_csv}")
 

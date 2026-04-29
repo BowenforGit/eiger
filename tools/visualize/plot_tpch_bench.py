@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Plot benchmark_tpch_ir results.
 
-Inputs are derived from --machine and --scale by convention:
-  e2e CSV   : <data-dir>/<machine>/tpch/bench_e2e_sf<N>.csv
-  steps CSV : <data-dir>/<machine>/tpch/bench_steps_sf<N>.csv
+Inputs are derived from --machine, --date, --tag, --scale by
+convention (matching `script/run_tpch_perf.sh`'s output layout):
+  e2e CSV   : <data-dir>/<machine>/tpch/<date>/<tag>/bench_e2e_sf<N>.csv
+  steps CSV : <data-dir>/<machine>/tpch/<date>/<tag>/bench_steps_sf<N>.csv
 
-Outputs land in <out>/<machine>/. Two figures:
+Outputs land in <out>/<machine>/<date>/<tag>/. Two figures:
   1) tpch_e2e        : 22 subfigures (2 rows × 11 cols), one bar per config
   2) tpch_breakdown  : same layout, stacked bars per step + an extra
                        "best-of-each-step" bar composed of per-step minima
@@ -416,6 +417,53 @@ def plot_kind_share(df: pd.DataFrame, out_path: Path, scale: int,
           f"{float(by_kind['pct'].head(3).sum()):.1f}%")
 
 
+def write_per_query_summary(df: pd.DataFrame, out_path: Path):
+    """Per-query e2e CSV with the same numbers the e2e plot's three
+    bars carry: baseline / worst / best in milliseconds, plus the
+    two derived speedups. One row per query 1..22; queries with no
+    data in the input are skipped (no NaN rows).
+
+    Schema (compatible with paste-into-Sheets):
+      query, baseline-cfg, worst-cfg, best-cfg,
+      best-vs-worst-speedup, best-vs-baseline-speedup
+
+    "baseline-cfg" / "worst-cfg" / "best-cfg" columns hold GPU time
+    in ms (matches the prior cross-machine summary tables in this
+    project — naming kept for paste-compat). Speedups are
+    `worst/best` and `baseline/best`; both are >=1 by construction
+    when best is the minimum, except in noise-tied cases where one
+    of the others happens to be the min.
+    """
+    rows = []
+    for q in range(1, 23):
+        sub = df[df["query"] == q]
+        if sub.empty:
+            continue
+        baseline = sub[sub["axis"] == "baseline"]
+        if baseline.empty:
+            baseline = sub[sub["label"] == "default"]
+        base_ms  = (float(baseline["gpu_ms"].iloc[0])
+                    if len(baseline) else float("nan"))
+        worst_ms = float(sub["gpu_ms"].max())
+        best_ms  = float(sub["gpu_ms"].min())
+        rows.append({
+            "query":                    q,
+            "baseline-cfg":             round(base_ms, 3),
+            "worst-cfg":                round(worst_ms, 3),
+            "best-cfg":                 round(best_ms, 3),
+            "best-vs-worst-speedup":    (round(worst_ms / best_ms, 3)
+                                         if best_ms > 0 else ""),
+            "best-vs-baseline-speedup": (round(base_ms / best_ms, 3)
+                                         if best_ms > 0 and base_ms == base_ms
+                                         else ""),
+        })
+    out = pd.DataFrame(rows, columns=[
+        "query", "baseline-cfg", "worst-cfg", "best-cfg",
+        "best-vs-worst-speedup", "best-vs-baseline-speedup"])
+    out.to_csv(out_path, index=False)
+    print(f"wrote {out_path}")
+
+
 def plot_top_steps(df: pd.DataFrame, out_path: Path, scale: int,
                    machine_display: str, top_n: int = 8):
     """Top-N most expensive single steps across the entire 22-query
@@ -517,23 +565,31 @@ def main():
                    help="machine identifier (subdir name under "
                         "<data-dir> and <out>); known names get a "
                         "pretty title, unknown ones use the raw value")
+    p.add_argument("--date", required=True,
+                   help="run date as YYYYMMDD; matches the dated "
+                        "folder produced by run_tpch_perf.sh")
+    p.add_argument("--tag", required=True,
+                   help="run tag (the --tag passed to "
+                        "run_tpch_perf.sh)")
     p.add_argument("--scale", required=True, type=int,
                    help="scale factor (must match the CSVs)")
     p.add_argument("--data-dir", default="tools/results/data",
                    help="base dir holding "
-                        "<machine>/tpch/bench_{e2e,steps}_sf<N>.csv "
+                        "<machine>/tpch/<date>/<tag>/bench_{e2e,steps}_sf<N>.csv "
                         "(default: tools/results/data)")
     p.add_argument("--out", default="tools/results/pdf/tpch_bench",
                    help="base output dir; figures land in "
-                        "<out>/<machine>/ (default: "
+                        "<out>/<machine>/<date>/<tag>/ (default: "
                         "tools/results/pdf/tpch_bench)")
     args = p.parse_args()
 
     machine = args.machine
+    date = args.date
+    tag = args.tag
     scale = int(args.scale)
     display = MACHINE_NAMES.get(machine, machine)
 
-    csv_dir = Path(args.data_dir) / machine / "tpch"
+    csv_dir = Path(args.data_dir) / machine / "tpch" / date / tag
     e2e_csv = csv_dir / f"bench_e2e_sf{scale}.csv"
     steps_csv = csv_dir / f"bench_steps_sf{scale}.csv"
     if not e2e_csv.exists():
@@ -552,7 +608,7 @@ def main():
     if df_e2e.empty:
         sys.exit(f"error: no rows at scale={scale} in {e2e_csv}")
 
-    out_dir = Path(args.out) / machine
+    out_dir = Path(args.out) / machine / date / tag
     out_dir.mkdir(parents=True, exist_ok=True)
     plot_e2e(df_e2e, out_dir / f"tpch_e2e_sf{scale}.pdf", scale, display)
     plot_breakdown(df_steps, out_dir / f"tpch_breakdown_sf{scale}.pdf",
@@ -561,6 +617,11 @@ def main():
                    scale, display)
     plot_kind_share(df_steps, out_dir / f"tpch_kind_share_sf{scale}.pdf",
                     scale, display)
+    # Per-query summary CSV — same numbers as the e2e plot, in a
+    # paste-into-Sheets shape. Lands in the data dir (alongside the
+    # bench CSVs) rather than the PDF dir; it's a CSV.
+    write_per_query_summary(
+        df_e2e, csv_dir / f"per_query_summary_sf{scale}.csv")
 
 
 if __name__ == "__main__":

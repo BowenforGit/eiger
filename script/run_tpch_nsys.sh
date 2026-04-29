@@ -3,9 +3,9 @@
 #
 # Strategy:
 #   * Manifest comes from an existing benchmark_tpch_ir --csv output
-#     (e.g. tools/results/data/<machine>/tpch/bench_e2e_sf{10,30}.csv).
-#     Re-extracted fresh on every invocation so it tracks the latest
-#     sweep.
+#     (e.g. tools/results/data/<machine>/tpch/<date>/<tag>/bench_e2e_sf<N>.csv,
+#     produced by `script/run_tpch_perf.sh`). Re-extracted fresh on
+#     every invocation so it tracks the latest sweep.
 #   * For each query, we keep:
 #       - the baseline cell (always), AND
 #       - all cells of queries whose best/baseline ratio is below
@@ -14,16 +14,26 @@
 #     profiled, dropping ~566 cells (full sweep) to ~150–180.
 #   * One `nsys profile` invocation per cell (NVBench --profile mode
 #     runs each cell exactly once, no convergence loop), reports go
-#     to <out-base>/<machine>/sf<N>/q<NN>_<label>.nsys-rep.
+#     to <out-base>/<machine>/<date>/<tag>/sf<N>/q<NN>_<label>.nsys-rep
+#     — mirroring the bench layout so a (machine, date, tag, scale)
+#     identifies one logical run end-to-end.
 #   * Pre-flight throwers (multi-key/STRING groupby etc.) are already
 #     marked Skipped=Yes by the bench fixture, so they're naturally
 #     absent from the manifest.
 #
 # Usage:
-#   GAMAX_MACHINE=<name> ./script/run_tpch_nsys.sh <e2e-csv> <scale>
+#   GAMAX_MACHINE=<name> GAMAX_TAG=<name> \
+#     ./script/run_tpch_nsys.sh <e2e-csv> <scale>
 #
 #   GAMAX_MACHINE=...      # required — subdir under <out-base> for
 #                          # the machine's reports (e.g. h100, gh200)
+#   GAMAX_TAG=...          # required — same tag used by run_tpch_perf.sh
+#                          # for the bench run we're now profiling
+#   GAMAX_DATE=YYYYMMDD    # override date (default: today). Use this
+#                          # when profiling a bench run from a previous
+#                          # day; the resulting nsys reports still go
+#                          # under that day's dated folder.
+#   GAMAX_GPU=N            # GPU index for `nsys profile -d` (default 0)
 #   GAMAX_NSYS_EXECUTE=1   # actually run nsys (default: dry-run, prints
 #                          # the manifest + planned commands)
 #   GAMAX_NSYS_GAP=0.90    # tighter gap threshold (default 0.95)
@@ -31,20 +41,25 @@
 #                          # /scratch/wubo/gamax_tpch_nsys)
 #
 # Examples:
-#   # dry-run for SF=10 on h100
-#   GAMAX_MACHINE=h100 ./script/run_tpch_nsys.sh \
-#     tools/results/data/h100/tpch/bench_e2e_sf10.csv 10
+#   # dry-run for SF=10 on h100, tag "after-count-all"
+#   GAMAX_MACHINE=h100 GAMAX_TAG=after-count-all \
+#   ./script/run_tpch_nsys.sh \
+#     tools/results/data/h100/tpch/20260429/after-count-all/bench_e2e_sf10.csv 10
 #
 #   # actually profile SF=30 on gh200
-#   GAMAX_MACHINE=gh200 GAMAX_NSYS_EXECUTE=1 \
+#   GAMAX_MACHINE=gh200 GAMAX_TAG=after-count-all \
+#   GAMAX_NSYS_EXECUTE=1 \
 #   ./script/run_tpch_nsys.sh \
-#     tools/results/data/gh200/tpch/bench_e2e_sf30.csv 30
+#     tools/results/data/gh200/tpch/20260429/after-count-all/bench_e2e_sf30.csv 30
 
 set -euo pipefail
 
 CSV=${1:?"path to bench_e2e_sf<N>.csv"}
 SF=${2:?"scale factor (must match the CSV)"}
 MACHINE=${GAMAX_MACHINE:?"GAMAX_MACHINE must be set (e.g. h100, gh200)"}
+TAG=${GAMAX_TAG:?"GAMAX_TAG must be set (matches the run_tpch_perf.sh --tag)"}
+DATE=${GAMAX_DATE:-$(date +%Y%m%d)}
+GPU=${GAMAX_GPU:-0}
 OUT_BASE=${GAMAX_NSYS_OUT:-/scratch/wubo/gamax_tpch_nsys}
 GAP=${GAMAX_NSYS_GAP:-0.95}
 EXECUTE=${GAMAX_NSYS_EXECUTE:-0}
@@ -68,7 +83,7 @@ if ! command -v nsys >/dev/null 2>&1; then
     exit 2
 fi
 
-OUT_DIR="$OUT_BASE/$MACHINE/sf$SF"
+OUT_DIR="$OUT_BASE/$MACHINE/$DATE/$TAG/sf$SF"
 mkdir -p "$OUT_DIR"
 
 # Extract the manifest with python (CSV parsing + per-query gap logic).
@@ -158,6 +173,7 @@ while IFS=, read -r q fil prj srt grp ejn label; do
             --force-overwrite=true
             --stats=false
         "$BENCH_BIN" --profile --quiet
+            -d "$GPU"
             -a "query=$q" -a "scale=$SF"
             -a "filter=$fil" -a "project=$prj" -a "sort=$srt"
             -a "group_by=$grp" -a "eq_join=$ejn"

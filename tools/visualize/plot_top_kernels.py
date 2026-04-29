@@ -363,8 +363,16 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--machine", required=True,
                    help="machine identifier — picks the input CSV "
-                        "under <data-dir>/<machine>/tpch/ and the "
-                        "nsys reports under <nsys-base>/<machine>/")
+                        "under <data-dir>/<machine>/tpch/<date>/<tag>/ "
+                        "and the nsys reports under "
+                        "<nsys-base>/<machine>/<date>/<tag>/")
+    p.add_argument("--date", required=True,
+                   help="run date as YYYYMMDD; matches the dated "
+                        "folder produced by run_tpch_perf.sh")
+    p.add_argument("--tag", required=True,
+                   help="run tag (the --tag passed to "
+                        "run_tpch_perf.sh / GAMAX_TAG for "
+                        "run_tpch_nsys.sh)")
     p.add_argument("--scale", required=True, type=int,
                    help="scale factor (must match the steps CSV)")
     p.add_argument("--cfg-mode", choices=["best", "default"], default="best",
@@ -375,30 +383,31 @@ def main():
                         "tools/results/data)")
     p.add_argument("--nsys-base", default="/scratch/wubo/gamax_tpch_nsys",
                    help="base dir holding "
-                        "<machine>/sf<N>/q<NN>_<label>.nsys-rep "
+                        "<machine>/<date>/<tag>/sf<N>/q<NN>_<label>.nsys-rep "
                         "(default: /scratch/wubo/gamax_tpch_nsys)")
     p.add_argument("--out-base", default="tools/results/pdf/tpch_bench",
                    help="base output dir; figures land in "
-                        "<out-base>/<machine>/ (default: "
+                        "<out-base>/<machine>/<date>/<tag>/ (default: "
                         "tools/results/pdf/tpch_bench)")
     p.add_argument("--top-n", type=int, default=8)
     args = p.parse_args()
 
     machine = args.machine
+    date = args.date
+    tag = args.tag
     scale = int(args.scale)
     mode = args.cfg_mode
     display = MACHINE_NAMES.get(machine, machine)
 
-    steps_csv = (Path(args.data_dir) / machine / "tpch"
-                 / f"bench_steps_sf{scale}.csv")
+    run_dir = Path(args.data_dir) / machine / "tpch" / date / tag
+    steps_csv = run_dir / f"bench_steps_sf{scale}.csv"
     if not steps_csv.exists():
         sys.exit(f"error: missing steps CSV: {steps_csv}")
-    nsys_dir = Path(args.nsys_base) / machine
+    nsys_dir = Path(args.nsys_base) / machine / date / tag
 
-    out_pdf = (Path(args.out_base) / machine
+    out_pdf = (Path(args.out_base) / machine / date / tag
                / f"tpch_top_kernels_{mode}_sf{scale}.pdf")
-    csv_out = (Path(args.data_dir) / machine / "tpch"
-               / f"top_kernels_{mode}_sf{scale}.csv")
+    csv_out = run_dir / f"top_kernels_{mode}_sf{scale}.csv"
 
     agg = aggregate_kernels(steps_csv, scale, nsys_dir, cfg_mode=mode)
     if agg.empty:
