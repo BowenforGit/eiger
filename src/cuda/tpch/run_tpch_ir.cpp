@@ -287,6 +287,7 @@ int main(int argc, char** argv) try {
     if (auto h = parse_eq_join_algo(args.eq_join_algo)) {
         lower_opts.eq_join = h;
     }
+    gamax::ir::tpch::apply_query_hints(args.query_id, lower_opts);
     auto ep = gamax::ir::lower_to_exec_plan(plan, catalog, lower_opts);
     std::cout << "ExecPlan: " << ep.steps.size() << " steps, "
               << ep.required_sources.size() << " sources.\n";

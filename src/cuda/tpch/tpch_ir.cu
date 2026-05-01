@@ -1,6 +1,8 @@
 #include "tpch/tpch_ir.hpp"
 
 #include "ir/expr.hpp"
+#include "ir/lower_to_exec_plan.hpp"
+#include "operators/groupby/groupby.hpp"
 
 namespace gamax::ir::tpch {
 
@@ -1406,6 +1408,26 @@ PlanPtr build_q22(const QueryBuilder& qb) {
             {"totacctbal", AggKind::Sum, no_orders.c("c_acctbal")},
         });
     return agg.sort({asc("cntrycode")}).plan();
+}
+
+// Apply per-query lowering hints that aren't expressible at the IR
+// level — currently only known group-cardinality bounds. Reused by all
+// three driver consumers (run_tpch_ir, benchmark_tpch_ir, axis_probe)
+// so the hints are spelled in exactly one place.
+//
+// Q1 groups by (l_returnflag, l_linestatus) — the spec restricts both
+// to 1-char enums and the lineitem data only ever produces 4 distinct
+// pairs. Without this hint, the hash groupby's table is sized at
+// `min(input_rows, MAXIMUM_SIZE) = input_rows` (~600M at SF=100),
+// blowing the 88 GiB UserSpaceMM slab with std::bad_alloc. With the
+// hint, the table is sized for 4 groups — a few bytes.
+void apply_query_hints(int qid, gamax::ir::LowerOptions& opts) {
+    if (qid == 1) {
+        if (!opts.group_by) {
+            opts.group_by = gamax::groupby::groupby_hint{};
+        }
+        opts.group_by->groups_upper_bound = 4;
+    }
 }
 
 } // namespace gamax::ir::tpch

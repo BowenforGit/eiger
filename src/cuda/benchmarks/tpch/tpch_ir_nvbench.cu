@@ -388,6 +388,7 @@ void bench_tpch_ir(nvbench::state& state) {
     if (!is_na(ejn_v))
         opts.eq_join  = is_set(ejn_v) ? parse_eq_join_axis(ejn_v)
                                       : bench_defaults::eq_join();
+    gamax::ir::tpch::apply_query_hints(qid, opts);
     auto ep = gamax::ir::lower_to_exec_plan(plan, catalog, opts);
 
     auto& reader = shared_reader(sf);
@@ -510,7 +511,7 @@ NVBENCH_BENCH(bench_tpch_ir)
     .add_int64_axis("query",
         {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
          12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22})
-    .add_int64_axis("scale", {1, 10, 30})
+    .add_int64_axis("scale", {1, 10, 30, 100})
     .add_string_axis("filter",   {"fuse", "nofuse", "default", "n/a"})
     .add_string_axis("project",  {"fuse", "nofuse", "default", "n/a"})
     .add_string_axis("sort",     {"skf",  "no_skf", "default", "n/a"})

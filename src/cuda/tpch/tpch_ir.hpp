@@ -18,9 +18,16 @@
 
 #include "ir/builder.hpp"
 #include "ir/catalog.hpp"
+#include "ir/lower_to_exec_plan.hpp"
 #include "ir/plan_node.hpp"
 
 namespace gamax::ir::tpch {
+
+// Apply per-query lowering hints that aren't expressed in the IR
+// (currently: known group-cardinality bounds, e.g. Q1's 4 groups).
+// Call after the consumer's own LowerOptions are populated, before
+// `lower_to_exec_plan`.
+void apply_query_hints(int qid, gamax::ir::LowerOptions& opts);
 
 // Populate a Catalog with the TPC-H schemas used by Q1..Q22. Types
 // follow the conventions already in the codebase:

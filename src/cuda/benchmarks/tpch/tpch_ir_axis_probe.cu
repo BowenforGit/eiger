@@ -409,6 +409,7 @@ int main(int argc, char** argv) try {
                 opts.group_by = is_set(gv) ? parse_group_by(gv) : bench_defaults::group_by();
             if (!is_na(jv))
                 opts.eq_join  = is_set(jv) ? parse_eq_join(jv) : bench_defaults::eq_join();
+            gamax::ir::tpch::apply_query_hints(qid, opts);
 
             std::string status = "pass";
             std::string verify = args.verify ? std::string{} : std::string{"skip"};
