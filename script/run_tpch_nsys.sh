@@ -239,13 +239,34 @@ PYEOF
 )
 
 # Iterate manifest: one nsys invocation per kept cell.
+#
+# Resumable: if a non-empty .nsys-rep already exists at the cell's
+# output path (from a previous run that completed it before being
+# aborted), skip the cell. To force a re-profile, delete that file.
+# A 0-byte .nsys-rep (nsys was killed mid-write) is treated as not
+# done — we re-profile, and `--force-overwrite=true` lets nsys clear
+# the partial file before writing.
 n_planned=0
 n_done=0
 n_failed=0
+n_skipped=0
 while IFS=, read -r q fil prj srt grp ejn label; do
     [[ -z "$q" ]] && continue
     n_planned=$((n_planned + 1))
     out_prefix="$OUT_DIR/q$(printf '%02d' "$q")_${label}"
+    out_file="${out_prefix}.nsys-rep"
+
+    if [[ -s "$out_file" ]]; then
+        n_skipped=$((n_skipped + 1))
+        if [[ "$EXECUTE" -eq 1 ]]; then
+            printf '[%d] q%d %s … SKIP (existing %s)\n' \
+                "$n_planned" "$q" "$label" "$out_file"
+        else
+            printf '[%d] SKIP existing: %s\n' "$n_planned" "$out_file"
+        fi
+        continue
+    fi
+
     # GAMAX_BENCH_SKIP_PREFLIGHT=1 disables the pre-flight try/catch
     # inside the bench fixture. Without it, the plan would execute
     # twice per cell (pre-flight on cudaStreamDefault + state.exec on
@@ -281,10 +302,10 @@ done <<< "$manifest"
 
 if [[ "$EXECUTE" -eq 1 ]]; then
     echo ""
-    echo "Done: planned=$n_planned ok=$n_done fail=$n_failed"
+    echo "Done: planned=$n_planned ok=$n_done fail=$n_failed skipped=$n_skipped"
     echo "Output: $OUT_DIR"
 else
     echo ""
-    echo "DRY RUN: planned=$n_planned cells. Add --execute to actually profile."
+    echo "DRY RUN: planned=$n_planned cells (would-skip=$n_skipped). Add --execute to actually profile."
     echo "Output would land in: $OUT_DIR"
 fi
