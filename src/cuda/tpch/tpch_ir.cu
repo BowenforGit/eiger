@@ -220,80 +220,109 @@ PlanPtr build_q1(const QueryBuilder& qb) {
 // ── Q2: Minimum Cost Supplier ──────────────────────────────────────
 //
 // Five-way join (part, supplier, partsupp, nation, region) with size,
-// p_type endswith '[type]', and r_name filters. The correlated subquery
-// "ps_supplycost = MIN(ps_supplycost) within partsupp+supplier+nation+
-//  region filtered to the region" is lowered to a second plan that
-// computes the per-partkey min, joined back to the outer plan on
-// (ps_partkey, min_supplycost). That's a multi-key join — our IR
-// represents it (the emitter currently throws on multi-key).
+// p_type endswith '[type]', and r_name filters. The correlated MIN
+// subquery is decorrelated as a per-partkey aggregate over the same
+// (region-filtered) join, joined back on
+//   (p_partkey, ps_supplycost) == (p_partkey, min_supplycost).
+//
+// Single-chain shape (DAG): one filtered psps_nr relation is reused
+// both as the agg input and as the back-join probe. Pushing part_filt
+// above the agg is sound — the agg is keyed on p_partkey, so dropping
+// non-matching partkeys before aggregation only drops groups that the
+// outer plan would never reference.
 //
 // ORDER BY s_acctbal DESC, n_name, s_name, p_partkey  LIMIT 100.
 PlanPtr build_q2(const QueryBuilder& qb) {
     auto p = qb.scan("part",
         {"p_partkey", "p_mfgr", "p_type", "p_size"});
+    auto ps = qb.scan("partsupp",
+        {"ps_partkey", "ps_suppkey", "ps_supplycost"});
     auto s = qb.scan("supplier",
         {"s_suppkey", "s_name", "s_address", "s_nationkey",
          "s_phone", "s_acctbal", "s_comment"});
-    auto ps = qb.scan("partsupp",
-        {"ps_partkey", "ps_suppkey", "ps_supplycost"});
     auto n = qb.scan("nation", {"n_nationkey", "n_name", "n_regionkey"});
     auto r = qb.scan("region", {"r_regionkey", "r_name"});
 
-    // Filter part size and type suffix.
     auto p_filt = p
         .filter(p.c("p_size") == lit(15))
         .filter(string_op(StringOpKind::Endswith,
                           p.c("p_type"), {"BRASS"}));
-    // Filter region by name.
+    auto p_proj = p_filt.project({
+        {"p_partkey", p_filt.c("p_partkey")},
+        {"p_mfgr",    p_filt.c("p_mfgr")},
+    });
+
+    // Maximus inner_join(A, B): A=probe (1st), B=build (2nd).
+    // Our IR right=probe, left=build → swap args.
+    auto psp = ps.inner_join(p_proj,
+        ps.c("ps_partkey") == p_proj.c("p_partkey"));
+    auto psps = s.inner_join(psp,
+        s.c("s_suppkey") == psp.c("ps_suppkey"));
+    auto psps_proj = psps.project({
+        {"p_partkey",     psps.c("p_partkey")},
+        {"ps_supplycost", psps.c("ps_supplycost")},
+        {"p_mfgr",        psps.c("p_mfgr")},
+        {"s_nationkey",   psps.c("s_nationkey")},
+        {"s_acctbal",     psps.c("s_acctbal")},
+        {"s_name",        psps.c("s_name")},
+        {"s_address",     psps.c("s_address")},
+        {"s_phone",       psps.c("s_phone")},
+        {"s_comment",     psps.c("s_comment")},
+    });
+
     auto r_filt = r.filter(
         string_op(StringOpKind::Equal, r.c("r_name"), {"EUROPE"}));
-
-    // region ⋈ nation ⋈ supplier ⋈ partsupp ⋈ part.
-    auto rn = r_filt.inner_join(n, r_filt.c("r_regionkey") == n.c("n_regionkey"));
-    auto rns = rn.inner_join(s, rn.c("n_nationkey") == s.c("s_nationkey"));
-    auto rnsp = rns.inner_join(ps, rns.c("s_suppkey") == ps.c("ps_suppkey"));
-    auto joined = rnsp.inner_join(
-        p_filt, rnsp.c("ps_partkey") == p_filt.c("p_partkey"));
-
-    // Per-partkey min supplycost for the same region filter — built as
-    // a sibling plan, joined back on (partkey, min_cost).
-    auto ps2 = qb.scan("partsupp", {"ps_partkey", "ps_suppkey", "ps_supplycost"});
-    auto s2  = qb.scan("supplier", {"s_suppkey", "s_nationkey"});
-    auto n2  = qb.scan("nation",   {"n_nationkey", "n_regionkey"});
-    auto r2  = qb.scan("region",   {"r_regionkey", "r_name"});
-    auto r2_filt = r2.filter(
-        string_op(StringOpKind::Equal, r2.c("r_name"), {"EUROPE"}));
-    auto rn_inner  = r2_filt.inner_join(n2,
-        r2_filt.c("r_regionkey") == n2.c("n_regionkey"));
-    auto rns_inner = rn_inner.inner_join(s2,
-        rn_inner.c("n_nationkey") == s2.c("s_nationkey"));
-    auto rnsp_inner = rns_inner.inner_join(ps2,
-        rns_inner.c("s_suppkey") == ps2.c("ps_suppkey"));
-    auto min_costs = rnsp_inner.aggregate(
-        {"ps_partkey"},
-        {{"min_cost", AggKind::Min, rnsp_inner.c("ps_supplycost")}});
-
-    // Outer ⋈ min_costs on (ps_partkey, ps_supplycost) == (ps_partkey, min_cost).
-    // This is a multi-key join — IR represents it; emitter throws.
-    auto final_join = joined.inner_join(min_costs,
-          (joined.c("ps_partkey")    == min_costs.c("ps_partkey"))
-       && (joined.c("ps_supplycost") == min_costs.c("min_cost")));
-
-    auto projected = final_join.project({
-        {"s_acctbal",  final_join.c("s_acctbal")},
-        {"s_name",     final_join.c("s_name")},
-        {"n_name",     final_join.c("n_name")},
-        {"p_partkey",  final_join.c("p_partkey")},
-        {"p_mfgr",     final_join.c("p_mfgr")},
-        {"s_address",  final_join.c("s_address")},
-        {"s_phone",    final_join.c("s_phone")},
-        {"s_comment",  final_join.c("s_comment")},
+    auto nr = r_filt.inner_join(n,
+        r_filt.c("r_regionkey") == n.c("n_regionkey"));
+    auto nr_proj = nr.project({
+        {"n_nationkey", nr.c("n_nationkey")},
+        {"n_name",      nr.c("n_name")},
     });
 
-    auto sorted = projected.sort({
+    auto psps_nr = nr_proj.inner_join(psps_proj,
+        nr_proj.c("n_nationkey") == psps_proj.c("s_nationkey"));
+    auto psps_nr_proj = psps_nr.project({
+        {"p_partkey",     psps_nr.c("p_partkey")},
+        {"ps_supplycost", psps_nr.c("ps_supplycost")},
+        {"p_mfgr",        psps_nr.c("p_mfgr")},
+        {"n_name",        psps_nr.c("n_name")},
+        {"s_acctbal",     psps_nr.c("s_acctbal")},
+        {"s_name",        psps_nr.c("s_name")},
+        {"s_address",     psps_nr.c("s_address")},
+        {"s_phone",       psps_nr.c("s_phone")},
+        {"s_comment",     psps_nr.c("s_comment")},
+    });
+
+    // DAG reuse: psps_nr_proj feeds both the per-partkey min and the
+    // back-join's probe.
+    auto agg = psps_nr_proj.aggregate(
+        {"p_partkey"},
+        {{"min_supplycost",
+            AggKind::Min, psps_nr_proj.c("ps_supplycost")}});
+    // Rename agg's `p_partkey` so the back-join's `c("p_partkey")` on
+    // the result side resolves unambiguously to psps_nr_proj's column.
+    auto agg_renamed = agg.project({
+        {"agg_partkey",    agg.c("p_partkey")},
+        {"min_supplycost", agg.c("min_supplycost")},
+    });
+
+    auto final_join = agg_renamed.inner_join(psps_nr_proj,
+            (agg_renamed.c("agg_partkey")    == psps_nr_proj.c("p_partkey"))
+         && (agg_renamed.c("min_supplycost") == psps_nr_proj.c("ps_supplycost")));
+
+    auto out = final_join.project({
+        {"s_acctbal", final_join.c("s_acctbal")},
+        {"s_name",    final_join.c("s_name")},
+        {"n_name",    final_join.c("n_name")},
+        {"p_partkey", final_join.c("p_partkey")},
+        {"p_mfgr",    final_join.c("p_mfgr")},
+        {"s_address", final_join.c("s_address")},
+        {"s_phone",   final_join.c("s_phone")},
+        {"s_comment", final_join.c("s_comment")},
+    });
+    return out.sort({
         desc("s_acctbal"), asc("n_name"), asc("s_name"), asc("p_partkey"),
-    });
-    return sorted.limit(100).plan();
+    }).limit(100).plan();
 }
 
 // ── Q3: Shipping Priority ──────────────────────────────────────────
@@ -687,6 +716,17 @@ PlanPtr build_q9(const QueryBuilder& qb) {
 }
 
 // ── Q10: Returned Item Reporting ───────────────────────────────────
+//
+// Returns the top-20 customers (by revenue from returned lineitems) in
+// 1993Q4. The aggregate is pushed below the customer/nation joins —
+// revenue per o_custkey on (lineitem_filt ⋈ orders_filt) — and then the
+// surviving custkeys are enriched via customer (PK c_custkey) and
+// nation (PK n_nationkey). Both join legs are inner equi-joins against
+// PK / FK-constrained columns (TPC-H guarantees every o_custkey is in
+// customer.c_custkey and every c_nationkey is in nation.n_nationkey),
+// so each surviving custkey gets exactly one customer row and one
+// nation row — no row-drop, no row-multiplication, per-custkey revenue
+// preserved bit-for-bit.
 PlanPtr build_q10(const QueryBuilder& qb) {
     auto c = qb.scan("customer",
         {"c_custkey", "c_name", "c_address", "c_nationkey",
@@ -702,47 +742,34 @@ PlanPtr build_q10(const QueryBuilder& qb) {
     auto l_filt = l.filter(
         string_op(StringOpKind::Equal, l.c("l_returnflag"), {"R"}));
 
-    auto co  = c.inner_join(o_filt,
-        c.c("c_custkey") == o_filt.c("o_custkey"));
-    auto col = co.inner_join(l_filt,
-        co.c("o_orderkey") == l_filt.c("l_orderkey"));
-    // nation ⋈ col. Build = nation (25 rows); probe = col (the
-    // big customer⋈orders⋈lineitem result). Inverted form
-    // (col.inner_join(n)) overflows partition_hash_join: c_nationkey
-    // has 25 distinct values, so the col side hashed as build would
-    // give ~5K-row buckets exceeding the 4096 cap.
-    auto joined = n.inner_join(col,
-        n.c("n_nationkey") == col.c("c_nationkey"));
-
-    auto projected = joined.project({
-        {"c_custkey",  joined.c("c_custkey")},
-        {"c_name",     joined.c("c_name")},
-        {"c_acctbal",  joined.c("c_acctbal")},
-        {"c_phone",    joined.c("c_phone")},
-        {"n_name",     joined.c("n_name")},
-        {"c_address",  joined.c("c_address")},
-        {"c_comment",  joined.c("c_comment")},
-        {"disc_price",
-            joined.c("l_extendedprice") * (lit(1.0) - joined.c("l_discount"))},
+    auto lo = l_filt.inner_join(o_filt,
+        l_filt.c("l_orderkey") == o_filt.c("o_orderkey"));
+    auto lo_proj = lo.project({
+        {"o_custkey",  lo.c("o_custkey")},
+        {"disc_price", lo.c("l_extendedprice") * (lit(1.0) - lo.c("l_discount"))},
     });
-    auto agg = projected.aggregate(
-        {"c_custkey","c_name","c_acctbal","c_phone","n_name",
-         "c_address","c_comment"},
-        {{"revenue", AggKind::Sum, projected.c("disc_price")}});
-    // Spec output order is (c_custkey, c_name, revenue, c_acctbal,
-    // n_name, c_address, c_phone, c_comment); the aggregate emits
-    // keys-first (revenue last). Pure-ColRef Project reorders
-    // without renumbering ids — the Sort's reference to `revenue`
-    // still resolves.
-    auto out = agg.project({
-        {"c_custkey", agg.c("c_custkey")},
-        {"c_name",    agg.c("c_name")},
-        {"revenue",   agg.c("revenue")},
-        {"c_acctbal", agg.c("c_acctbal")},
-        {"n_name",    agg.c("n_name")},
-        {"c_address", agg.c("c_address")},
-        {"c_phone",   agg.c("c_phone")},
-        {"c_comment", agg.c("c_comment")},
+    auto lo_agg = lo_proj.aggregate(
+        {"o_custkey"},
+        {{"revenue", AggKind::Sum, lo_proj.c("disc_price")}});
+
+    // Same join order as base Q10: nation as build (25 rows) avoids
+    // partition_hash_join bucket overflow. Customer joins lo_agg on
+    // c_custkey == o_custkey (each surviving o_custkey hits exactly
+    // one customer row); nation joins via c_nationkey == n_nationkey.
+    auto loc = c.inner_join(lo_agg,
+        c.c("c_custkey") == lo_agg.c("o_custkey"));
+    auto locn = n.inner_join(loc,
+        n.c("n_nationkey") == loc.c("c_nationkey"));
+
+    auto out = locn.project({
+        {"c_custkey", locn.c("c_custkey")},
+        {"c_name",    locn.c("c_name")},
+        {"revenue",   locn.c("revenue")},
+        {"c_acctbal", locn.c("c_acctbal")},
+        {"n_name",    locn.c("n_name")},
+        {"c_address", locn.c("c_address")},
+        {"c_phone",   locn.c("c_phone")},
+        {"c_comment", locn.c("c_comment")},
     });
     return out.sort({desc("revenue")}).limit(20).plan();
 }
@@ -754,6 +781,10 @@ PlanPtr build_q10(const QueryBuilder& qb) {
 // against a scalar threshold derived from a sibling aggregate over the
 // same filtered join — Maximus lowers this as a cross_join between the
 // grouped output and the 1-row threshold, followed by a filter.
+//
+// The supplier⋈nation_filt join puts n_filt (1 row after the GERMANY
+// filter) on the build side so HASH+GFUR builds a 1-bucket table and
+// streams supplier through it.
 PlanPtr build_q11(const QueryBuilder& qb) {
     auto ps = qb.scan("partsupp",
         {"ps_partkey", "ps_suppkey", "ps_availqty", "ps_supplycost"});
@@ -762,8 +793,8 @@ PlanPtr build_q11(const QueryBuilder& qb) {
 
     auto n_filt = n.filter(
         string_op(StringOpKind::Equal, n.c("n_name"), {"GERMANY"}));
-    auto sn = s.inner_join(n_filt,
-        s.c("s_nationkey") == n_filt.c("n_nationkey"));
+    auto sn = n_filt.inner_join(s,
+        n_filt.c("n_nationkey") == s.c("s_nationkey"));
     auto pssn = ps.inner_join(sn,
         ps.c("ps_suppkey") == sn.c("s_suppkey"));
 
@@ -772,12 +803,10 @@ PlanPtr build_q11(const QueryBuilder& qb) {
         {"value", pssn.c("ps_supplycost") * pssn.c("ps_availqty")},
     });
 
-    // Main grouped aggregate.
     auto grouped = with_value.aggregate(
         {"ps_partkey"},
         {{"partkey_value", AggKind::Sum, with_value.c("value")}});
 
-    // Threshold: sum(value) over the same filtered join * 0.0001.
     auto threshold_agg = with_value.aggregate(
         /*keys=*/{},
         {{"global_sum", AggKind::Sum, with_value.c("value")}});
@@ -785,8 +814,6 @@ PlanPtr build_q11(const QueryBuilder& qb) {
         {"threshold", threshold_agg.c("global_sum") * lit(0.0001)},
     });
 
-    // Cross-join the per-partkey sums with the 1-row threshold, then
-    // filter. (Physical emit of cross_join is not wired yet.)
     auto crossed = grouped.cross_join(threshold);
     auto filtered = crossed.filter(
         crossed.c("partkey_value") > crossed.c("threshold"));
@@ -1047,9 +1074,17 @@ PlanPtr build_q16(const QueryBuilder& qb) {
 
 // ── Q17: Small-Quantity-Order Revenue ──────────────────────────────
 //
-// Correlated subquery: per-part average quantity threshold, joined back
-// to the outer plan on l_partkey. This is the same general pattern as
-// Q2's min-supplycost correlation.
+// Correlated subquery: per-part average quantity threshold, joined
+// back to the brand=Brand#23 / container=MED BOX slice on l_partkey.
+// The threshold is derived from `pl = part_filt ⋈ lineitem` directly
+// — pl is an inner join with no extra predicate, so for every
+// surviving partkey it contains all lineitem rows for that partkey,
+// and per-partkey avg(l_quantity) over pl equals the per-partkey avg
+// the spec subquery computes. The avoided second lineitem scan and
+// full-table groupby is the bulk of the cost at large SF.
+//
+// `threshold.inner_join(pl, ...)` keeps the smaller per-partkey side
+// on the build side of HASH+GFUR.
 PlanPtr build_q17(const QueryBuilder& qb) {
     auto p = qb.scan("part", {"p_partkey", "p_brand", "p_container"});
     auto l = qb.scan("lineitem",
@@ -1060,18 +1095,16 @@ PlanPtr build_q17(const QueryBuilder& qb) {
     auto pl = p_filt.inner_join(l,
         p_filt.c("p_partkey") == l.c("l_partkey"));
 
-    // Subquery: avg quantity per partkey across all of lineitem.
-    auto l2 = qb.scan("lineitem", {"l_partkey", "l_quantity"});
-    auto per_part = l2.aggregate(
+    auto per_pl = pl.aggregate(
         {"l_partkey"},
-        {{"avg_qty", AggKind::Avg, l2.c("l_quantity")}});
-    auto threshold = per_part.project({
-        {"l_partkey", per_part.c("l_partkey")},
-        {"thr", lit(0.2) * per_part.c("avg_qty")},
+        {{"avg_qty", AggKind::Avg, pl.c("l_quantity")}});
+    auto threshold = per_pl.project({
+        {"l_partkey", per_pl.c("l_partkey")},
+        {"thr", lit(0.2) * per_pl.c("avg_qty")},
     });
 
-    auto with_thresh = pl.inner_join(threshold,
-        pl.c("l_partkey") == threshold.c("l_partkey"));
+    auto with_thresh = threshold.inner_join(pl,
+        threshold.c("l_partkey") == pl.c("l_partkey"));
     auto below = with_thresh.filter(
         with_thresh.c("l_quantity") < with_thresh.c("thr"));
     auto agg = below.aggregate(
@@ -1084,33 +1117,39 @@ PlanPtr build_q17(const QueryBuilder& qb) {
 
 // ── Q18: Large Volume Customer ─────────────────────────────────────
 //
-// The IN-subquery over orders whose lineitem sum(quantity) > 300 is
-// lowered as: (1) aggregate lineitem per orderkey; (2) filter big
-// orders; (3) left_semi_join orders against the big-orders plan.
+// The IN-subquery "orders whose lineitem sum(quantity) > 300" is
+// lowered as a single per-orderkey aggregate over lineitem; the big
+// orders' sum_qty is carried through the joins as a payload, so we
+// don't need a second lineitem scan or a 5-key outer groupby. Each
+// inner-join leg is 1:1 (orders.o_orderkey is PK; customer.c_custkey
+// is PK with FK-constrained o_custkey), so the per-orderkey sum
+// reaches the output untouched.
 PlanPtr build_q18(const QueryBuilder& qb) {
-    auto l_sub = qb.scan("lineitem", {"l_orderkey", "l_quantity"});
-    auto big_orders_agg = l_sub.aggregate(
+    auto l = qb.scan("lineitem", {"l_orderkey", "l_quantity"});
+    auto sum_per_order = l.aggregate(
         {"l_orderkey"},
-        {{"sum_qty", AggKind::Sum, l_sub.c("l_quantity")}});
-    auto big = big_orders_agg.filter(
-        big_orders_agg.c("sum_qty") > lit(300.0));
+        {{"sum_qty", AggKind::Sum, l.c("l_quantity")}});
+    auto big = sum_per_order.filter(
+        sum_per_order.c("sum_qty") > lit(300.0));
 
-    auto c = qb.scan("customer", {"c_custkey", "c_name"});
     auto o = qb.scan("orders",
         {"o_orderkey", "o_custkey", "o_orderdate", "o_totalprice"});
-    auto l = qb.scan("lineitem", {"l_orderkey", "l_quantity"});
+    auto c = qb.scan("customer", {"c_custkey", "c_name"});
 
-    auto o_big = o.left_semi_join(big,
+    auto ol  = o.inner_join(big,
         o.c("o_orderkey") == big.c("l_orderkey"));
-    auto co  = c.inner_join(o_big,
-        c.c("c_custkey") == o_big.c("o_custkey"));
-    auto col = co.inner_join(l,
-        co.c("o_orderkey") == l.c("l_orderkey"));
-    auto agg = col.aggregate(
-        {"c_name", "c_custkey", "o_orderkey",
-         "o_orderdate", "o_totalprice"},
-        {{"sum_quantity", AggKind::Sum, col.c("l_quantity")}});
-    return agg.sort({desc("o_totalprice"), asc("o_orderdate")})
+    auto loc = ol.inner_join(c,
+        ol.c("o_custkey") == c.c("c_custkey"));
+
+    auto out = loc.project({
+        {"c_name",        loc.c("c_name")},
+        {"c_custkey",     loc.c("c_custkey")},
+        {"o_orderkey",    loc.c("o_orderkey")},
+        {"o_orderdate",   loc.c("o_orderdate")},
+        {"o_totalprice",  loc.c("o_totalprice")},
+        {"sum_quantity",  loc.c("sum_qty")},
+    });
+    return out.sort({desc("o_totalprice"), asc("o_orderdate")})
               .limit(100).plan();
 }
 
