@@ -15,6 +15,13 @@ public:
     virtual void release(void* ptr, cudaStream_t stream) = 0;
     size_t get_peak_mem_used() const { return peak_mem_used; }
     size_t get_mem_used() const { return mem_used; }
+    // Reset the peak high-water mark to the *current* in-flight bytes.
+    // Use this to bracket a region of work — call before, then read
+    // `get_peak_mem_used()` after to obtain the high-water mark
+    // observed within the bracket. (Lower-bounded at `mem_used` rather
+    // than zero so the post-bracket peak is always >= the bracket's
+    // starting baseline.)
+    void reset_peak_mem_used() { peak_mem_used = mem_used; }
 
 protected:
     size_t mem_used {0};

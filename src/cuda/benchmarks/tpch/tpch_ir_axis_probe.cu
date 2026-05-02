@@ -20,10 +20,17 @@
 //     to probe SF=10 or larger, set GAMAX_PROBE_RESET_POOL=1.
 //
 // Output CSV columns:
-//   query,scale,filter,project,sort,group_by,eq_join,status,error
-// status is `pass` or `fail`. `error` is empty for pass; for fail it's
-// the runtime_error::what() of the throw, with commas+newlines stripped
-// for CSV-safety.
+//   query,scale,filter,project,sort,group_by,eq_join,
+//   status,verify,peak_mem_bytes,error
+// `status` is `pass` or `fail`. `verify` is `ok`/`mismatch` (when
+// --verify is set), `skip` otherwise, and empty for failing cells.
+// `peak_mem_bytes` is the GPU memory high-water mark observed during
+// the cell — bracketed from `MemoryManager::reset_peak_mem_used()` to
+// `get_peak_mem_used()` and read after `cudaStreamSynchronize`.
+// Empty for failing cells (peak is unreliable when the cell threw
+// mid-allocation). `error` is the runtime_error::what() of the throw
+// (or the verify diagnostic on mismatch), with commas+newlines
+// stripped for CSV-safety.
 //
 // CLI:
 //   tpch_ir_axis_probe --scale N --out path.csv
@@ -333,7 +340,9 @@ int main(int argc, char** argv) try {
     // status is `pass` (executed without throwing) or `fail` (threw).
     // verify is `ok` / `mismatch` for passing cells when --verify is
     // set, `skip` when --verify is off, and empty for failing cells.
-    out << "query,scale,filter,project,sort,group_by,eq_join,status,verify,error\n";
+    // peak_mem_bytes is the GPU high-water mark within this cell.
+    out << "query,scale,filter,project,sort,group_by,eq_join,"
+           "status,verify,peak_mem_bytes,error\n";
 
     auto& catalog = shared_catalog();
     auto& reader  = shared_reader(args.scale_factor);
@@ -417,12 +426,21 @@ int main(int argc, char** argv) try {
             std::string status = "pass";
             std::string verify = args.verify ? std::string{} : std::string{"skip"};
             std::string err;
+            // Bracket the cell's GPU memory: snapshot the peak at
+            // `mem_used` before, run the cell (sync the stream so all
+            // async allocations have completed before we read), then
+            // grab the high-water mark. Empty string in the CSV for
+            // failing cells because the value is unreliable when the
+            // cell threw mid-allocation.
+            get_mm()->reset_peak_mem_used();
+            std::string peak_mem;
             try {
                 auto ep = gamax::ir::lower_to_exec_plan(plan, catalog, opts);
                 gamax::tpch::tpch_params params(args.scale_factor);
                 gamax::phys::Context ctx{params.stream};
                 auto result = gamax::exec::execute(ep, src_fn, ctx);
                 cudaStreamSynchronize(params.stream);
+                peak_mem = std::to_string(get_mm()->get_peak_mem_used());
                 ++pass_n;
                 if (args.verify) {
                     auto vr = gamax::tpch::verify_result(
@@ -447,7 +465,8 @@ int main(int argc, char** argv) try {
 
             out << qid << ',' << args.scale_factor << ',' << fv << ','
                 << pv << ',' << sv << ',' << gv << ',' << jv << ','
-                << status << ',' << verify << ',' << err << '\n';
+                << status << ',' << verify << ',' << peak_mem << ','
+                << err << '\n';
 
             if (!args.quiet && (pass_n + fail_n) % 100 == 0) {
                 std::cerr << "[probe] " << (pass_n + fail_n)
