@@ -62,7 +62,7 @@ std::shared_ptr<MemoryManager> get_mm() {
             // aliasing. 128 MiB is enough scratch in practice
             // (cudaMalloc itself uses much less) and gives the slab
             // another 128 MiB of working space.
-            constexpr std::size_t kDriverReserve = std::size_t{128} << 20;
+            constexpr std::size_t kDriverReserve = std::size_t{1} << 30;
             auto mem_pool_size = (free > kDriverReserve)
                                  ? (free - kDriverReserve) : free;
             mm = std::make_shared<UserSpaceMM>(mem_pool_size);
