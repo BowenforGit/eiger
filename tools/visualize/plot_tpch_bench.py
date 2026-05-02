@@ -417,22 +417,95 @@ def plot_kind_share(df: pd.DataFrame, out_path: Path, scale: int,
           f"{float(by_kind['pct'].head(3).sum()):.1f}%")
 
 
-def write_per_query_summary(df: pd.DataFrame, out_path: Path):
-    """Per-query e2e CSV with the same numbers the e2e plot's three
-    bars carry: baseline / worst / best in milliseconds, plus the
-    two derived speedups. One row per query 1..22; queries with no
-    data in the input are skipped (no NaN rows).
+# Each per-axis column lists the best cfg value for each step of the
+# matching kind. The bench fixture's `sort` axis governs both Sort and
+# TopK (they share the sort_table_options hint), so the `sort` column
+# rolls in steps of either kind. SemiJoin / AntiJoin are not bench-axis-
+# governed (single implementation each) so they don't appear here.
+AXIS_TO_KINDS = {
+    "filter":   ["Filter"],
+    "project":  ["Project"],
+    "sort":     ["Sort", "TopK"],
+    "group_by": ["GroupBy"],
+    "eq_join":  ["EqJoin"],
+}
 
-    Schema (compatible with paste-into-Sheets):
+# bench_defaults::* in tpch_ir_nvbench.cu picks one concrete value per
+# axis as the "default" sentinel. Expand "default" to that concrete
+# value in the per-axis columns — otherwise the CSV would show both
+# "default" and the concrete value (e.g. "nofuse") as if they were
+# distinct cfgs, when they're really the same physical configuration.
+# Keep this dict in sync with `bench_defaults::*` in the bench fixture.
+AXIS_DEFAULT_VALUE = {
+    "filter":   "nofuse",     # bench_defaults::filter   — fuse_operations = false
+    "project":  "nofuse",     # bench_defaults::project  — fuse_operations = false
+    "sort":     "no_skf",     # bench_defaults::sort     — smart_keys_fusion = false
+    "group_by": "hash",       # bench_defaults::group_by — groupby_algo = HASH
+    "eq_join":  "hash_gfur",  # bench_defaults::eq_join  — HASH + GFUR
+}
+
+
+def resolve_axis_value(axis: str, value: str) -> str:
+    """Translate the bench's "default" sentinel into its concrete value
+    (e.g. filter=default → "nofuse"). Other values pass through."""
+    return AXIS_DEFAULT_VALUE[axis] if value == "default" else value
+
+
+def best_axis_per_step(df_steps_q: pd.DataFrame, axis: str,
+                       kinds: list[str]) -> str:
+    """For one query's df_steps slice, find the per-step minimum
+    mean_ms among rows that vary `axis` (or the baseline cell), keep
+    only steps whose step_kind is in `kinds`, and emit a compact
+    string of the form "Step 5: fuse; Step 12: nofuse". The numbering
+    is the absolute `step_index` in the lowered ExecPlan (so a reader
+    can locate the step in the plan dump directly). Returns "" when
+    no matching step exists.
+    """
+    if df_steps_q.empty:
+        return ""
+    of_kind = df_steps_q[df_steps_q["step_kind"].isin(kinds)]
+    if of_kind.empty:
+        return ""
+    # Only rows where this axis is varied (or the all-default baseline)
+    # are valid candidates for "what's the best value of <axis>"; rows
+    # that vary an unrelated axis would give a misleadingly default
+    # `axis` value.
+    relevant = of_kind[of_kind["axis"].isin([axis, "baseline"])]
+    if relevant.empty:
+        return ""
+    parts = []
+    for si in sorted(of_kind["step_index"].unique()):
+        step_rows = relevant[relevant["step_index"] == si]
+        if step_rows.empty:
+            continue
+        best_row = step_rows.loc[step_rows["mean_ms"].idxmin()]
+        parts.append(
+            f"Step {int(si)}: {resolve_axis_value(axis, best_row[axis])}")
+    return "; ".join(parts)
+
+
+def write_per_query_summary(df: pd.DataFrame, df_steps: pd.DataFrame,
+                            out_path: Path):
+    """Per-query e2e summary CSV. One row per query 1..22; queries
+    with no data in the input are skipped (no NaN rows).
+
+    Columns:
       query, baseline-cfg, worst-cfg, best-cfg,
-      best-vs-worst-speedup, best-vs-baseline-speedup
+      best-vs-worst-speedup, best-vs-baseline-speedup,
+      filter, project, sort, group_by, eq_join
 
-    "baseline-cfg" / "worst-cfg" / "best-cfg" columns hold GPU time
-    in ms (matches the prior cross-machine summary tables in this
-    project — naming kept for paste-compat). Speedups are
-    `worst/best` and `baseline/best`; both are >=1 by construction
-    when best is the minimum, except in noise-tied cases where one
-    of the others happens to be the min.
+    `baseline-cfg` / `worst-cfg` / `best-cfg` hold GPU time in ms
+    (e2e from the bench's `Skipped=No` rows — matches the prior
+    cross-machine summary tables in this project, naming kept for
+    paste-compat). Speedups are `worst/best` and `baseline/best`.
+
+    The five per-axis columns each list the best-performing axis
+    value for each step of the matching StepKind, in plan order:
+    `"Step 5: fuse; Step 12: nofuse"`. The numbering is the absolute
+    `step_index` in the lowered ExecPlan, so a reader can cross-
+    reference back to the plan dump directly. Empty string for
+    queries / axes with no matching step. The `sort` column rolls in
+    both Sort and TopK steps (they share the bench's `sort` axis).
     """
     rows = []
     for q in range(1, 23):
@@ -446,6 +519,11 @@ def write_per_query_summary(df: pd.DataFrame, out_path: Path):
                     if len(baseline) else float("nan"))
         worst_ms = float(sub["gpu_ms"].max())
         best_ms  = float(sub["gpu_ms"].min())
+
+        steps_q = df_steps[df_steps["query"] == q]
+        per_axis = {axis: best_axis_per_step(steps_q, axis, kinds)
+                    for axis, kinds in AXIS_TO_KINDS.items()}
+
         rows.append({
             "query":                    q,
             "baseline-cfg":             round(base_ms, 3),
@@ -456,10 +534,12 @@ def write_per_query_summary(df: pd.DataFrame, out_path: Path):
             "best-vs-baseline-speedup": (round(base_ms / best_ms, 3)
                                          if best_ms > 0 and base_ms == base_ms
                                          else ""),
+            **per_axis,
         })
     out = pd.DataFrame(rows, columns=[
         "query", "baseline-cfg", "worst-cfg", "best-cfg",
-        "best-vs-worst-speedup", "best-vs-baseline-speedup"])
+        "best-vs-worst-speedup", "best-vs-baseline-speedup",
+        "filter", "project", "sort", "group_by", "eq_join"])
     out.to_csv(out_path, index=False)
     print(f"wrote {out_path}")
 
@@ -621,7 +701,8 @@ def main():
     # paste-into-Sheets shape. Lands in the data dir (alongside the
     # bench CSVs) rather than the PDF dir; it's a CSV.
     write_per_query_summary(
-        df_e2e, csv_dir / f"per_query_summary_sf{scale}.csv")
+        df_e2e, df_steps,
+        csv_dir / f"per_query_summary_sf{scale}.csv")
 
 
 if __name__ == "__main__":
