@@ -27,14 +27,20 @@
 //                                                  # cells, multi-algo cells
 //                                                  # are skipped automatically
 //
-// Operator axes (each accepts "default" + "n/a" sentinels):
-//   filter, project   "fuse"   "nofuse"   "default"   "n/a"
-//   sort              "skf"    "no_skf"   "default"   "n/a"
-//   group_by          "hash"   "sort_gftr"   "sort_gftr_opt"   "sort_gfur"
-//                     "partition_gftr"   "partition_gfur"   "default"   "n/a"
-//   eq_join           "hash_gfur"   "sort_merge_gfur"   "sort_merge_gftr"
+// Operator axes (each accepts "default" + "n/a" sentinels). The
+// concrete value that the bench's "default" sentinel resolves to is
+// intentionally NOT listed as a separate axis value — running e.g.
+// "filter=nofuse" alongside "filter=default" would yield two cells
+// with the same physical config (both fuse_operations=false). The
+// cells listed below are exactly the *non-default* algo choices.
+//   filter, project   "fuse"   "default"   "n/a"            (default = nofuse)
+//   sort              "skf"    "default"   "n/a"            (default = no_skf)
+//   group_by          "sort_gftr"   "sort_gftr_opt"   "sort_gfur"
+//                     "partition_gftr"   "partition_gfur"
+//                     "default"   "n/a"                     (default = hash)
+//   eq_join           "sort_merge_gfur"   "sort_merge_gftr"
 //                     "partition_hash_gfur"   "partition_hash_gftr"
-//                     "default"   "n/a"
+//                     "default"   "n/a"                     (default = hash_gfur)
 //
 // SemiJoin and AntiJoin are distinct StepKinds with only one
 // implementation each today, so they have no axis. Their payload
@@ -57,8 +63,7 @@
 // jointly produces highly redundant cells for break-down analysis.
 // Each query produces one all-default baseline plus, for each axis
 // whose kind is present, one cell per algo value. A query with all 5
-// kinds yields 1 + 2 + 2 + 2 + 6 + 5 = 18 cells per scale (vs the full
-// Cartesian's 2·2·2·6·5 = 240).
+// kinds yields 1 + 1 + 1 + 1 + 5 + 4 = 13 cells per scale.
 //
 // Output: NVBench's standard CSV/JSON/Markdown via `--csv`, `--json`,
 // `--md` flags. Per-step breakdown is intentionally not emitted by
@@ -512,12 +517,17 @@ NVBENCH_BENCH(bench_tpch_ir)
         {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
          12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22})
     .add_int64_axis("scale", {1, 10, 30, 100})
-    .add_string_axis("filter",   {"fuse", "nofuse", "default", "n/a"})
-    .add_string_axis("project",  {"fuse", "nofuse", "default", "n/a"})
-    .add_string_axis("sort",     {"skf",  "no_skf", "default", "n/a"})
-    .add_string_axis("group_by", {"hash", "sort_gftr",    "sort_gftr_opt",
-                                  "sort_gfur", "partition_gftr",
+    // The bench-default value of each axis is intentionally NOT
+    // listed as an explicit choice — see the file header comment for
+    // why ("default" + "<the same value>" would produce duplicate
+    // cells). Defaults: filter/project=nofuse, sort=no_skf,
+    // group_by=hash, eq_join=hash_gfur.
+    .add_string_axis("filter",   {"fuse", "default", "n/a"})
+    .add_string_axis("project",  {"fuse", "default", "n/a"})
+    .add_string_axis("sort",     {"skf",  "default", "n/a"})
+    .add_string_axis("group_by", {"sort_gftr",      "sort_gftr_opt",
+                                  "sort_gfur",      "partition_gftr",
                                   "partition_gfur", "default", "n/a"})
-    .add_string_axis("eq_join",  {"hash_gfur",            "sort_merge_gfur",
-                                  "sort_merge_gftr",      "partition_hash_gfur",
-                                  "partition_hash_gftr",  "default", "n/a"});
+    .add_string_axis("eq_join",  {"sort_merge_gfur",     "sort_merge_gftr",
+                                  "partition_hash_gfur", "partition_hash_gftr",
+                                  "default", "n/a"});

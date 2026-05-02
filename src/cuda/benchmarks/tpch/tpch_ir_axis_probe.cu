@@ -297,15 +297,18 @@ Args parse_args(int argc, char** argv) {
     return a;
 }
 
-// Axis value lists. Match tpch_ir_nvbench.cu.
-const std::vector<std::string> kFilterVals  = {"fuse", "nofuse", "default", "n/a"};
-const std::vector<std::string> kProjectVals = {"fuse", "nofuse", "default", "n/a"};
-const std::vector<std::string> kSortVals    = {"skf", "no_skf", "default", "n/a"};
+// Axis value lists. Match tpch_ir_nvbench.cu — the bench-default
+// concrete value of each axis is omitted (it would duplicate
+// "default": filter/project=nofuse, sort=no_skf, group_by=hash,
+// eq_join=hash_gfur).
+const std::vector<std::string> kFilterVals  = {"fuse", "default", "n/a"};
+const std::vector<std::string> kProjectVals = {"fuse", "default", "n/a"};
+const std::vector<std::string> kSortVals    = {"skf", "default", "n/a"};
 const std::vector<std::string> kGroupByVals = {
-    "hash", "sort_gftr", "sort_gftr_opt", "sort_gfur",
+    "sort_gftr", "sort_gftr_opt", "sort_gfur",
     "partition_gftr", "partition_gfur", "default", "n/a"};
 const std::vector<std::string> kEqJoinVals  = {
-    "hash_gfur", "sort_merge_gfur", "sort_merge_gftr",
+    "sort_merge_gfur", "sort_merge_gftr",
     "partition_hash_gfur", "partition_hash_gftr",
     "default", "n/a"};
 
