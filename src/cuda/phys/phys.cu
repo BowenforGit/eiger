@@ -361,102 +361,18 @@ void require_single_key(const std::string& op,
     }
 }
 
-gamax::join::join_hint default_join_hint() {
-    // `inner_eq_join` rejects AUTO_ALGO / AUTO_MAT, so pick a concrete
-    // pair. HASH+GFTR matches the existing join tests and works
-    // across shapes; callers that need a specific algo can plumb this
-    // later via `Context` or `AggSpec`-style overrides.
-    gamax::join::join_hint h;
-    h.join_algo = gamax::join::HASH;
-    h.mat_algo  = gamax::join::GFTR;
-    return h;
-}
-
-// Gather one column regardless of type. Mirrors `copy_any_column` but
-// with an arbitrary index map rather than identity.
-gamax::column_ptr gather_any(
-    gamax::column_view src,
-    gamax::column_view gather_map,
-    cudaStream_t stream)
+// `[key, non_key_in_input_order...]` index sequence for select_columns.
+std::vector<gamax::size_type> reorder_key_first(
+    gamax::table_view in, gamax::size_type key)
 {
-    if (src.type().id() == gamax::type_id::STRING) {
-        gamax::string_column_view sv(src, gamax::ARROW_STRING, stream);
-        auto g = gamax::gather_strings(sv, gather_map, stream);
-        return std::unique_ptr<gamax::column>(std::move(g));
+    std::vector<gamax::size_type> idx;
+    idx.reserve(in.num_columns());
+    idx.push_back(key);
+    for (gamax::size_type i = 0; i < in.num_columns(); ++i) {
+        if (i != key) idx.push_back(i);
     }
-    return gamax::util::device::gather(gather_map, src, stream);
+    return idx;
 }
-
-// Build a 2-column "skinny" table `[key, row_id]` for one side of a
-// join. The row_id is a fresh identity sequence used later to gather
-// each original (non-key) column into its output position — that's
-// how this wrapper routes around the join backend's refusal to
-// materialize STRING payloads (B7b).
-gamax::phys::table_ptr build_key_plus_rowid(
-    gamax::table_view in,
-    const std::vector<gamax::size_type>& keys,
-    const gamax::phys::Context& ctx)
-{
-    auto key_tbl = gamax::phys::reorder(in, keys, ctx);
-    auto ids = gamax::make_sequence<gamax::size_type>(
-        in.num_rows(), 0, 1, ctx.stream);
-    key_tbl->add_column(std::move(ids));
-    return key_tbl;
-}
-
-// Deep-copy one column, handling STRING via identity gather — same
-// shape as `copy_any_column` above but declared here because the
-// join-assembly code is in the anonymous namespace.
-gamax::column_ptr deep_copy_any(gamax::column_view src, cudaStream_t stream) {
-    if (src.type().id() == gamax::type_id::STRING) {
-        auto ids = gamax::make_sequence<gamax::size_type>(
-            src.size(), 0, 1, stream);
-        gamax::string_column_view sv(src, gamax::ARROW_STRING, stream);
-        auto g = gamax::gather_strings(sv, ids->view(), stream);
-        return std::unique_ptr<gamax::column>(std::move(g));
-    }
-    return gamax::copy_column(src, stream);
-}
-
-// Assemble the final output of a (self-driven) eq-join: shared key at
-// position 0, then each of L's non-key columns in their original L
-// order, then each of R's non-key columns in their original R order.
-// Uses the row-id columns left over from the join to gather payloads.
-gamax::phys::table_ptr assemble_eq_join_output(
-    gamax::table_view L,
-    const std::vector<gamax::size_type>& lkeys,
-    gamax::table_view R,
-    const std::vector<gamax::size_type>& rkeys,
-    gamax::column_view shared_key,
-    gamax::column_view l_row_id,
-    gamax::column_view r_row_id,
-    cudaStream_t stream)
-{
-    std::vector<gamax::column_ptr> out;
-    out.reserve(1 +
-                (L.num_columns() - lkeys.size()) +
-                (R.num_columns() - rkeys.size()));
-    out.push_back(deep_copy_any(shared_key, stream));
-
-    auto is_key = [](gamax::size_type i,
-                     const std::vector<gamax::size_type>& ks) {
-        return std::find(ks.begin(), ks.end(), i) != ks.end();
-    };
-
-    for (gamax::size_type i = 0; i < L.num_columns(); ++i) {
-        if (is_key(i, lkeys)) continue;
-        out.push_back(gather_any(L.get_column(i), l_row_id, stream));
-    }
-    for (gamax::size_type i = 0; i < R.num_columns(); ++i) {
-        if (is_key(i, rkeys)) continue;
-        out.push_back(gather_any(R.get_column(i), r_row_id, stream));
-    }
-    return std::make_unique<gamax::table>(std::move(out));
-}
-
-} // namespace
-
-namespace {
 
 // 0-row eq_join output: [shared_key_type, L_non_keys..., R_non_keys...].
 gamax::phys::table_ptr make_empty_eq_join_output(
@@ -468,7 +384,6 @@ gamax::phys::table_ptr make_empty_eq_join_output(
     cols.reserve(1 +
                  (L.num_columns() - lkeys.size()) +
                  (R.num_columns() - rkeys.size()));
-    // The shared-key column's type is the L key type (equal to R's).
     cols.push_back(gamax::phys::make_zero_row_column(
         L.get_column(lkeys[0]).type(), stream));
     for (gamax::size_type i = 0; i < L.num_columns(); ++i) {
@@ -510,32 +425,52 @@ table_ptr eq_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
 {
     require_single_key("eq_join", lkeys, rkeys);
 
-    // Empty-input short-circuit: inner_eq_join is the primary
-    // caller of thrust reduce in the backend; 0-row inputs blow up
-    // at "determine reduce temp storage size".
+    // Empty-input short-circuit: inner_eq_join is the primary caller
+    // of thrust reduce in the backend; 0-row inputs blow up at
+    // "determine reduce temp storage size".
     if (L.num_rows() == 0 || R.num_rows() == 0) {
         return make_empty_eq_join_output(L, lkeys, R, rkeys, ctx.stream);
     }
 
-    // Join a skinny [key, row_id] on each side. The underlying
-    // inner_eq_join is numeric-only at the output materialization
-    // step, so we keep its inputs numeric and do the payload
-    // materialization ourselves via gather — this closes B7b (STRING
-    // payloads in the join input) uniformly for all column types.
-    auto L_small = build_key_plus_rowid(L, lkeys, ctx);
-    auto R_small = build_key_plus_rowid(R, rkeys, ctx);
+    // Pass the full L / R (zero-copy reordered to put key at position
+    // 0) straight to inner_eq_join — it now honours mat_algo end-to-
+    // end and handles STRING payloads natively (via the GFTR-string
+    // wrapper internally; HASH & GFUR were already STRING-safe). The
+    // old skinny `[key, row_id]` pre-projection here is what was
+    // forcing GFUR-style materialisation regardless of the hint.
+    auto L_view = L.select_columns(reorder_key_first(L, lkeys[0]));
+    auto R_view = R.select_columns(reorder_key_first(R, rkeys[0]));
 
-    auto joined = gamax::join::inner_eq_join(
-        L_small->view(), R_small->view(), hint, ctx.stream);
-    // Joined shape is [shared_key, L_row_id, R_row_id] (3 columns —
-    // the single-key dedup matches the ieq_join_test.cu invariant
-    // `rcols+scols-1`).
-    auto shared_key = joined->view()[0];
-    auto l_row_id   = joined->view()[1];
-    auto r_row_id   = joined->view()[2];
+    // inner_eq_join requires `num_columns >= 2` (at least one payload
+    // column). When a side has only the key, append a sentinel row_id
+    // sequence so the constraint is satisfied; strip it from the
+    // output below.
+    std::unique_ptr<gamax::column> l_sentinel;
+    std::unique_ptr<gamax::column> r_sentinel;
+    if (L_view.num_columns() == 1) {
+        l_sentinel = gamax::make_sequence<gamax::size_type>(
+            L.num_rows(), 0, 1, ctx.stream);
+        L_view.add_column(l_sentinel->view());
+    }
+    if (R_view.num_columns() == 1) {
+        r_sentinel = gamax::make_sequence<gamax::size_type>(
+            R.num_rows(), 0, 1, ctx.stream);
+        R_view.add_column(r_sentinel->view());
+    }
 
-    return assemble_eq_join_output(
-        L, lkeys, R, rkeys, shared_key, l_row_id, r_row_id, ctx.stream);
+    auto out = gamax::join::inner_eq_join(L_view, R_view, hint, ctx.stream);
+
+    // Output shape: [shared_key, L_payloads..., R_payloads...]. The
+    // R sentinel sits at the very end; the L sentinel — when present
+    // — is L's only payload, at index 1. Strip R first so the L
+    // index is unaffected.
+    if (r_sentinel) {
+        out->remove_column(out->num_columns() - 1);
+    }
+    if (l_sentinel) {
+        out->remove_column(1);
+    }
+    return out;
 }
 
 table_ptr semi_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
@@ -549,27 +484,15 @@ table_ptr semi_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
         return make_empty_semi_join_output(L, lkeys, ctx.stream);
     }
 
-    auto L_small = build_key_plus_rowid(L, lkeys, ctx);
-    auto R_small = build_key_plus_rowid(R, rkeys, ctx);
+    // semi_hash_join is `compact(L, membership_mask)`, and the
+    // table-level compact in utils/transform.cu handles STRING
+    // columns natively. So we can pass L straight through (zero-copy
+    // reordered to put key at position 0); R only contributes its
+    // key for the membership probe.
+    auto L_view = L.select_columns(reorder_key_first(L, lkeys[0]));
+    auto R_view = R.select_columns({rkeys[0]});
 
-    auto joined = gamax::join::semi_join(
-        L_small->view(), R_small->view(), hint, ctx.stream);
-    // Semi-join output carries only the left (surviving) rows: shape
-    // is [shared_key, L_row_id] (2 columns, matching the single-key
-    // convention).
-    auto shared_key = joined->view()[0];
-    auto l_row_id   = joined->view()[1];
-
-    // Output = [shared_key, L_non_keys_in_original_order], gathered
-    // via L_row_id.
-    std::vector<gamax::column_ptr> out;
-    out.reserve(1 + L.num_columns() - lkeys.size());
-    out.push_back(deep_copy_any(shared_key, ctx.stream));
-    for (gamax::size_type i = 0; i < L.num_columns(); ++i) {
-        if (std::find(lkeys.begin(), lkeys.end(), i) != lkeys.end()) continue;
-        out.push_back(gather_any(L.get_column(i), l_row_id, ctx.stream));
-    }
-    return std::make_unique<gamax::table>(std::move(out));
+    return gamax::join::semi_join(L_view, R_view, hint, ctx.stream);
 }
 
 table_ptr left_outer_join(
@@ -588,48 +511,26 @@ table_ptr anti_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
 {
     require_single_key("anti_join", lkeys, rkeys);
 
-    // Anti-join edge cases:
-    //   * R empty → no key can collide → every L row survives → return L.
-    //   * L empty → nothing to survive → return L-shaped empty table.
+    //   * L empty → nothing to survive → L-shaped empty.
+    //   * R empty → no key can collide → every L row survives →
+    //     deep-copy reordered L.
     if (L.num_rows() == 0) {
         return make_empty_semi_join_output(L, lkeys, ctx.stream);
     }
     if (R.num_rows() == 0) {
-        // Shape matches semi_join's output: [shared_key, L_non_keys...].
-        // Here the "shared key" is just L's key column itself (no right
-        // side intersected).
+        auto L_view = L.select_columns(reorder_key_first(L, lkeys[0]));
         std::vector<gamax::column_ptr> out;
-        out.reserve(1 + L.num_columns() - lkeys.size());
-        out.push_back(deep_copy_any(L.get_column(lkeys[0]), ctx.stream));
-        for (gamax::size_type i = 0; i < L.num_columns(); ++i) {
-            if (std::find(lkeys.begin(), lkeys.end(), i) != lkeys.end()) continue;
-            out.push_back(deep_copy_any(L.get_column(i), ctx.stream));
+        out.reserve(L_view.num_columns());
+        for (gamax::size_type i = 0; i < L_view.num_columns(); ++i) {
+            out.push_back(copy_any_column(L_view.get_column(i), ctx.stream));
         }
         return std::make_unique<gamax::table>(std::move(out));
     }
 
-    auto L_small = build_key_plus_rowid(L, lkeys, ctx);
-    auto R_small = build_key_plus_rowid(R, rkeys, ctx);
+    auto L_view = L.select_columns(reorder_key_first(L, lkeys[0]));
+    auto R_view = R.select_columns({rkeys[0]});
 
-    // Anti-join in the operator layer yields the left rows (with row-id)
-    // that have no match in right. Output shape matches the [key, row_id]
-    // layout that semi_join produces, because `gamax::join::anti_join`
-    // compacts the same `L_small` table.
-    auto joined = gamax::join::anti_join(
-        L_small->view(), R_small->view(), hint, ctx.stream);
-    auto shared_key = joined->view()[0];
-    auto l_row_id   = joined->view()[1];
-
-    // Materialise [key, L_non_keys...] by gathering L's non-key columns
-    // through l_row_id — identical materialisation shape to semi_join.
-    std::vector<gamax::column_ptr> out;
-    out.reserve(1 + L.num_columns() - lkeys.size());
-    out.push_back(deep_copy_any(shared_key, ctx.stream));
-    for (gamax::size_type i = 0; i < L.num_columns(); ++i) {
-        if (std::find(lkeys.begin(), lkeys.end(), i) != lkeys.end()) continue;
-        out.push_back(gather_any(L.get_column(i), l_row_id, ctx.stream));
-    }
-    return std::make_unique<gamax::table>(std::move(out));
+    return gamax::join::anti_join(L_view, R_view, hint, ctx.stream);
 }
 
 table_ptr cross_join(gamax::table_view L, gamax::table_view R,
