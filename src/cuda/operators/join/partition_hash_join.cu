@@ -33,7 +33,14 @@ namespace {
             // TODO: set these values based on the workloads
             begin_bit = 0;
             end_bit = 16;
-            early_materialization = (left.num_columns() == 2 && right.num_columns() == 2 && left[1].type() == right[1].type());
+            // STRING payloads can't go through the narrow / early-mat
+            // path: it calls partition_column_pair on (key, payload),
+            // and STRING values can't be radix-partitioned alongside
+            // the key. Defer those to the wide GFTR / GFUR paths (or
+            // the GFTR-string wrapper one layer up).
+            early_materialization = (left.num_columns() == 2 && right.num_columns() == 2
+                                     && left[1].type() == right[1].type()
+                                     && left[1].type().id() != gamax::type_id::STRING);
             n_partitions = 1 << (end_bit - begin_bit);
             max_build_bucket_size = 1 << 12;
             max_probe_bucket_size = 1 << 13;

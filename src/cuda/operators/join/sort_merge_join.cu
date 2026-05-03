@@ -26,7 +26,14 @@ namespace {
     }
 
     bool narrow_join(const gamax::table_view& left, const gamax::table_view& right) {
-        return left.num_columns() == 2 && right.num_columns() == 2 && left[1].type() == right[1].type();
+        // STRING payloads can't go through the narrow / early-mat path:
+        // it calls sort_column_pair on (key, payload), and sort can't
+        // sort STRING values inline alongside the key. Defer those to
+        // the wide GFTR / GFUR paths (or the GFTR-string wrapper one
+        // layer up).
+        return left.num_columns() == 2 && right.num_columns() == 2
+            && left[1].type() == right[1].type()
+            && left[1].type().id() != gamax::type_id::STRING;
     }
 
     struct merge_path_impl {
