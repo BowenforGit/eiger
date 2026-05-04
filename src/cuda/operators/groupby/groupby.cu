@@ -248,6 +248,31 @@ std::unique_ptr<gamax::table> groupby_noskf(
     
     auto_select_groupby_algo(key, hint, stream);
 
+    // Optional fallback: opt-in via hint.allow_hash_fallback. If a non-HASH
+    // algo was requested but the input shape (STRING key, or multi-column
+    // key) isn't supported by sort-/partition-based paths, transparently
+    // downgrade to HASH. This mirrors the predicate that
+    // `auto_select_groupby_algo` already applies to AUTO_ALGO callers
+    // (STRING/multi-col → HASH), but extends it to explicit-hint callers
+    // that opt in. Used by the bench harness to keep multi-step queries
+    // like Q21 sweep-able across non-HASH group_by axes — the inner
+    // integer-keyed groupbys exercise the configured algo, while the
+    // outer STRING-keyed groupby silently falls back to HASH.
+    if (hint.allow_hash_fallback &&
+        hint.groupby_algo != gamax::groupby::HASH)
+    {
+        bool has_string_key = false;
+        for (gamax::size_type i = 0; i < key.num_columns(); ++i) {
+            if (key.get_column(i).type().id() == gamax::type_id::STRING) {
+                has_string_key = true;
+                break;
+            }
+        }
+        if (has_string_key || key.num_columns() > 1) {
+            hint.groupby_algo = gamax::groupby::HASH;
+        }
+    }
+
     // PARTITION groupby's underlying impl only handles a single
     // numeric key column — its result schema is `[encoded_key,
     // agg0..]` regardless of caller-provided key cardinality, so the

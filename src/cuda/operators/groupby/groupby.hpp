@@ -26,11 +26,19 @@ enum groupby_algo {
 
 struct groupby_hint {
     gamax::size_type groups_upper_bound {gamax::MAXIMUM_SIZE};
-    bool zero_based_ids {false}; 
+    bool zero_based_ids {false};
     bool optimize_sort {false}; // optimize sort for sort-based groupby
     gamax::groupby::groupby_algo groupby_algo {gamax::groupby::AUTO_ALGO};
     bool agg_count {false};
     bool enable_skf {false}; // smart-key-fusion
+    // When true, transparently downgrade `groupby_algo` to HASH if the input
+    // shape (STRING key column, or multi-column key) is unsupported by the
+    // requested algo. Default off so explicit hints throw on unsupported
+    // shapes — useful in run_tpch_ir / tests where silent fallback would mask
+    // bugs. Bench harnesses opt in per-query (e.g. Q21, whose final s_name
+    // groupby is STRING-keyed but whose inner orderkey groupbys benefit from
+    // axis-sweep coverage of non-HASH algos).
+    bool allow_hash_fallback {false};
 };
 
 std::unique_ptr<gamax::table> groupby(

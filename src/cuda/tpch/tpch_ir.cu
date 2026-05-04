@@ -1428,6 +1428,20 @@ void apply_query_hints(int qid, gamax::ir::LowerOptions& opts) {
         }
         opts.group_by->groups_upper_bound = 4;
     }
+    // Q21 has three groupbys; the inner two are integer-keyed (orderkey)
+    // and benefit from axis-sweep coverage of non-HASH algos, but the
+    // outer one is single-col STRING (s_name) and would throw on any
+    // sort-/partition-based axis cell. Opt into the silent HASH fallback
+    // so the inner two still exercise the configured algo while the outer
+    // transparently downgrades to HASH. The flag carries no effect when
+    // the configured algo is already HASH (the bench default) or when
+    // the input shape is supported.
+    if (qid == 21) {
+        if (!opts.group_by) {
+            opts.group_by = gamax::groupby::groupby_hint{};
+        }
+        opts.group_by->allow_hash_fallback = true;
+    }
 }
 
 } // namespace gamax::ir::tpch
