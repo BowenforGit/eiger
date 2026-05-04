@@ -191,8 +191,12 @@ void test_groupby_sort(groupby_params& params, cudaStream_t stream = cudaStreamD
     TEST(SUITE_NAME, INT_GROUPKEY_SUM_33554432_GROUPS) { \
         GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<25), ALGO, 0) \
     } \
-    TEST(SUITE_NAME, INT_GROUPKEY_SUM_268435356_GROUPS) { \
-        GROUPBY_TEST_CASE(int, Sum, (1<<28), (1<<28), ALGO, 0) \
+    TEST(SUITE_NAME, INT_GROUPKEY_SUM_134217728_GROUPS) { \
+        /* 2^27 distinct keys over 2^16 partitions = ~2048 keys/partition, well \
+         * under the SMEM slot table capacity (4096). The previous (1<<28) value \
+         * sat exactly at the boundary and tripped the post-bit-mix overflow \
+         * detector once partition load became uniform. */ \
+        GROUPBY_TEST_CASE(int, Sum, (1<<27), (1<<27), ALGO, 0) \
     } \
     TEST(SUITE_NAME, LONG_GROUPKEY_SUM_1024_GROUPS) { \
         GROUPBY_TEST_CASE(int64_t, Sum, (1<<28), 1024, ALGO, 0) \

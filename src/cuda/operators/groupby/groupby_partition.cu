@@ -8,6 +8,7 @@
 #include <cuco/bucket_storage.cuh>
 
 #include "utils/utils.cuh"
+#include "utils/transform.hpp"
 #include "atomics/atomics.cuh"
 #include "memory/column.hpp"
 #include "memory/table.hpp"
@@ -17,6 +18,7 @@
 #include "operators/groupby/aggregation.hpp"
 #include "operators/groupby/load_balancer.cuh"
 #include "operators/groupby/agg_func.cuh"
+#include "operators/sort/sort.hpp"
 #include "types/data_type.hpp"
 #include "types/sentinel.hpp"
 #include "agg_helper.cuh"
@@ -44,10 +46,65 @@ struct partition_key_hasher {
 template<typename Key>
 struct partition_key_equal {
     const Key* keys;
-    
+
     __device__ bool operator()(gamax::size_type lhs, gamax::size_type rhs) const {
         return keys[lhs] == keys[rhs];
     }
+};
+
+// MurmurHash3 fmix64 / fmix32 finalizers. Bijective on the full output width
+// (every constant is odd, every shift is self-invertible), so distinct keys
+// produce distinct hashes; collisions only arise from the subsequent low-bit
+// mask. Used to spread low-entropy keys (e.g. TPC-H orderkeys, multiples of 4)
+// uniformly across partitions; without this the radix partition leaves a large
+// fraction of buckets empty and overloads the rest.
+__host__ __device__ __forceinline__ std::uint64_t fmix64(std::uint64_t x) {
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 33;
+    x *= 0xc4ceb9fe1a85ec53ULL;
+    x ^= x >> 33;
+    return x;
+}
+
+__host__ __device__ __forceinline__ std::uint32_t fmix32(std::uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x85ebca6bU;
+    x ^= x >> 13;
+    x *= 0xc2b2ae35U;
+    x ^= x >> 16;
+    return x;
+}
+
+template<typename Key>
+__host__ __device__ __forceinline__ std::uint64_t bit_mix(Key k) {
+    if constexpr (sizeof(Key) <= 4) {
+        return static_cast<std::uint64_t>(fmix32(static_cast<std::uint32_t>(k)));
+    } else {
+        return fmix64(static_cast<std::uint64_t>(k));
+    }
+}
+
+template<typename Key>
+__global__ void compute_partition_ids_kernel(
+    const Key* __restrict__ keys,
+    gamax::size_type* __restrict__ pids,
+    gamax::size_type n,
+    std::uint64_t mask)
+{
+    for(gamax::size_type t = get_cuda_tid(); t < n; t += nthreads()) {
+        pids[t] = static_cast<gamax::size_type>(bit_mix(keys[t]) & mask);
+    }
+}
+
+// Per-block state that lives in shared memory immediately after the slot table.
+// Hoisted to a named struct so the host can size shared memory via sizeof().
+template<typename Key>
+struct partition_block_state {
+    gamax::size_type num_groups_local;
+    gamax::size_type block_offset;
+    const Key* key_ptr;       // Key pointer cached in SMEM for the static_set functors.
+    int local_overflow;       // Set when this partition's distinct keys saturate the slot table.
 };
 
 template<typename Key, 
@@ -56,16 +113,17 @@ template<typename Key,
          int CgSize = 1,
          int BucketSize = 1>
 __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
-                                            gamax::experimental::table_device_view values, 
+                                            gamax::experimental::table_device_view values,
                                             IdxIt val_idx,
                                             const gamax::size_type num_units,
-                                            gamax::size_type* __restrict__ units_start, 
-                                            gamax::size_type* __restrict__ units_end, 
+                                            gamax::size_type* __restrict__ units_start,
+                                            gamax::size_type* __restrict__ units_end,
                                             gamax::size_type* __restrict__ num_groups,
                                             gamax::size_type* __restrict__ group_id,
                                             gamax::groupby::aggregation_request* __restrict__ aggs,
                                             const gamax::size_type num_aggs,
-                                            gamax::experimental::mutable_table_device_view res) 
+                                            gamax::experimental::mutable_table_device_view res,
+                                            int* __restrict__ overflow_flag)
 {
     constexpr gamax::size_type groupid_write_mask = 0x80000000;
     constexpr gamax::size_type groupid_read_mask = 0x7FFFFFFF;
@@ -78,11 +136,7 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
     // Use long long for 8-byte alignment of shared memory base
     extern __shared__ long long temp[];
     auto shared_slots = reinterpret_cast<slot_type*>(temp);
-    struct {
-        gamax::size_type num_groups_local;
-        gamax::size_type block_offset;
-        const Key* key_ptr;  // Store key array pointer in shared memory for functors
-    } *u = reinterpret_cast<decltype(u)>(shared_slots + NumSlots);
+    auto u = reinterpret_cast<partition_block_state<Key>*>(shared_slots + NumSlots);
     
     auto group_loc = group_id;
 
@@ -94,6 +148,7 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
         if(block.thread_rank() == 0) {
             u->num_groups_local = 0;
             u->key_ptr = key_arr;  // Store key pointer in shared memory
+            u->local_overflow = 0;
         }
         block.sync();  // Ensure key_ptr is visible to all threads
         
@@ -124,6 +179,21 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
             }
         }
         block.sync();
+
+        // Slot-table saturation detection: cuco::static_set with linear probing
+        // requires at least one empty slot for correct lookups. Once num_groups_local
+        // reaches NumSlots, subsequent new-key inserts may silently alias existing
+        // slots and produce phantom groups. Flag and skip the result-write phase;
+        // the host will throw after the kernel returns.
+        if(block.thread_rank() == 0 && u->num_groups_local >= static_cast<gamax::size_type>(NumSlots)) {
+            u->local_overflow = 1;
+            atomicExch(overflow_flag, 1);
+        }
+        block.sync();
+        if(u->local_overflow != 0) {
+            block.sync();
+            continue;
+        }
 
         if(block.thread_rank() == 0) {
             u->block_offset = gamax::atomic::atomic_add(num_groups, u->num_groups_local);
@@ -223,6 +293,7 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
 template<typename Key, int BucketSize, std::size_t NumSlots, typename Itr>
 std::unique_ptr<gamax::table> compute_aggregate(
     gamax::column_view partitioned_key,
+    std::unique_ptr<gamax::column> partition_ps,
     const gamax::size_type estimated_num_groups,
     const gamax::size_type log_num_partitions,
     gamax::table_view val,
@@ -241,14 +312,13 @@ std::unique_ptr<gamax::table> compute_aggregate(
     auto units_group_ptr = gamax::make_idx_column(max_work_units);
 
     gamax::size_type num_units = 0;
-    auto partition_ps = gamax::partition::compute_partition_offsets(partitioned_key, 0, log_num_partitions);
     gamax::groupby::generate_workunits(
-        partition_ps->data<gamax::size_type>(), 
-        num_partitions, 
-        threshold, 
-        &num_units, 
-        units_start_ptr->data<gamax::size_type>(), 
-        units_end_ptr->data<gamax::size_type>(), 
+        partition_ps->data<gamax::size_type>(),
+        num_partitions,
+        threshold,
+        &num_units,
+        units_start_ptr->data<gamax::size_type>(),
+        units_end_ptr->data<gamax::size_type>(),
         units_group_ptr->data<gamax::size_type>(),
         stream);
     partition_ps.reset();
@@ -277,15 +347,16 @@ std::unique_ptr<gamax::table> compute_aggregate(
     auto res_view = res->mutable_view().device_view(stream);
     
     auto d_agg_req_buf = std::make_unique<gamax::device_buffer>(sizeof(gamax::groupby::aggregation_request) * agg_requests.size(), false);
-    cudaMemcpy(d_agg_req_buf->data(), agg_requests.data(), d_agg_req_buf->size(), cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(d_agg_req_buf->data(), agg_requests.data(), d_agg_req_buf->size(), cudaMemcpyHostToDevice, stream);
 
     // auto val_view = table_device_view::create(val, stream);
     auto val_view = val.device_view(stream);
     initialize_aggregation<<<num_tb(res->num_rows(), 1024), 1024, 0, stream>>>(*val_view, *agg_res_device_view, static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()));
     
-    // Slot type is now just gamax::size_type (row index), not pair<Key, Value>
-    // Add space for the extended u struct (num_groups_local, block_offset, key_ptr)
-    std::size_t sm_bytes = num_slots * sizeof(gamax::size_type) + sizeof(gamax::size_type)*2 + sizeof(const Key*);
+    // Shared memory layout: NumSlots size_type slots (row indices), followed by
+    // the per-block bookkeeping struct. Use sizeof(partition_block_state<Key>)
+    // so additions to the struct (e.g. local_overflow) don't get under-budgeted.
+    std::size_t sm_bytes = num_slots * sizeof(gamax::size_type) + sizeof(partition_block_state<Key>);
     if(estimated_num_groups / num_partitions <= 256) {
         // Calculate aligned shared memory size for aggregation buffers
         std::size_t agg_bytes = 0;
@@ -304,7 +375,9 @@ std::unique_ptr<gamax::table> compute_aggregate(
 
     auto group_id = gamax::make_idx_column(input_num_rows, false, stream);
     auto d_num_groups = gamax::make_idx_column(1, true, stream);
-    // the grid size and block size given by cudaOccupancyMaxPotentialBlockSize 
+    auto d_overflow_flag = std::make_unique<gamax::device_buffer>(sizeof(int), false);
+    cudaMemsetAsync(d_overflow_flag->data(), 0, sizeof(int), stream);
+    // the grid size and block size given by cudaOccupancyMaxPotentialBlockSize
     // do not work very well for this kernel
     agg_fn<<<num_units, 768, sm_bytes, stream>>>(
         partitioned_key.data<Key>(),
@@ -317,13 +390,24 @@ std::unique_ptr<gamax::table> compute_aggregate(
         group_id->data<gamax::size_type>(),
         static_cast<gamax::groupby::aggregation_request*>(d_agg_req_buf->data()),
         agg_requests.size(),
-        *res_view);
-    
+        *res_view,
+        static_cast<int*>(d_overflow_flag->data()));
+
     gamax::size_type num_groups;
+    int h_overflow = 0;
     cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
-    
+    cudaMemcpyAsync(&h_overflow, d_overflow_flag->data(), sizeof(int), cudaMemcpyDeviceToHost, stream);
+
     cudaStreamSynchronize(stream);
-    
+
+    if(h_overflow != 0) {
+        throw std::runtime_error(
+            "partition groupby: per-partition slot table overflow (NumSlots=" +
+            std::to_string(NumSlots) +
+            "). Distinct keys in some partition exceeded the SMEM hash set capacity. "
+            "Increase log_num_partitions or route to HASH groupby.");
+    }
+
     res->set_rows(num_groups);
 
     return res;
@@ -351,39 +435,79 @@ struct partition_groupby_impl {
             cudaStream_t stream = cudaStreamDefault)
     {
         gamax::size_type estimated_num_groups = std::min(key.num_rows(), hint.groups_upper_bound);
-        
+
         // int log_num_partitions = (estimated_num_groups * 8 / (1 << 8) > NumSlots) ? 16 : 8;
         int log_num_partitions = 16;
 
-        if constexpr (kUseGFUR) {
-            auto [partitioned_key, permutation_idx] = gamax::partition::arg_partition(key.get_column(0), 0, log_num_partitions, nullptr, 0, stream);
+        const auto input_num_rows = key.num_rows();
+        const std::uint64_t mask = (std::uint64_t{1} << log_num_partitions) - 1;
 
+        // Compute per-row partition_id = bit_mix(key) & mask. Bit-mixing the key
+        // before extracting low radix bits prevents skew when the key has low
+        // entropy in its low bits (e.g. TPC-H orderkeys are multiples of 4, so a
+        // plain low-bit radix would empty 3/4 of the partitions and overload the
+        // remaining 1/4 past the per-block slot table capacity).
+        auto pid_col = gamax::make_idx_column(input_num_rows, false, stream);
+        {
+            const auto threads = 1024;
+            const auto blocks = num_tb(input_num_rows, threads);
+            compute_partition_ids_kernel<Key><<<blocks, threads, 0, stream>>>(
+                key.get_column(0).data<Key>(),
+                pid_col->data<gamax::size_type>(),
+                input_num_rows,
+                mask);
+        }
+
+        // Multi-way partition: a single CUB radix pass over log_num_partitions
+        // bits of pid (cub::DevicePartition only does binary partitions, so we
+        // reuse arg_partition which is sort_column_pair under the hood — with
+        // such a small bit range it collapses to one histogram+scan+scatter).
+        auto [sorted_pid, sorted_idx] = gamax::partition::arg_partition(
+            pid_col->view(), 0, log_num_partitions, nullptr, 0, stream);
+        pid_col.reset();
+
+        // Per-partition row offsets, derived from the sorted pid column.
+        auto partition_ps = gamax::partition::compute_partition_offsets(
+            sorted_pid->view(), 0, log_num_partitions, stream);
+        sorted_pid.reset();
+
+        // Reorder the original key column into partitioned layout. The kernel
+        // discriminates groups by full-key equality (not by pid), so we need
+        // the original Key values, not the pids.
+        auto partitioned_key = gamax::util::device::gather(
+            sorted_idx->view(), key.get_column(0), stream);
+
+        if constexpr (kUseGFUR) {
+            // GFUR: keep value columns in their original layout; the kernel
+            // chases through sorted_idx (the permutation map) to fetch values.
             return compute_aggregate<Key, BucketSize, NumSlots>(
-                partitioned_key->view(), 
-                estimated_num_groups, 
-                log_num_partitions, 
-                val, 
-                permutation_idx->data<gamax::size_type>(),
-                agg_requests, 
+                partitioned_key->view(),
+                std::move(partition_ps),
+                estimated_num_groups,
+                log_num_partitions,
+                val,
+                sorted_idx->data<gamax::size_type>(),
+                agg_requests,
                 stream);
         } else {
-            std::unique_ptr<gamax::column> partitioned_key {nullptr};
-        
+            // GFTR: pre-gather every value column into partitioned layout so
+            // the kernel can stream them sequentially via a counting iterator.
             std::vector<std::unique_ptr<gamax::column>> partitioned_val_cols;
-            std::unique_ptr<gamax::column> pval_temp {nullptr};
             for(gamax::size_type i = 0; i < val.num_columns(); i++) {
-                std::tie(partitioned_key, pval_temp) = gamax::partition::partition_column_pair(key.get_column(0), val.get_column(i), 0, log_num_partitions, nullptr, 0, stream);
-                partitioned_val_cols.push_back(std::move(pval_temp));
+                partitioned_val_cols.push_back(
+                    gamax::util::device::gather(sorted_idx->view(), val.get_column(i), stream));
             }
             auto partitioned_val = std::make_unique<gamax::table>(std::move(partitioned_val_cols));
-            
+            sorted_idx.reset();
+
             return compute_aggregate<Key, BucketSize, NumSlots>(
-                partitioned_key->view(), 
-                estimated_num_groups, 
-                log_num_partitions, 
-                partitioned_val->view(), 
+                partitioned_key->view(),
+                std::move(partition_ps),
+                estimated_num_groups,
+                log_num_partitions,
+                partitioned_val->view(),
                 thrust::make_counting_iterator<gamax::size_type>(0),
-                agg_requests, 
+                agg_requests,
                 stream);
         }
     }
