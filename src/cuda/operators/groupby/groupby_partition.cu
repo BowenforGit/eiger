@@ -28,7 +28,7 @@ namespace {
 
 constexpr auto cg_size = 1;
 constexpr auto bucket_size = 1;
-constexpr std::size_t num_slots = 4096;
+constexpr std::size_t num_slots = 8209;
 
 using namespace gamax::groupby::details;
 
@@ -85,15 +85,18 @@ __host__ __device__ __forceinline__ std::uint64_t bit_mix(Key k) {
     }
 }
 
+// pid is bounded by num_partitions ≤ 2^16, so int32 (4B) is sufficient and
+// halves both the column footprint (~2.4 GiB saved at SF=100 lineitem widths)
+// and the per-pair CUB radix sort key width vs. size_type (int64).
 template<typename Key>
 __global__ void compute_partition_ids_kernel(
     const Key* __restrict__ keys,
-    gamax::size_type* __restrict__ pids,
+    std::int32_t* __restrict__ pids,
     gamax::size_type n,
-    std::uint64_t mask)
+    std::uint32_t mask)
 {
     for(gamax::size_type t = get_cuda_tid(); t < n; t += nthreads()) {
-        pids[t] = static_cast<gamax::size_type>(bit_mix(keys[t]) & mask);
+        pids[t] = static_cast<std::int32_t>(bit_mix(keys[t]) & mask);
     }
 }
 
@@ -440,46 +443,46 @@ struct partition_groupby_impl {
         int log_num_partitions = 16;
 
         const auto input_num_rows = key.num_rows();
-        const std::uint64_t mask = (std::uint64_t{1} << log_num_partitions) - 1;
+        const std::uint32_t mask = (std::uint32_t{1} << log_num_partitions) - 1;
 
         // Compute per-row partition_id = bit_mix(key) & mask. Bit-mixing the key
         // before extracting low radix bits prevents skew when the key has low
         // entropy in its low bits (e.g. TPC-H orderkeys are multiples of 4, so a
         // plain low-bit radix would empty 3/4 of the partitions and overload the
-        // remaining 1/4 past the per-block slot table capacity).
-        auto pid_col = gamax::make_idx_column(input_num_rows, false, stream);
+        // remaining 1/4 past the per-block slot table capacity). pid fits in
+        // int32 since num_partitions ≤ 2^16, so the column is 4B/row.
+        auto pid_col = gamax::make_column<std::int32_t>(input_num_rows, false, stream);
         {
             const auto threads = 1024;
             const auto blocks = num_tb(input_num_rows, threads);
             compute_partition_ids_kernel<Key><<<blocks, threads, 0, stream>>>(
                 key.get_column(0).data<Key>(),
-                pid_col->data<gamax::size_type>(),
+                pid_col->data<std::int32_t>(),
                 input_num_rows,
                 mask);
         }
 
-        // Multi-way partition: a single CUB radix pass over log_num_partitions
-        // bits of pid (cub::DevicePartition only does binary partitions, so we
-        // reuse arg_partition which is sort_column_pair under the hood — with
-        // such a small bit range it collapses to one histogram+scan+scatter).
-        auto [sorted_pid, sorted_idx] = gamax::partition::arg_partition(
-            pid_col->view(), 0, log_num_partitions, nullptr, 0, stream);
-        pid_col.reset();
-
-        // Per-partition row offsets, derived from the sorted pid column.
-        auto partition_ps = gamax::partition::compute_partition_offsets(
-            sorted_pid->view(), 0, log_num_partitions, stream);
-        sorted_pid.reset();
-
-        // Reorder the original key column into partitioned layout. The kernel
-        // discriminates groups by full-key equality (not by pid), so we need
-        // the original Key values, not the pids.
-        auto partitioned_key = gamax::util::device::gather(
-            sorted_idx->view(), key.get_column(0), stream);
-
         if constexpr (kUseGFUR) {
-            // GFUR: keep value columns in their original layout; the kernel
-            // chases through sorted_idx (the permutation map) to fetch values.
+            // GFUR: one multi-way partition over pid produces (sorted_pid,
+            // sorted_idx). The kernel chases through sorted_idx (the
+            // permutation map) to fetch each value at aggregation time —
+            // GFUR's defining trade-off is "pay random gather inside the
+            // kernel; skip the per-payload partition pass."
+            auto [sorted_pid, sorted_idx] = gamax::partition::arg_partition(
+                pid_col->view(), 0, log_num_partitions, nullptr, 0, stream);
+            pid_col.reset();
+
+            auto partition_ps = gamax::partition::compute_partition_offsets(
+                sorted_pid->view(), 0, log_num_partitions, stream);
+            sorted_pid.reset();
+
+            // The kernel discriminates groups by full-key equality, so it
+            // needs the original Key values in partitioned layout. A single
+            // gather is sufficient and cheaper than re-sorting just for the
+            // key column.
+            auto partitioned_key = gamax::util::device::gather(
+                sorted_idx->view(), key.get_column(0), stream);
+
             return compute_aggregate<Key, BucketSize, NumSlots>(
                 partitioned_key->view(),
                 std::move(partition_ps),
@@ -490,15 +493,40 @@ struct partition_groupby_impl {
                 agg_requests,
                 stream);
         } else {
-            // GFTR: pre-gather every value column into partitioned layout so
-            // the kernel can stream them sequentially via a counting iterator.
+            // GFTR: each payload column is partitioned alongside pid via its
+            // own `partition_column_pair(pid, X)` — one CUB radix sort per
+            // payload that carries (pid, X) into partitioned layout. The
+            // kernel can then stream payloads sequentially with a counting
+            // iterator; no random gather inside the agg loop. This mirrors
+            // the original (pre-bit-mix) GFTR loop, with `pid` substituted
+            // for the raw key as the sort discriminator. The per-payload
+            // sort is the whole point of GFTR — replacing it with a single
+            // arg_partition + N gathers would defeat the algo.
+            std::unique_ptr<gamax::column> sorted_pid;
+            std::unique_ptr<gamax::column> partitioned_key;
+            std::tie(sorted_pid, partitioned_key) =
+                gamax::partition::partition_column_pair(
+                    pid_col->view(), key.get_column(0),
+                    0, log_num_partitions, nullptr, 0, stream);
+
             std::vector<std::unique_ptr<gamax::column>> partitioned_val_cols;
-            for(gamax::size_type i = 0; i < val.num_columns(); i++) {
-                partitioned_val_cols.push_back(
-                    gamax::util::device::gather(sorted_idx->view(), val.get_column(i), stream));
+            partitioned_val_cols.reserve(val.num_columns());
+            for (gamax::size_type i = 0; i < val.num_columns(); i++) {
+                std::unique_ptr<gamax::column> pval_temp;
+                std::tie(sorted_pid, pval_temp) =
+                    gamax::partition::partition_column_pair(
+                        pid_col->view(), val.get_column(i),
+                        0, log_num_partitions, nullptr, 0, stream);
+                partitioned_val_cols.push_back(std::move(pval_temp));
             }
-            auto partitioned_val = std::make_unique<gamax::table>(std::move(partitioned_val_cols));
-            sorted_idx.reset();
+            pid_col.reset();
+
+            auto partition_ps = gamax::partition::compute_partition_offsets(
+                sorted_pid->view(), 0, log_num_partitions, stream);
+            sorted_pid.reset();
+
+            auto partitioned_val =
+                std::make_unique<gamax::table>(std::move(partitioned_val_cols));
 
             return compute_aggregate<Key, BucketSize, NumSlots>(
                 partitioned_key->view(),
