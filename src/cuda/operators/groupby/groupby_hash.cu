@@ -365,7 +365,7 @@ namespace {
             const auto smem_groups = std::min(max_shared_mem_size / agg_bytes_per_group, 16384UL);
 
             if(num_groups > smem_groups) {
-                 compute_aggregation<<<num_tb(input_num_rows, 1024), 1024, 0, stream>>>(
+                 compute_aggregation<<<num_tb(input_num_rows, 256), 256, 0, stream>>>(
                     *val_view,
                     *agg_res_device_view,
                     sparse_group_ids->data<gamax::size_type>(),
@@ -381,8 +381,8 @@ namespace {
                 }
 #endif
                 int maxActiveBlocks;
-                cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxActiveBlocks, agg_fn, 1024, 0);
-                agg_fn<<<SM_COUNT*maxActiveBlocks, 1024, sm_bytes, stream>>>(
+                cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxActiveBlocks, agg_fn, 256, 0);
+                agg_fn<<<SM_COUNT*maxActiveBlocks, 256, sm_bytes, stream>>>(
                     *val_view,
                     *agg_res_device_view,
                     num_groups,
