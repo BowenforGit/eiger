@@ -57,6 +57,12 @@ struct LowerOptions {
     std::optional<gamax::join::join_hint>          semi_join;
     std::optional<gamax::join::join_hint>          anti_join;
     std::optional<gamax::groupby::groupby_hint>    group_by;
+    // Distinct shares the groupby_hint surface but is a separate knob:
+    // Distinct ops are often multi-col (from the CountDistinct rewrite)
+    // where SKF gives a real win, while peer GroupBy ops are single-col
+    // and SKF only adds overhead. If unset, Distinct steps fall back to
+    // the `group_by` hint to preserve prior behavior.
+    std::optional<gamax::groupby::groupby_hint>    distinct;
     std::optional<gamax::sort::sort_table_options>       sort;
     std::optional<gamax::sort::sort_table_options>       top_k;
 };

@@ -128,7 +128,7 @@ std::unique_ptr<gamax::table> run_step(
             // handed to `phys::distinct` as keys.
             auto v = input_view(0);
             return gamax::phys::distinct(
-                v.select_columns(pl.key_ordinals), ctx);
+                v.select_columns(pl.key_ordinals), ctx, pl.hint);
         } else if constexpr (std::is_same_v<T, ConcatPayload>) {
             // N-ary: one view per input ValueId on Step::inputs.
             std::vector<gamax::table_view> views;

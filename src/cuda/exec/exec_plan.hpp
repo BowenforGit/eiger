@@ -125,8 +125,15 @@ struct GroupByPayload {
 // distinct-keys set. The executor selects those columns and passes
 // them to `phys::distinct`; the selection is sparse, so the caller
 // never materializes a dense keys-only intermediate upstream.
+//
+// `hint` mirrors `GroupByPayload::hint` — Distinct is algorithmically a
+// no-agg groupby, so the same algorithm-selection and key-fusion knobs
+// apply. Default-constructed (HASH, no SKF) takes the dedicated
+// `hash::distinct` fast path; non-default routes through
+// `gamax::groupby::groupby` to honor the algorithm and SKF flags.
 struct DistinctPayload {
     std::vector<gamax::size_type> key_ordinals;
+    gamax::groupby::groupby_hint hint {};
 };
 // Concat (SQL UNION ALL) has no payload — the N input ValueIds live
 // on `Step::inputs` and the phys op walks them in order. The output

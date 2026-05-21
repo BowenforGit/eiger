@@ -602,8 +602,19 @@ ValueId lower_distinct(const PlanNode& node, Lowering& lo) {
     for (auto ord : key_ordinals) out_schema.append(in_schema[ord]);
 
     ValueId out_id = lo.next_value(std::move(out_schema));
-    lo.push_step(StepKind::Distinct, {input_id}, out_id,
-                 exec::DistinctPayload{std::move(key_ordinals)});
+    exec::DistinctPayload pl;
+    pl.key_ordinals = std::move(key_ordinals);
+    // Prefer the Distinct-specific hint; fall back to group_by; finally
+    // a default-constructed hint (HASH, no SKF → `hash::distinct` fast
+    // path). The two-level fallback lets the bench harness target SKF
+    // at the multi-col Distinct ops produced by the CountDistinct
+    // rewrite without taxing peer GroupBy ops with SKF overhead.
+    if (lo.opts.distinct) {
+        pl.hint = *lo.opts.distinct;
+    } else {
+        pl.hint = lo.opts.group_by.value_or(gamax::groupby::groupby_hint{});
+    }
+    lo.push_step(StepKind::Distinct, {input_id}, out_id, std::move(pl));
     return out_id;
 }
 

@@ -619,7 +619,8 @@ table_ptr group_by(gamax::table_view keys,
 }
 
 table_ptr distinct(gamax::table_view keys,
-                   const Context& ctx)
+                   const Context& ctx,
+                   const gamax::groupby::groupby_hint& hint_in)
 {
     // Empty input → empty output with the same column shape.
     if (keys.num_rows() == 0) {
@@ -631,8 +632,37 @@ table_ptr distinct(gamax::table_view keys,
         }
         return std::make_unique<gamax::table>(std::move(cols));
     }
-    gamax::groupby::groupby_hint hint;
-    return gamax::groupby::hash::distinct(keys, hint, ctx.stream);
+
+    auto hint = hint_in;
+    // Default (HASH / AUTO without SKF) → dedicated dedup path. Cheaper
+    // than going through `gamax::groupby::groupby` because we skip the
+    // per-row carrier column and the agg dispatch.
+    const bool is_hash_default =
+        (hint.groupby_algo == gamax::groupby::HASH ||
+         hint.groupby_algo == gamax::groupby::AUTO_ALGO);
+    if (is_hash_default && !hint.enable_skf) {
+        return gamax::groupby::hash::distinct(keys, hint, ctx.stream);
+    }
+
+    // General path. `gamax::groupby::groupby`'s SKF wrapper adds a tid
+    // column to `val` internally and uses ANY(tids) to gather original
+    // keys post-aggregate. To reuse that machinery for a no-agg
+    // distinct, we hand it a `[seq]` val and an ANY(0) request, then
+    // strip the trailing ANY column from the result. Net result is
+    // `[keys...]` whether SKF is on or off, and whether the algorithm
+    // is HASH / PARTITION / PARTITION_GFUR / SORT*.
+    auto tids = gamax::make_sequence<gamax::size_type>(
+        keys.num_rows(), 0, 1, ctx.stream);
+    std::vector<gamax::column_view> vcols { tids->view() };
+    gamax::table_view val(vcols);
+
+    std::vector<gamax::groupby::aggregation_request> reqs;
+    reqs.emplace_back(/*column=*/0, gamax::groupby::aggregation_id::ANY);
+
+    auto result = gamax::groupby::groupby(keys, val, reqs, hint, ctx.stream);
+    // Schema: [keys..., ANY(seq)]. Strip the carrier.
+    result->remove_column(result->num_columns() - 1);
+    return result;
 }
 
 // ── Concat (SQL UNION ALL) ────────────────────────────────────────

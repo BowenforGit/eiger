@@ -420,13 +420,25 @@ std::unique_ptr<gamax::table> groupby(
     auto combined_key_table = gamax::make_table(std::move(compressed_key_vec));
 
     auto tids = gamax::make_sequence<gamax::size_type>(key.num_rows(), 0, 1, stream);
-    val.add_column(tids->view());
+    // `table_view::add_column` requires the new column's size to match
+    // `num_rows()`, but `num_rows()` returns 0 when val has 0 columns
+    // (e.g. an Aggregate whose only request is COUNT_ALL — no body
+    // materialized). Reconstruct val with tids prepended in that case,
+    // and append in the normal case.
+    gamax::table_view val_with_tids;
+    if (val.num_columns() == 0) {
+        std::vector<gamax::column_view> cols{tids->view()};
+        val_with_tids = gamax::table_view(cols);
+    } else {
+        val_with_tids = val;
+        val_with_tids.add_column(tids->view());
+    }
 
     // Make a local copy to avoid mutating caller's agg_requests
     auto local_agg_requests = agg_requests;
-    local_agg_requests.push_back(gamax::groupby::aggregation_request(val.num_columns() - 1, gamax::groupby::aggregation_id::ANY));
+    local_agg_requests.push_back(gamax::groupby::aggregation_request(val_with_tids.num_columns() - 1, gamax::groupby::aggregation_id::ANY));
     
-    auto result = groupby_noskf(combined_key_table->view(), val, local_agg_requests, hint, stream);
+    auto result = groupby_noskf(combined_key_table->view(), val_with_tids, local_agg_requests, hint, stream);
 
     // result schema: [compressed_key, agg_col_0, agg_col_1, ..., ANY(tids), count (if agg_count == true)]
     auto tid_idx = result->num_columns() - 1;

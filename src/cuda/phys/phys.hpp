@@ -233,8 +233,17 @@ table_ptr group_by(gamax::table_view keys,
 // Output column order matches input. Output row order is insertion
 // order (first-encounter) — callers that depend on a specific order
 // must sort downstream.
+//
+// `hint` mirrors the GroupBy surface (algorithm + SKF). The default
+// (HASH, no SKF) hits the dedicated `hash::distinct` fast path. Non-
+// default routes through `gamax::groupby::groupby` so explicit
+// PARTITION/SORT algos and the SKF multi-key fuse can be exercised —
+// useful for benchmarking high-cardinality multi-key distincts (e.g.
+// Q21's `Distinct(l_orderkey, l_suppkey)` from the CountDistinct
+// rewrite, which benefits from SKF+PARTITION).
 table_ptr distinct(gamax::table_view keys,
-                   const Context& ctx);
+                   const Context& ctx,
+                   const gamax::groupby::groupby_hint& hint = {});
 
 // Vertical concatenation (UNION ALL). All inputs must have identical
 // column counts and positionally matching types (caller ensures at
