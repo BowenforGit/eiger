@@ -318,12 +318,31 @@ std::unique_ptr<gamax::table> groupby(
     return std::make_unique<gamax::table>(std::move(final_columns));
 }
 
+// Sort-based distinct stubs. See groupby_sort.hpp for the design
+// rationale (separate from sort::groupby because the algorithms
+// diverge). To be filled in as a follow-up task.
+std::unique_ptr<gamax::table> distinct(
+    gamax::table_view /*key*/,
+    gamax::groupby::groupby_hint& /*hint*/,
+    cudaStream_t /*stream*/)
+{
+    throw std::runtime_error("sort::distinct: not yet implemented");
+}
+
+std::unique_ptr<gamax::table> distinct_gfur(
+    gamax::table_view /*key*/,
+    gamax::groupby::groupby_hint& /*hint*/,
+    cudaStream_t /*stream*/)
+{
+    throw std::runtime_error("sort::distinct_gfur: not yet implemented");
+}
+
 std::unique_ptr<gamax::table> groupby_gfur(
-    gamax::table_view key, 
-    gamax::table_view val, 
+    gamax::table_view key,
+    gamax::table_view val,
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream) 
+    cudaStream_t stream)
 {
     // std::cout << "groupby_gfur" << std::endl;
     check_solvable(key, val, agg_requests);

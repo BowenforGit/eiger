@@ -38,6 +38,8 @@
 //   group_by          "sort_gftr"   "sort_gftr_opt"   "sort_gfur"
 //                     "partition_gftr"   "partition_gfur"
 //                     "default"   "n/a"                     (default = hash)
+//   distinct          "hash_skf"   "sort"   "sort_skf"
+//                     "default"   "n/a"                     (default = hash, no SKF)
 //   eq_join           "sort_merge_gfur"   "sort_merge_gftr"
 //                     "partition_hash_gfur"   "partition_hash_gftr"
 //                     "default"   "n/a"                     (default = hash_gfur)
@@ -165,6 +167,12 @@ gamax::groupby::groupby_hint group_by() {
     h.groupby_algo = gamax::groupby::HASH;
     return h;
 }
+gamax::groupby::groupby_hint distinct() {
+    gamax::groupby::groupby_hint h;
+    h.groupby_algo = gamax::groupby::HASH;
+    h.enable_skf   = false;
+    return h;
+}
 gamax::join::join_hint eq_join() {
     gamax::join::join_hint h;
     h.join_algo = gamax::join::HASH;
@@ -199,6 +207,29 @@ parse_group_by_axis(const std::string& v) {
     int algo_int = gamax::tpch::tpch_params::parse_algo_value(v);
     gamax::groupby::groupby_hint h;
     h.groupby_algo = static_cast<gamax::groupby::groupby_algo>(algo_int);
+    return h;
+}
+
+// Distinct axis. Decoupled from `parse_algo_value` because Distinct's
+// supported space is a strict subset of groupby's: HASH (no SKF) and
+// HASH+SKF, SORT (no SKF) and SORT+SKF. PARTITION variants are
+// intentionally absent — `phys::distinct` has no partition impl and
+// throws if asked. Spell the four (algo, skf) pairs explicitly.
+gamax::groupby::groupby_hint
+parse_distinct_axis(const std::string& v) {
+    gamax::groupby::groupby_hint h;
+    if (v == "hash_skf") {
+        h.groupby_algo = gamax::groupby::HASH;
+        h.enable_skf   = true;
+    } else if (v == "sort") {
+        h.groupby_algo = gamax::groupby::SORT;
+        h.enable_skf   = false;
+    } else if (v == "sort_skf") {
+        h.groupby_algo = gamax::groupby::SORT;
+        h.enable_skf   = true;
+    } else {
+        throw std::runtime_error("Unknown distinct axis value: " + v);
+    }
     return h;
 }
 
@@ -289,6 +320,7 @@ void bench_tpch_ir(nvbench::state& state) {
     const auto prj_v = state.get_string("project");
     const auto srt_v = state.get_string("sort");
     const auto grp_v = state.get_string("group_by");
+    const auto dst_v = state.get_string("distinct");
     const auto ejn_v = state.get_string("eq_join");
 
     // Breakdown-only constraint: at most one axis is in algo (set)
@@ -302,6 +334,7 @@ void bench_tpch_ir(nvbench::state& state) {
       + static_cast<int>(is_set(prj_v))
       + static_cast<int>(is_set(srt_v))
       + static_cast<int>(is_set(grp_v))
+      + static_cast<int>(is_set(dst_v))
       + static_cast<int>(is_set(ejn_v));
     if (set_count > 1) {
         state.skip("more than one axis is non-default — break-down sweep "
@@ -345,6 +378,7 @@ void bench_tpch_ir(nvbench::state& state) {
     const bool has_sort     = plan_has(kinds, StepKind::Sort)
                            || plan_has(kinds, StepKind::TopK);
     const bool has_group_by = plan_has(kinds, StepKind::GroupBy);
+    const bool has_distinct = plan_has(kinds, StepKind::Distinct);
     const bool has_eq_join  = plan_has(kinds, StepKind::EqJoin);
 
     auto axis_mismatch = [&](bool kind_required, bool kind_present, const char* name) {
@@ -364,6 +398,7 @@ void bench_tpch_ir(nvbench::state& state) {
     if (axis_mismatch(!is_na(prj_v), has_project,  "project"))  return;
     if (axis_mismatch(!is_na(srt_v), has_sort,     "sort"))     return;
     if (axis_mismatch(!is_na(grp_v), has_group_by, "group_by")) return;
+    if (axis_mismatch(!is_na(dst_v), has_distinct, "distinct")) return;
     if (axis_mismatch(!is_na(ejn_v), has_eq_join,  "eq_join"))  return;
 
     // Re-lower with the harness's per-kind overrides. Every non-NA
@@ -390,6 +425,9 @@ void bench_tpch_ir(nvbench::state& state) {
     if (!is_na(grp_v))
         opts.group_by = is_set(grp_v) ? parse_group_by_axis(grp_v)
                                       : bench_defaults::group_by();
+    if (!is_na(dst_v))
+        opts.distinct = is_set(dst_v) ? parse_distinct_axis(dst_v)
+                                      : bench_defaults::distinct();
     if (!is_na(ejn_v))
         opts.eq_join  = is_set(ejn_v) ? parse_eq_join_axis(ejn_v)
                                       : bench_defaults::eq_join();
@@ -492,14 +530,14 @@ void bench_tpch_ir(nvbench::state& state) {
         std::ofstream out(step_csv_path, std::ios::app);
         if (out) {
             if (write_header) {
-                out << "query,scale,filter,project,sort,group_by,eq_join,"
-                       "step_index,step_kind,n_samples,"
+                out << "query,scale,filter,project,sort,group_by,distinct,"
+                       "eq_join,step_index,step_kind,n_samples,"
                        "mean_ms,min_ms,max_ms,stddev_ms\n";
             }
             for (const auto& row : sink->summary()) {
                 out << qid << ',' << sf << ','
                     << fil_v << ',' << prj_v << ',' << srt_v << ','
-                    << grp_v << ',' << ejn_v << ','
+                    << grp_v << ',' << dst_v << ',' << ejn_v << ','
                     << row.step_index << ',' << row.kind_name << ','
                     << row.n_samples << ','
                     << row.mean_ms << ',' << row.min_ms << ','
@@ -521,13 +559,15 @@ NVBENCH_BENCH(bench_tpch_ir)
     // listed as an explicit choice — see the file header comment for
     // why ("default" + "<the same value>" would produce duplicate
     // cells). Defaults: filter/project=nofuse, sort=no_skf,
-    // group_by=hash, eq_join=hash_gfur.
+    // group_by=hash, distinct=hash_no_skf, eq_join=hash_gfur.
     .add_string_axis("filter",   {"fuse", "default", "n/a"})
     .add_string_axis("project",  {"fuse", "default", "n/a"})
     .add_string_axis("sort",     {"skf",  "default", "n/a"})
     .add_string_axis("group_by", {"sort_gftr",      "sort_gftr_opt",
                                   "sort_gfur",      "partition_gftr",
                                   "partition_gfur", "default", "n/a"})
+    .add_string_axis("distinct", {"hash_skf", "sort", "sort_skf",
+                                  "default", "n/a"})
     .add_string_axis("eq_join",  {"sort_merge_gfur",     "sort_merge_gftr",
                                   "partition_hash_gfur", "partition_hash_gftr",
                                   "default", "n/a"});

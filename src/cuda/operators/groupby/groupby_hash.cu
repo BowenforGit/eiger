@@ -1,5 +1,6 @@
 #include "operators/groupby/groupby_hash.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cuco/static_set.cuh>
 #include <cuda.h>
@@ -8,6 +9,7 @@
 #include <thrust/functional.h> // thrust::equal_to
 #include <type_traits>
 
+#include "compress/multikey_compress.hpp"
 #include "utils/utils.cuh"
 #include "memory/column.hpp"
 #include "memory/table.hpp"
@@ -452,6 +454,41 @@ std::unique_ptr<gamax::table> distinct(
                 key.get_column(i).type(), 0));
         }
         return std::make_unique<gamax::table>(std::move(empty_cols));
+    }
+
+    // Optional SKF (smart-key-fusion) path. When enabled, try to fuse
+    // the multi-col key into a single packed key column. If
+    // `multikey_compress` returns non-null, run the cuco-set insert on
+    // the compressed single-col view — cheaper than the multi-col
+    // `row_hasher`/`row_equal` — and gather the *original* multi-col
+    // keys via the resulting leader_tid (output schema unchanged).
+    // `multikey_compress` returns null for single-col input (nothing
+    // to fuse) and when the column widths exceed the fusion bit
+    // budget; either way we fall through to the default multi-col
+    // path. `out_total_bits` lets us tighten the cuco-set sizing —
+    // the number of distinct compressed keys is bounded by
+    // 2^compressed_bits.
+    gamax::column_ptr compressed_key;
+    if (hint.enable_skf) {
+        int compressed_bits = 0;
+        gamax::compress::multikey_compress_options opts;
+        opts.out_total_bits = &compressed_bits;
+        compressed_key = gamax::compress::multikey_compress(key, opts, stream);
+        if (compressed_key) {
+            hint.groups_upper_bound = std::min(
+                hint.groups_upper_bound,
+                static_cast<gamax::size_type>(1) << compressed_bits);
+
+            std::vector<gamax::column_view> compressed_cols{
+                compressed_key->view()};
+            gamax::table_view compressed_view(compressed_cols);
+
+            auto gid_result = compute_group_ids(compressed_view, hint, stream);
+            auto final_columns = gather_keys_by_leader(
+                key, gid_result.leader_tid->view(), stream);
+            return std::make_unique<gamax::table>(std::move(final_columns));
+        }
+        // Fall through to the multi-col path when SKF can't fuse.
     }
 
     auto gid_result = compute_group_ids(key, hint, stream);

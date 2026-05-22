@@ -7,6 +7,7 @@
 
 #include "operators/groupby/groupby.hpp"
 #include "operators/groupby/groupby_hash.hpp"
+#include "operators/groupby/groupby_sort.hpp"
 #include "operators/join/cross_join.hpp"
 #include "operators/join/inner_join.hpp"
 #include "operators/join/join.hpp"
@@ -633,36 +634,36 @@ table_ptr distinct(gamax::table_view keys,
         return std::make_unique<gamax::table>(std::move(cols));
     }
 
+    // Strict dispatch on the requested algo. Each per-algo impl
+    // handles its own SKF internally (multikey_compress + leader_tid
+    // gather for the hash path; same shape planned for sort). No
+    // silent fallback: PARTITION variants throw because they have no
+    // dedicated `distinct` implementation, and `allow_hash_fallback`
+    // is intentionally ignored here — Distinct's hint surface is
+    // disjoint from groupby's downgrade flag.
     auto hint = hint_in;
-    // Default (HASH / AUTO without SKF) → dedicated dedup path. Cheaper
-    // than going through `gamax::groupby::groupby` because we skip the
-    // per-row carrier column and the agg dispatch.
-    const bool is_hash_default =
-        (hint.groupby_algo == gamax::groupby::HASH ||
-         hint.groupby_algo == gamax::groupby::AUTO_ALGO);
-    if (is_hash_default && !hint.enable_skf) {
-        return gamax::groupby::hash::distinct(keys, hint, ctx.stream);
+    switch (hint.groupby_algo) {
+        case gamax::groupby::HASH:
+        case gamax::groupby::AUTO_ALGO:
+            return gamax::groupby::hash::distinct(keys, hint, ctx.stream);
+        case gamax::groupby::SORT:
+        case gamax::groupby::SORT_OPT:
+            // SORT_OPT shares the entry point; `optimize_sort` is
+            // ignored by the sort distinct path (the dictionary-encoded
+            // second-sort optimization in `sort::groupby` has nothing
+            // to optimise when there's no per-payload sort).
+            return gamax::groupby::sort::distinct(keys, hint, ctx.stream);
+        case gamax::groupby::SORT_GFUR:
+            return gamax::groupby::sort::distinct_gfur(keys, hint, ctx.stream);
+        case gamax::groupby::PARTITION:
+        case gamax::groupby::PARTITION_GFUR:
+            throw std::runtime_error(
+                "phys::distinct: PARTITION variants are not supported; "
+                "use HASH or SORT");
+        default:
+            throw std::runtime_error(
+                "phys::distinct: unknown groupby_algo");
     }
-
-    // General path. `gamax::groupby::groupby`'s SKF wrapper adds a tid
-    // column to `val` internally and uses ANY(tids) to gather original
-    // keys post-aggregate. To reuse that machinery for a no-agg
-    // distinct, we hand it a `[seq]` val and an ANY(0) request, then
-    // strip the trailing ANY column from the result. Net result is
-    // `[keys...]` whether SKF is on or off, and whether the algorithm
-    // is HASH / PARTITION / PARTITION_GFUR / SORT*.
-    auto tids = gamax::make_sequence<gamax::size_type>(
-        keys.num_rows(), 0, 1, ctx.stream);
-    std::vector<gamax::column_view> vcols { tids->view() };
-    gamax::table_view val(vcols);
-
-    std::vector<gamax::groupby::aggregation_request> reqs;
-    reqs.emplace_back(/*column=*/0, gamax::groupby::aggregation_id::ANY);
-
-    auto result = gamax::groupby::groupby(keys, val, reqs, hint, ctx.stream);
-    // Schema: [keys..., ANY(seq)]. Strip the carrier.
-    result->remove_column(result->num_columns() - 1);
-    return result;
 }
 
 // ── Concat (SQL UNION ALL) ────────────────────────────────────────

@@ -1441,18 +1441,12 @@ void apply_query_hints(int qid, gamax::ir::LowerOptions& opts) {
             opts.group_by = gamax::groupby::groupby_hint{};
         }
         opts.group_by->allow_hash_fallback = true;
-
-        // Q21's two `Distinct(l_orderkey, l_suppkey)` ops (from the
-        // CountDistinct → Distinct+CountAll rewrite) are multi-col, so
-        // SKF compresses the two int keys into one packed key. That (a)
-        // gives the HASH path a smaller key to hash, and (b) unblocks
-        // partition-based algos on what would otherwise route to HASH
-        // via allow_hash_fallback. Apply ONLY to the Distinct ops —
-        // the inner single-col Aggregate(l_orderkey, CountAll) gets no
-        // benefit from SKF and would just pay multikey_compress +
-        // carrier-ANY overhead.
-        opts.distinct = *opts.group_by;
-        opts.distinct->enable_skf = true;
+        // Note: `opts.distinct` is intentionally not touched here.
+        // Distinct's hint (algo + SKF) is now a measurable bench axis;
+        // letting `apply_query_hints` override it would defeat the
+        // sweep. Non-bench callers (run_tpch_ir, tests) leave
+        // `opts.distinct` empty and lowering falls back to
+        // `opts.group_by` (default HASH, no SKF).
     }
 }
 
