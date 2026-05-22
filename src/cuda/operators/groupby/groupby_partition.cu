@@ -1,5 +1,8 @@
 #include "operators/groupby/groupby_partition.hpp"
 
+#include <algorithm>
+#include <cstdlib>
+#include <iostream>
 #include <memory>
 #include <cuda.h>
 #include <type_traits>
@@ -293,6 +296,126 @@ __global__ void partition_groupby_aggregate_kernel(const Key* __restrict__ keys,
     }
 }
 
+// Env-var gated diagnostic. When GAMAX_PARTITION_OVERFLOW_DIAG is set,
+// copies the partition-major key column + inclusive prefix-sum offsets
+// to host, then for each partition runs std::sort + std::unique to
+// count distinct keys. Reports the top-K, the max, and a coarse
+// distribution. Used to root-cause "per-partition slot table overflow"
+// throws: it confirms which partition saturates and by how much.
+//
+// Cost at SF=100: ~5 GiB host copy + 65k partitions × ~9k-row sort ≈
+// a few seconds. Off by default — set the env var to opt in.
+template<typename Key>
+void diagnose_partition_distinct_counts(
+    gamax::column_view partitioned_key,
+    const gamax::size_type* partition_ps_inclusive_device,
+    gamax::size_type num_partitions,
+    std::size_t num_slots_per_partition,
+    cudaStream_t stream)
+{
+    const auto N = partitioned_key.size();
+    std::cerr << "[partition diag] copying partitioned_key (" << N
+              << " rows × " << sizeof(Key) << " B = "
+              << (double(N) * sizeof(Key) / (1024.0 * 1024.0 * 1024.0))
+              << " GiB) and offsets to host..." << std::endl;
+
+    // std::vector<bool> has no .data() member, but the partition_groupby
+    // template instantiates for every integral Key — use a raw buffer.
+    auto h_keys = std::make_unique<Key[]>(static_cast<std::size_t>(N));
+    cudaMemcpyAsync(h_keys.get(), partitioned_key.template data<Key>(),
+                    static_cast<std::size_t>(N) * sizeof(Key),
+                    cudaMemcpyDeviceToHost, stream);
+
+    // partition_ps is an INCLUSIVE prefix sum of length num_partitions.
+    //   partition_ps[i] = total rows in partitions [0..i].
+    // Partition i's row range: [(i==0)?0:partition_ps[i-1], partition_ps[i]).
+    std::vector<gamax::size_type> h_ps(num_partitions);
+    cudaMemcpyAsync(h_ps.data(), partition_ps_inclusive_device,
+                    num_partitions * sizeof(gamax::size_type),
+                    cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+
+    std::vector<gamax::size_type> h_counts(num_partitions, 0);
+    std::vector<gamax::size_type> h_sizes(num_partitions, 0);
+    gamax::size_type max_distinct = 0;
+    gamax::size_type max_partition = 0;
+    gamax::size_type overflows = 0;
+    gamax::size_type empties = 0;
+    gamax::size_type total_distinct = 0;
+
+    auto slice = std::make_unique<Key[]>(static_cast<std::size_t>(N));
+    for (gamax::size_type p = 0; p < num_partitions; ++p) {
+        gamax::size_type start = (p == 0) ? gamax::size_type{0} : h_ps[p - 1];
+        gamax::size_type end = h_ps[p];
+        gamax::size_type sz = end - start;
+        h_sizes[p] = sz;
+        if (sz == 0) { ++empties; continue; }
+
+        std::copy(h_keys.get() + start, h_keys.get() + end, slice.get());
+        std::sort(slice.get(), slice.get() + sz);
+        auto new_end = std::unique(slice.get(), slice.get() + sz);
+        gamax::size_type distinct = static_cast<gamax::size_type>(new_end - slice.get());
+
+        h_counts[p] = distinct;
+        total_distinct += distinct;
+        if (distinct >= static_cast<gamax::size_type>(num_slots_per_partition)) ++overflows;
+        if (distinct > max_distinct) {
+            max_distinct = distinct;
+            max_partition = p;
+        }
+    }
+
+    std::cerr << "[partition diag] N=" << N
+              << " num_partitions=" << num_partitions
+              << " NumSlots(per-partition cap)=" << num_slots_per_partition
+              << "\n[partition diag] total_distinct=" << total_distinct
+              << " empty_partitions=" << empties
+              << " overflowing_partitions(distinct>=NumSlots)=" << overflows
+              << "\n[partition diag] max_distinct=" << max_distinct
+              << " in partition " << max_partition
+              << " (rows=" << h_sizes[max_partition] << ")"
+              << std::endl;
+
+    // Top-K partitions by distinct count
+    std::vector<gamax::size_type> idx(num_partitions);
+    for (gamax::size_type p = 0; p < num_partitions; ++p) idx[p] = p;
+    const int K = static_cast<int>(std::min<gamax::size_type>(20, num_partitions));
+    std::partial_sort(idx.begin(), idx.begin() + K, idx.end(),
+                      [&](gamax::size_type a, gamax::size_type b) {
+                          return h_counts[a] > h_counts[b];
+                      });
+    std::cerr << "[partition diag] Top " << K
+              << " partitions by distinct key count:\n";
+    for (int i = 0; i < K; ++i) {
+        auto p = idx[i];
+        std::cerr << "  partition[" << p << "]:"
+                  << " distinct=" << h_counts[p]
+                  << " rows=" << h_sizes[p]
+                  << " dup_ratio=" << (h_sizes[p] > 0
+                                        ? double(h_sizes[p]) / double(h_counts[p])
+                                        : 0.0)
+                  << "\n";
+    }
+
+    // Distribution histogram
+    const gamax::size_type nslots = static_cast<gamax::size_type>(num_slots_per_partition);
+    const std::vector<gamax::size_type> bounds = {
+        0, 1, 1000, 4000, 7000, nslots, nslots + nslots / 4, nslots * 2,
+        nslots * 5, std::numeric_limits<gamax::size_type>::max()};
+    std::cerr << "[partition diag] distribution buckets [lo, hi):" << std::endl;
+    for (std::size_t b = 0; b + 1 < bounds.size(); ++b) {
+        gamax::size_type cnt = 0;
+        for (gamax::size_type p = 0; p < num_partitions; ++p) {
+            if (h_counts[p] >= bounds[b] && h_counts[p] < bounds[b + 1]) ++cnt;
+        }
+        std::cerr << "  [" << bounds[b] << ", ";
+        if (bounds[b + 1] == std::numeric_limits<gamax::size_type>::max()) std::cerr << "inf";
+        else std::cerr << bounds[b + 1];
+        std::cerr << "): " << cnt << " partitions" << std::endl;
+    }
+    std::cerr.flush();
+}
+
 template<typename Key, int BucketSize, std::size_t NumSlots, typename Itr>
 std::unique_ptr<gamax::table> compute_aggregate(
     gamax::column_view partitioned_key,
@@ -324,6 +447,20 @@ std::unique_ptr<gamax::table> compute_aggregate(
         units_end_ptr->data<gamax::size_type>(),
         units_group_ptr->data<gamax::size_type>(),
         stream);
+
+    // Opt-in diagnostic: when GAMAX_PARTITION_OVERFLOW_DIAG is set,
+    // count distinct keys per partition on the host and report the
+    // worst offenders. Useful to root-cause "per-partition slot table
+    // overflow" throws.
+    if (std::getenv("GAMAX_PARTITION_OVERFLOW_DIAG")) {
+        diagnose_partition_distinct_counts<Key>(
+            partitioned_key,
+            partition_ps->data<gamax::size_type>(),
+            num_partitions,
+            NumSlots,
+            stream);
+    }
+
     partition_ps.reset();
 
     std::vector<std::unique_ptr<gamax::column>> final_columns;
