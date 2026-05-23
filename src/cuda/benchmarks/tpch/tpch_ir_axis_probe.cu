@@ -20,7 +20,7 @@
 //     to probe SF=10 or larger, set GAMAX_PROBE_RESET_POOL=1.
 //
 // Output CSV columns:
-//   query,scale,filter,project,sort,group_by,eq_join,
+//   query,scale,filter,project,sort,group_by,distinct,eq_join,
 //   status,verify,peak_mem_bytes,error
 // `status` is `pass` or `fail`. `verify` is `ok`/`mismatch` (when
 // --verify is set), `skip` otherwise, and empty for failing cells.
@@ -100,6 +100,12 @@ gamax::sort::sort_table_options sort() {
 gamax::groupby::groupby_hint group_by() {
     gamax::groupby::groupby_hint h;
     h.groupby_algo = gamax::groupby::HASH;
+    return h;
+}
+gamax::groupby::groupby_hint distinct() {
+    gamax::groupby::groupby_hint h;
+    h.groupby_algo = gamax::groupby::HASH;
+    h.enable_skf   = false;
     return h;
 }
 gamax::join::join_hint eq_join() {
@@ -187,6 +193,27 @@ parse_group_by(const std::string& v) {
     int algo = gamax::tpch::tpch_params::parse_algo_value(v);
     gamax::groupby::groupby_hint h;
     h.groupby_algo = static_cast<gamax::groupby::groupby_algo>(algo);
+    return h;
+}
+// Distinct axis. Spelled out explicitly because Distinct's supported
+// space is a subset of groupby's: HASH (no SKF) and HASH+SKF, SORT
+// (no SKF) and SORT+SKF — PARTITION variants are intentionally absent
+// (phys::distinct throws on PARTITION).
+gamax::groupby::groupby_hint
+parse_distinct(const std::string& v) {
+    gamax::groupby::groupby_hint h;
+    if (v == "hash_skf") {
+        h.groupby_algo = gamax::groupby::HASH;
+        h.enable_skf   = true;
+    } else if (v == "sort") {
+        h.groupby_algo = gamax::groupby::SORT;
+        h.enable_skf   = false;
+    } else if (v == "sort_skf") {
+        h.groupby_algo = gamax::groupby::SORT;
+        h.enable_skf   = true;
+    } else {
+        throw std::runtime_error("Unknown distinct axis value: " + v);
+    }
     return h;
 }
 gamax::join::join_hint
@@ -314,6 +341,8 @@ const std::vector<std::string> kSortVals    = {"skf", "default", "n/a"};
 const std::vector<std::string> kGroupByVals = {
     "sort_gftr", "sort_gftr_opt", "sort_gfur",
     "partition_gftr", "partition_gfur", "default", "n/a"};
+const std::vector<std::string> kDistinctVals = {
+    "hash_skf", "sort", "sort_skf", "default", "n/a"};
 const std::vector<std::string> kEqJoinVals  = {
     "sort_merge_gfur", "sort_merge_gftr",
     "partition_hash_gfur", "partition_hash_gftr",
@@ -341,7 +370,7 @@ int main(int argc, char** argv) try {
     // verify is `ok` / `mismatch` for passing cells when --verify is
     // set, `skip` when --verify is off, and empty for failing cells.
     // peak_mem_bytes is the GPU high-water mark within this cell.
-    out << "query,scale,filter,project,sort,group_by,eq_join,"
+    out << "query,scale,filter,project,sort,group_by,distinct,eq_join,"
            "status,verify,peak_mem_bytes,error\n";
 
     auto& catalog = shared_catalog();
@@ -381,12 +410,14 @@ int main(int argc, char** argv) try {
         const bool h_project  = has_kind(kinds, K::Project);
         const bool h_sort     = has_kind(kinds, K::Sort) || has_kind(kinds, K::TopK);
         const bool h_group_by = has_kind(kinds, K::GroupBy);
+        const bool h_distinct = has_kind(kinds, K::Distinct);
         const bool h_eq_join  = has_kind(kinds, K::EqJoin);
 
         for (const auto& fv : kFilterVals)
         for (const auto& pv : kProjectVals)
         for (const auto& sv : kSortVals)
         for (const auto& gv : kGroupByVals)
+        for (const auto& dv : kDistinctVals)
         for (const auto& jv : kEqJoinVals) {
             // At-most-one-set rule (matches the bench fixture).
             const int set_count =
@@ -394,6 +425,7 @@ int main(int argc, char** argv) try {
               + static_cast<int>(is_set(pv))
               + static_cast<int>(is_set(sv))
               + static_cast<int>(is_set(gv))
+              + static_cast<int>(is_set(dv))
               + static_cast<int>(is_set(jv));
             if (set_count > 1) { ++skip_n; continue; }
 
@@ -402,6 +434,7 @@ int main(int argc, char** argv) try {
             if (mismatched(!is_na(pv), h_project,  "project"))  { ++skip_n; continue; }
             if (mismatched(!is_na(sv), h_sort,     "sort"))     { ++skip_n; continue; }
             if (mismatched(!is_na(gv), h_group_by, "group_by")) { ++skip_n; continue; }
+            if (mismatched(!is_na(dv), h_distinct, "distinct")) { ++skip_n; continue; }
             if (mismatched(!is_na(jv), h_eq_join,  "eq_join"))  { ++skip_n; continue; }
 
             // Re-lower with per-kind overrides. Non-NA axes populate
@@ -419,6 +452,8 @@ int main(int argc, char** argv) try {
             }
             if (!is_na(gv))
                 opts.group_by = is_set(gv) ? parse_group_by(gv) : bench_defaults::group_by();
+            if (!is_na(dv))
+                opts.distinct = is_set(dv) ? parse_distinct(dv) : bench_defaults::distinct();
             if (!is_na(jv))
                 opts.eq_join  = is_set(jv) ? parse_eq_join(jv) : bench_defaults::eq_join();
             gamax::ir::tpch::apply_query_hints(qid, opts);
@@ -464,7 +499,7 @@ int main(int argc, char** argv) try {
             }
 
             out << qid << ',' << args.scale_factor << ',' << fv << ','
-                << pv << ',' << sv << ',' << gv << ',' << jv << ','
+                << pv << ',' << sv << ',' << gv << ',' << dv << ',' << jv << ','
                 << status << ',' << verify << ',' << peak_mem << ','
                 << err << '\n';
 
