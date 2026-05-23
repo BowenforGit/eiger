@@ -1,18 +1,29 @@
+#include <cstdint>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
+#include <vector>
+#include <cub/device/device_run_length_encode.cuh>
+#include <thrust/iterator/discard_iterator.h>
 #include <thrust/iterator/permutation_iterator.h>
 
 #include "utils/utils.cuh"
 #include "utils/cub_wrapper.cuh"
+#include "utils/copying.hpp"
+#include "utils/transform.hpp"
+#include "compress/dictionary_encode.hpp"
+#include "compress/multikey_compress.hpp"
 #include "memory/column.hpp"
 #include "memory/table.hpp"
 #include "operators/groupby/groupby.hpp"
 #include "operators/groupby/groupby_sort.hpp"
 #include "operators/groupby/aggregation.hpp"
 #include "operators/groupby/agg_func.cuh"
+#include "operators/join/materialize.hpp"
 #include "operators/sort/sort.hpp"
 #include "types/data_type.hpp"
-#include "compress/dictionary_encode.hpp"
+#include "types/type_dispatcher.hpp"
 
 namespace gamax::groupby::sort {
 
@@ -232,7 +243,104 @@ void extract_groupby_hint(
             return 8 * gamax::size_of(dtype) - __builtin_clz(v);
         } (estimated_num_groups);
     }
-} 
+}
+
+// ── distinct helpers ─────────────────────────────────────────────
+//
+// Case 1 (single-col input): sort the column, then run
+// `cub::DeviceRunLengthEncode::Encode` with the unique-values output
+// connected to a pre-allocated column and the per-run counts discarded.
+// `d_num_runs_out` returns the count of unique values; the unique
+// column is trimmed and returned.
+//
+// Templated on key type T so we can hand CUB typed pointers. Used via
+// `type_dispatcher(key.type(), case1_dispatcher{}, ...)` so that every
+// numeric key type the engine handles works without an explicit
+// switch.
+struct case1_dispatcher {
+    template<typename T>
+    std::unique_ptr<gamax::table> operator()(
+        gamax::column_view sorted_key,
+        cudaStream_t stream) const
+    {
+        const auto n = sorted_key.size();
+
+        // Allocate the unique-values output at the worst-case size
+        // (every row distinct) and trim after the RLE writes the
+        // actual `num_runs`.
+        auto unique_col = gamax::make_column<T>(n, false, stream);
+        auto d_num_runs = gamax::make_idx_column(1, false, stream);
+
+        std::size_t tmp_bytes = 0;
+        cub::DeviceRunLengthEncode::Encode(
+            nullptr, tmp_bytes,
+            sorted_key.template data<T>(),
+            unique_col->template data<T>(),
+            thrust::make_discard_iterator(),
+            d_num_runs->data<gamax::size_type>(),
+            n, stream);
+        auto tmp = std::make_unique<gamax::device_buffer>(tmp_bytes, false);
+        cub::DeviceRunLengthEncode::Encode(
+            tmp->data(), tmp_bytes,
+            sorted_key.template data<T>(),
+            unique_col->template data<T>(),
+            thrust::make_discard_iterator(),
+            d_num_runs->data<gamax::size_type>(),
+            n, stream);
+
+        gamax::size_type h_num_runs = 0;
+        cudaMemcpyAsync(&h_num_runs,
+                        d_num_runs->data<gamax::size_type>(),
+                        sizeof(gamax::size_type),
+                        cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        unique_col->set_size(h_num_runs);
+
+        std::vector<std::unique_ptr<gamax::column>> cols;
+        cols.push_back(std::move(unique_col));
+        return std::make_unique<gamax::table>(std::move(cols));
+    }
+};
+
+// Case 2 helper: RLE the SKF-compressed (uint64) sorted key. The unique
+// values are discarded (we'll materialize original keys via the
+// leader-tid pattern instead); the per-run counts are kept so we can
+// turn them into the leader-row indices via an exclusive prefix sum.
+// Returns the host-side `num_runs`.
+inline gamax::size_type rle_counts_only(
+    gamax::column_view sorted_fk,
+    gamax::mutable_column_view counts_out,
+    cudaStream_t stream)
+{
+    const auto n = sorted_fk.size();
+    auto d_num_runs = gamax::make_idx_column(1, false, stream);
+
+    std::size_t tmp_bytes = 0;
+    cub::DeviceRunLengthEncode::Encode(
+        nullptr, tmp_bytes,
+        sorted_fk.data<std::uint64_t>(),
+        thrust::make_discard_iterator(),
+        counts_out.data<gamax::size_type>(),
+        d_num_runs->data<gamax::size_type>(),
+        n, stream);
+    auto tmp = std::make_unique<gamax::device_buffer>(tmp_bytes, false);
+    cub::DeviceRunLengthEncode::Encode(
+        tmp->data(), tmp_bytes,
+        sorted_fk.data<std::uint64_t>(),
+        thrust::make_discard_iterator(),
+        counts_out.data<gamax::size_type>(),
+        d_num_runs->data<gamax::size_type>(),
+        n, stream);
+
+    gamax::size_type h_num_runs = 0;
+    cudaMemcpyAsync(&h_num_runs,
+                    d_num_runs->data<gamax::size_type>(),
+                    sizeof(gamax::size_type),
+                    cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    return h_num_runs;
+}
+
 } // unnamed namespace
 
 std::unique_ptr<gamax::table> groupby(
@@ -318,25 +426,6 @@ std::unique_ptr<gamax::table> groupby(
     return std::make_unique<gamax::table>(std::move(final_columns));
 }
 
-// Sort-based distinct stubs. See groupby_sort.hpp for the design
-// rationale (separate from sort::groupby because the algorithms
-// diverge). To be filled in as a follow-up task.
-std::unique_ptr<gamax::table> distinct(
-    gamax::table_view /*key*/,
-    gamax::groupby::groupby_hint& /*hint*/,
-    cudaStream_t /*stream*/)
-{
-    throw std::runtime_error("sort::distinct: not yet implemented");
-}
-
-std::unique_ptr<gamax::table> distinct_gfur(
-    gamax::table_view /*key*/,
-    gamax::groupby::groupby_hint& /*hint*/,
-    cudaStream_t /*stream*/)
-{
-    throw std::runtime_error("sort::distinct_gfur: not yet implemented");
-}
-
 std::unique_ptr<gamax::table> groupby_gfur(
     gamax::table_view key,
     gamax::table_view val,
@@ -388,4 +477,136 @@ std::unique_ptr<gamax::table> groupby_gfur(
 
     return std::make_unique<gamax::table>(std::move(final_columns));
 }
+
+// Sort-based distinct. See groupby_sort.hpp for scope / contract.
+//
+// Branching (single-col-first):
+//   * key.num_columns() == 1   → Case 1 directly
+//   * hint.enable_skf set      → try multikey_compress; success → Case 2
+//                                  failure → throw (multi-col + compress
+//                                  declined means we can't reduce to a
+//                                  single key)
+//   * otherwise                → throw (sort distinct is single-key only)
+//
+// STRING keys are rejected up front with an actionable message —
+// `sort_column` / `sort_column_pair` use CUB radix sort which doesn't
+// accept STRING anyway.
+std::unique_ptr<gamax::table> distinct(
+    gamax::table_view key,
+    gamax::groupby::groupby_hint& hint,
+    cudaStream_t stream)
+{
+    if (key.num_columns() == 0) {
+        throw std::runtime_error(
+            "sort::distinct: must have at least one key column");
+    }
+
+    // STRING guard. Reject early — the underlying radix sort can't
+    // handle string columns, and falling through would surface a less
+    // specific error later.
+    for (gamax::size_type i = 0; i < key.num_columns(); ++i) {
+        if (key.get_column(i).type().id() == gamax::type_id::STRING) {
+            throw std::runtime_error(
+                "sort::distinct: STRING keys not supported; use HASH");
+        }
+    }
+
+    const auto n = key.num_rows();
+
+    // ── Case 1: truly a single key column ──────────────────────────
+    if (key.num_columns() == 1) {
+        auto sorted_key = gamax::sort::sort_column(
+            key.get_column(0),
+            /*begin_bit=*/0, /*end_bit=*/-1,
+            gamax::sort_order::ASCENDING,
+            /*d_temp_storage=*/nullptr, /*temp_storage_bytes=*/0,
+            stream);
+
+        return gamax::type_dispatcher(
+            sorted_key->type(),
+            case1_dispatcher{},
+            sorted_key->view(),
+            stream);
+    }
+
+    // ── Case 2: multi-col + SKF ────────────────────────────────────
+    // SKF must be enabled; otherwise the algorithm can't reduce to a
+    // single-key sort.
+    if (!hint.enable_skf) {
+        throw std::runtime_error(
+            "sort::distinct: only single-col keys are supported "
+            "natively; set hint.enable_skf to enable multi-col SKF "
+            "fusion (or use HASH)");
+    }
+
+    int compressed_bits = 0;
+    gamax::compress::multikey_compress_options skf_opts;
+    skf_opts.out_total_bits = &compressed_bits;
+    auto fk = gamax::compress::multikey_compress(key, skf_opts, stream);
+    if (!fk) {
+        throw std::runtime_error(
+            "sort::distinct: multi-col key didn't compress under SKF "
+            "(bit budget or unsupported type); use HASH");
+    }
+
+    // Per-row tids [0, n), so the (fk, tid) sort gives us the original
+    // row index of every key after sorting.
+    auto tids = gamax::make_sequence<gamax::size_type>(
+        n, /*start=*/gamax::size_type{0}, /*step=*/gamax::size_type{1},
+        stream);
+
+    auto [sorted_fk, sorted_tid] = gamax::sort::sort_column_pair(
+        fk->view(), tids->view(),
+        /*begin_bit=*/0, /*end_bit=*/-1,
+        gamax::sort_order::ASCENDING,
+        /*d_temp_storage=*/nullptr, /*temp_storage_bytes=*/0,
+        stream);
+
+    // RLE on the sorted fused key. Discard unique values (we materialize
+    // original-key rows via leader-tid instead); keep per-group counts
+    // so we can do an exclusive prefix sum into leader-row indices.
+    auto counts = gamax::make_column(
+        gamax::data_type{size_type_id}, n, /*clear=*/false, stream);
+    const gamax::size_type num_runs = rle_counts_only(
+        sorted_fk->view(), counts->mutable_view(), stream);
+
+    // Fast path: every row was unique → no dedup work needed; the
+    // output is a column-wise deep-copy of the original input table
+    // (distinct's output row order is unspecified, so we don't need
+    // the sorted permutation here).
+    if (num_runs == n) {
+        std::vector<std::unique_ptr<gamax::column>> cols;
+        cols.reserve(key.num_columns());
+        for (gamax::size_type i = 0; i < key.num_columns(); ++i) {
+            cols.push_back(gamax::copy_column(key.get_column(i), stream));
+        }
+        return std::make_unique<gamax::table>(std::move(cols));
+    }
+
+    // Slow path: trim counts to `num_runs`, exclusive-sum into leader
+    // positions in the sorted order, gather original row indices from
+    // `sorted_tid` at those positions, then materialize the original
+    // multi-col keys via the leader-tid map.
+    counts->set_size(num_runs);
+    auto leader_idx = gamax::util::device::prefix_sum(
+        counts->view(),
+        gamax::prefix_sum_options::EXCLUSIVE,
+        gamax::data_type{size_type_id},
+        stream);
+
+    auto leader_tid = gamax::util::device::gather(
+        leader_idx->view(),
+        sorted_tid->view(),
+        stream);
+
+    std::vector<std::unique_ptr<gamax::column>> cols;
+    cols.reserve(key.num_columns());
+    for (gamax::size_type i = 0; i < key.num_columns(); ++i) {
+        cols.push_back(gamax::join::detail::simple_materialize(
+            key.get_column(i), leader_tid->view(), stream));
+    }
+    cudaStreamSynchronize(stream);
+    return std::make_unique<gamax::table>(std::move(cols));
+}
+
 } // namespace gamax::groupby::sort

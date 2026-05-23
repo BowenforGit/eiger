@@ -648,13 +648,11 @@ table_ptr distinct(gamax::table_view keys,
             return gamax::groupby::hash::distinct(keys, hint, ctx.stream);
         case gamax::groupby::SORT:
         case gamax::groupby::SORT_OPT:
-            // SORT_OPT shares the entry point; `optimize_sort` is
-            // ignored by the sort distinct path (the dictionary-encoded
-            // second-sort optimization in `sort::groupby` has nothing
-            // to optimise when there's no per-payload sort).
-            return gamax::groupby::sort::distinct(keys, hint, ctx.stream);
         case gamax::groupby::SORT_GFUR:
-            return gamax::groupby::sort::distinct_gfur(keys, hint, ctx.stream);
+            // All sort-family algos share one entry point. `optimize_sort`
+            // and the GFUR/GFTR distinction are both meaningless for a
+            // no-agg distinct (no per-payload sort to optimise).
+            return gamax::groupby::sort::distinct(keys, hint, ctx.stream);
         case gamax::groupby::PARTITION:
         case gamax::groupby::PARTITION_GFUR:
             throw std::runtime_error(

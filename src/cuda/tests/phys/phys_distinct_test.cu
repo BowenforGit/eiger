@@ -16,6 +16,7 @@
 
 #include "memory/column.hpp"
 #include "memory/table.hpp"
+#include "operators/groupby/groupby.hpp"
 #include "phys/phys.hpp"
 #include "string/string_column.hpp"
 #include "types/data_type.hpp"
@@ -207,6 +208,127 @@ TEST(PhysDistinct, MultiKeyStringAndInt32Q16Shape) {
         {"Brand#22", "LARGE ANODIZED STEEL", 3},
     };
     EXPECT_EQ(as_set, expected);
+}
+
+// ── Sort-based distinct ───────────────────────────────────────────
+//
+// `phys::distinct` dispatches on `hint.groupby_algo`. Cover the
+// single-col path (Case 1) and the multi-col + SKF path (Case 2),
+// the all-unique fast path, and the two throw branches (multi-col
+// without SKF, STRING).
+
+namespace {
+gamax::groupby::groupby_hint sort_hint(bool enable_skf) {
+    gamax::groupby::groupby_hint h;
+    h.groupby_algo = gamax::groupby::SORT;
+    h.enable_skf = enable_skf;
+    return h;
+}
+} // namespace
+
+TEST(PhysDistinctSort, SingleColInt32ThreeOfTen) {
+    std::vector<int32_t> a = {1, 2, 3, 1, 2, 3, 1, 2, 3, 1};
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(mk_col(a));
+    auto tbl = gamax::make_table(std::move(cols));
+    auto hint = sort_hint(/*enable_skf=*/false);
+    auto out = phys::distinct(tbl->view(), default_ctx(), hint);
+    ASSERT_EQ(out->num_rows(), 3);
+    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    std::set<int32_t> as_set(host.get(), host.get() + 3);
+    EXPECT_EQ(as_set, (std::set<int32_t>{1, 2, 3}));
+}
+
+TEST(PhysDistinctSort, SingleColInt64AllUnique) {
+    // No duplicates: RLE produces num_runs == n. (Case 1 has no
+    // explicit fast path — the RLE just emits each value once.)
+    std::vector<int64_t> a = {7, 13, 42, 99, 100, 1000};
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(mk_col(a));
+    auto tbl = gamax::make_table(std::move(cols));
+    auto hint = sort_hint(/*enable_skf=*/false);
+    auto out = phys::distinct(tbl->view(), default_ctx(), hint);
+    ASSERT_EQ(out->num_rows(), 6);
+    auto host = gamax::copy_column_to_host<int64_t>(out->view()[0]);
+    std::set<int64_t> as_set(host.get(), host.get() + 6);
+    EXPECT_EQ(as_set, (std::set<int64_t>{7, 13, 42, 99, 100, 1000}));
+}
+
+TEST(PhysDistinctSort, MultiKeyInt32Int64WithSKF) {
+    // Same shape as the hash-side MultiKeyInt32AndInt64FourOfEight
+    // test (3 unique (k1, k2) combos in 8 rows), but routed through
+    // the SORT + SKF path. multikey_compress fuses two narrow ints
+    // into a single uint64 key; sort distinct then RLEs the fused
+    // key and materialises original-key rows via leader_tid.
+    std::vector<int32_t> k1 = {1, 2, 1, 2, 1, 2, 3, 3};
+    std::vector<int64_t> k2 = {10, 20, 10, 20, 10, 20, 30, 30};
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(mk_col(k1));
+    cols.push_back(mk_col(k2));
+    auto tbl = gamax::make_table(std::move(cols));
+    auto hint = sort_hint(/*enable_skf=*/true);
+    auto out = phys::distinct(tbl->view(), default_ctx(), hint);
+    ASSERT_EQ(out->num_rows(), 3);
+    ASSERT_EQ(out->num_columns(), 2);
+    auto h1 = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto h2 = gamax::copy_column_to_host<int64_t>(out->view()[1]);
+    std::set<std::tuple<int32_t, int64_t>> as_set;
+    for (int i = 0; i < 3; ++i) as_set.emplace(h1[i], h2[i]);
+    EXPECT_EQ(as_set,
+              (std::set<std::tuple<int32_t, int64_t>>{
+                  {1, 10}, {2, 20}, {3, 30}}));
+}
+
+TEST(PhysDistinctSort, MultiKeyAllUniqueFastPath) {
+    // Exercise Case 2's fast path: when every (k1, k2) is distinct,
+    // num_runs == n and the implementation returns a column-wise copy
+    // of the original input.
+    std::vector<int32_t> k1 = {1, 2, 3, 4};
+    std::vector<int64_t> k2 = {10, 20, 30, 40};
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(mk_col(k1));
+    cols.push_back(mk_col(k2));
+    auto tbl = gamax::make_table(std::move(cols));
+    auto hint = sort_hint(/*enable_skf=*/true);
+    auto out = phys::distinct(tbl->view(), default_ctx(), hint);
+    ASSERT_EQ(out->num_rows(), 4);
+    ASSERT_EQ(out->num_columns(), 2);
+    auto h1 = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto h2 = gamax::copy_column_to_host<int64_t>(out->view()[1]);
+    std::set<std::tuple<int32_t, int64_t>> as_set;
+    for (int i = 0; i < 4; ++i) as_set.emplace(h1[i], h2[i]);
+    EXPECT_EQ(as_set,
+              (std::set<std::tuple<int32_t, int64_t>>{
+                  {1, 10}, {2, 20}, {3, 30}, {4, 40}}));
+}
+
+TEST(PhysDistinctSort, MultiKeyWithoutSKFThrows) {
+    // Multi-col input without SKF — sort distinct is single-key-only,
+    // so this must throw with a message that points the caller at the
+    // remedy.
+    std::vector<int32_t> k1 = {1, 2, 1, 2};
+    std::vector<int64_t> k2 = {10, 20, 10, 20};
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(mk_col(k1));
+    cols.push_back(mk_col(k2));
+    auto tbl = gamax::make_table(std::move(cols));
+    auto hint = sort_hint(/*enable_skf=*/false);
+    EXPECT_THROW(
+        phys::distinct(tbl->view(), default_ctx(), hint),
+        std::runtime_error);
+}
+
+TEST(PhysDistinctSort, StringKeyThrows) {
+    // STRING keys are explicitly rejected by sort::distinct's entry
+    // guard — radix sort doesn't accept them.
+    std::vector<std::string> brands = {"Brand#11", "Brand#22", "Brand#11"};
+    std::vector<gamax::column_ptr> cols;
+    cols.push_back(mk_string_col(brands));
+    auto tbl = gamax::make_table(std::move(cols));
+    auto hint = sort_hint(/*enable_skf=*/false);
+    EXPECT_THROW(
+        phys::distinct(tbl->view(), default_ctx(), hint),
+        std::runtime_error);
 }
 
 int main(int argc, char** argv) {
