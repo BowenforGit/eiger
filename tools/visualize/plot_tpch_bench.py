@@ -174,17 +174,17 @@ PLOT_BASELINE = {
 BEST_VS_BASELINE_THRESHOLD = 0.05  # 5%
 
 # Font sizes for paper insertion. Single dict so any downstream
-# tweak is one edit. Calibrated for a two-column paper at ~3.4
-# in/column; bump uniformly if inserting at single-column width.
+# tweak is one edit. Sized for paper-readability when each subplot
+# in the 2×11 grid sits at ~1.5×1.3 in (typical two-column figure).
 FONT_SIZES = {
-    "subplot_title":  18,
-    "xticks":         14,
-    "yticks":         13,
-    "ylabel":         15,
-    "suptitle":       20,
-    "legend":         14,
-    "annotation":     12,
-    "section_title":  18,   # used by plot_top_steps / plot_kind_share
+    "subplot_title":  22,
+    "xticks":         17,
+    "yticks":         16,
+    "ylabel":         18,
+    "suptitle":       24,
+    "legend":         17,
+    "annotation":     14,
+    "section_title":  22,   # used by plot_top_steps / plot_kind_share
 }
 
 # Two-bar palette: gray for the baseline composite, green for the
@@ -572,14 +572,14 @@ def plot_e2e(df: pd.DataFrame, df_steps: pd.DataFrame, out_path: Path,
                              f"(≥{int(BEST_VS_BASELINE_THRESHOLD*100)}% "
                              f"faster than baseline)"),
     ]
-    fig.suptitle(f"TPC-H per-query end-to-end GPU time  ·  "
-                 f"baseline / best  ·  SF={scale}  ·  {machine_display}",
-                 fontsize=FONT_SIZES["suptitle"],
-                 fontweight="bold", y=0.99)
+    # fig.suptitle(f"TPC-H per-query end-to-end GPU time  ·  "
+    #              f"baseline / best  ·  SF={scale}  ·  {machine_display}",
+    #              fontsize=FONT_SIZES["suptitle"],
+    #              fontweight="bold", y=0.99)
     fig.legend(handles=legend_handles, loc="lower center", ncol=2,
-               bbox_to_anchor=(0.5, -0.005),
+               bbox_to_anchor=(0.5, -0.025),
                fontsize=FONT_SIZES["legend"], frameon=False)
-    fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+    fig.tight_layout(rect=[0, 0.06, 1, 0.95])
     fig.savefig(out_path, bbox_inches="tight")
     jpg_path = out_path.with_suffix(".jpg")
     fig.savefig(jpg_path, bbox_inches="tight", dpi=150)
@@ -671,17 +671,17 @@ def plot_breakdown(df: pd.DataFrame, out_path: Path, scale: int,
         mpatches.Patch(color=STEP_COLORS.get(k, "#aaaaaa"), label=k)
         for k in used_sorted
     ]
-    fig.suptitle(
-        f"TPC-H per-step breakdown  ·  baseline / best-per-step  ·  "
-        f"SF={scale}  ·  {machine_display}",
-        fontsize=FONT_SIZES["suptitle"], fontweight="bold", y=0.99)
+    # fig.suptitle(
+    #     f"TPC-H per-step breakdown  ·  baseline / best-per-step  ·  "
+    #     f"SF={scale}  ·  {machine_display}",
+    #     fontsize=FONT_SIZES["suptitle"], fontweight="bold", y=0.99)
     n_legend = len(legend_handles)
     legend_ncol = (n_legend + 1) // 2
     fig.legend(handles=legend_handles, loc="lower center",
                ncol=legend_ncol,
-               bbox_to_anchor=(0.5, -0.01),
+               bbox_to_anchor=(0.5, -0.03),
                fontsize=FONT_SIZES["legend"], frameon=False)
-    fig.tight_layout(rect=[0, 0.07, 1, 0.95])
+    fig.tight_layout(rect=[0, 0.08, 1, 0.95])
     fig.savefig(out_path, bbox_inches="tight")
     jpg_path = out_path.with_suffix(".jpg")
     fig.savefig(jpg_path, bbox_inches="tight", dpi=150)
