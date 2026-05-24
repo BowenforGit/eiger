@@ -510,13 +510,25 @@ def e2e_baseline_synth_ms(df_steps_q: pd.DataFrame) -> float:
     return total
 
 
+def e2e_best_synth_ms(df_steps_q: pd.DataFrame) -> float:
+    """E2E "best" for one query = sum of per-step gated bests.
+    Matches the breakdown plot's "best" bar exactly: each step
+    contributes its winning alternative impl (if ≥5% faster than
+    per-step baseline) or its baseline (if no winner clears the
+    gate). This is the oracle composite — assumes the engine could
+    pick the best algo per step independently."""
+    gb = compute_gated_best_per_step(df_steps_q)
+    return float(gb["best_ms"].sum())
+
+
 # ── Plots ─────────────────────────────────────────────────────────
 
 def plot_e2e(df: pd.DataFrame, df_steps: pd.DataFrame, out_path: Path,
              scale: int, machine_display: str):
     """22 subfigures, 2 bars per query: baseline (plot-side composite
-    of per-step baselines) and best (gated min across all measured
-    cells; equals baseline when no cell beats it by ≥5%)."""
+    of per-step baselines) and best (per-step gated composite — sum
+    of each step's gated best). Matches the breakdown plot's bar
+    heights by construction."""
     fig, axes = plt.subplots(2, 11, figsize=(28, 9), sharey=False)
     axes = axes.flatten()
 
@@ -534,11 +546,7 @@ def plot_e2e(df: pd.DataFrame, df_steps: pd.DataFrame, out_path: Path,
             continue
 
         base_ms = e2e_baseline_synth_ms(sub_steps)
-        best_cell_ms = float(sub["gpu_ms"].min())
-        if best_cell_ms < base_ms * (1.0 - BEST_VS_BASELINE_THRESHOLD):
-            best_ms = best_cell_ms
-        else:
-            best_ms = base_ms
+        best_ms = e2e_best_synth_ms(sub_steps)
         values = [base_ms, best_ms]
 
         bars = ax.bar(range(2), values, color=BAR_COLORS, width=0.6,
@@ -568,9 +576,10 @@ def plot_e2e(df: pd.DataFrame, df_steps: pd.DataFrame, out_path: Path,
         mpatches.Patch(color=TWO_BAR_PALETTE["baseline"],
                        label="baseline (plot-defined defaults)"),
         mpatches.Patch(color=TWO_BAR_PALETTE["best"],
-                       label=f"best single-axis variation "
-                             f"(≥{int(BEST_VS_BASELINE_THRESHOLD*100)}% "
-                             f"faster than baseline)"),
+                       label=f"best (Σ per-step gated bests; each step "
+                             f"wins only if ≥"
+                             f"{int(BEST_VS_BASELINE_THRESHOLD*100)}% "
+                             f"faster than per-step baseline)"),
     ]
     # fig.suptitle(f"TPC-H per-query end-to-end GPU time  ·  "
     #              f"baseline / best  ·  SF={scale}  ·  {machine_display}",
@@ -858,10 +867,11 @@ def write_per_query_summary(df: pd.DataFrame, df_steps: pd.DataFrame,
       filter, project, sort, group_by, distinct, eq_join
 
     - baseline-cfg = synth e2e baseline (sum of per-step baselines).
-    - best-cfg = gated min e2e (the fastest cell, only if it beats
-      baseline by ≥5%; else equals baseline).
+    - best-cfg = sum of per-step gated bests — matches the breakdown
+      plot's "best" bar exactly. An oracle composite (assumes the
+      engine could pick the best algo per step).
     - best-vs-baseline-speedup = baseline / best (= 1.0 when no
-      winner clears the gate).
+      per-step winner clears the gate).
     - Per-axis columns list the gated best value for each step of
       the matching kind ("Step N: <alt>"), or empty if no winner."""
     rows = []
@@ -871,11 +881,7 @@ def write_per_query_summary(df: pd.DataFrame, df_steps: pd.DataFrame,
             continue
         sub_steps = df_steps[df_steps["query"] == q]
         base_ms = e2e_baseline_synth_ms(sub_steps)
-        best_cell_ms = float(sub["gpu_ms"].min())
-        if best_cell_ms < base_ms * (1.0 - BEST_VS_BASELINE_THRESHOLD):
-            best_ms = best_cell_ms
-        else:
-            best_ms = base_ms
+        best_ms = e2e_best_synth_ms(sub_steps)
 
         per_axis = {axis: best_per_step_for_axis(sub_steps, axis, kinds)
                     for axis, kinds in AXIS_TO_KINDS.items()}
