@@ -1221,55 +1221,106 @@ PlanPtr build_q19(const QueryBuilder& qb) {
 
 // ── Q20: Potential Part Promotion ──────────────────────────────────
 //
-// Deep nested IN / correlated threshold: select suppliers (in a given
-// nation) whose partsupp entries for "forest" parts have availqty >
-// 0.5 * sum(shipdate-bounded lineitem qty). Lowers to: semi-joins for
-// the IN, inner join against the threshold table (multi-key), then
-// another semi-join to prune suppliers.
+// Deep nested IN / correlated threshold: select CANADA suppliers whose
+// partsupp entries for "forest" parts have availqty > 0.5 · sum of the
+// shipdate-bounded lineitem quantity for that (part, supplier).
+//
+// A semi-join-reduction plan: rather than aggregating ALL date-filtered
+// lineitem and pruning afterwards, it first restricts partsupp to
+// (forest parts × CANADA suppliers) — `partsupp_forest_ca` — and reuses
+// that small relation to (a) prune lineitem before the
+// per-(partkey,suppkey) sum and (b) drive the availqty>threshold check.
+// Avoiding the full-lineitem group-by is ~2.4× faster than the naive
+// aggregate-everything-then-prune shape at SF=100.
+//
+// Two gamax-specific notes:
+//
+//  * Build/probe order: each inner join puts the smaller relation on
+//    the build (left) side — `nation_ca` is a single row after the
+//    CANADA filter, so it builds and streams supplier through it.
+//    Putting the large side as build (the naive form) was ~2× slower.
+//
+//  * gamax has no multi-key SEMI join — the G1/G7 split rules in
+//    rules.cpp fire only on Inner joins, so a multi-key semi-join hits
+//    `not_implemented`. Pruning lineitem by (l_partkey, l_suppkey) ∈
+//    partsupp_forest_ca is therefore expressed as an INNER join, which
+//    is exactly equivalent here: partsupp's (ps_partkey, ps_suppkey) is
+//    a primary key, so partsupp_forest_ca has unique join keys and the
+//    inner join neither drops nor multiplies lineitem rows; the
+//    following group-by consumes only l_* columns. G1 splits the
+//    multi-key inner join into single-key + a residual filter.
+//
+// `supplier_ca` and `partsupp_forest_ca` are each consumed twice, so
+// the IR is a DAG (shared shared_ptr sub-plans); lowering memoizes by
+// node identity and emits each shared subtree exactly once. See the
+// "Reusable sub-DAGs" note in docs/TPCH_JOURNEY.md.
 PlanPtr build_q20(const QueryBuilder& qb) {
-    auto p = qb.scan("part", {"p_partkey", "p_name"});
-    // Spec is `p_name LIKE 'forest%'` (startswith), not contains.
-    // Using Contains overmatches and roughly doubled the row count.
-    auto p_filt = p.filter(
-        string_op(StringOpKind::Startswith, p.c("p_name"), {"forest"}));
-
-    auto l_sub = qb.scan("lineitem",
+    auto supplier = qb.scan("supplier",
+        {"s_suppkey", "s_name", "s_address", "s_nationkey"});
+    auto nation   = qb.scan("nation",   {"n_nationkey", "n_name"});
+    auto part     = qb.scan("part",     {"p_partkey", "p_name"});
+    auto partsupp = qb.scan("partsupp",
+        {"ps_partkey", "ps_suppkey", "ps_availqty"});
+    auto lineitem = qb.scan("lineitem",
         {"l_partkey", "l_suppkey", "l_quantity", "l_shipdate"});
-    auto l_filt = l_sub.filter(
-            (l_sub.c("l_shipdate") >= lit(19940101))
-         && (l_sub.c("l_shipdate") <  lit(19950101)));
-    auto qty = l_filt.aggregate(
-        {"l_partkey", "l_suppkey"},
-        {{"sum_qty", AggKind::Sum, l_filt.c("l_quantity")}});
-    auto threshold = qty.project({
-        {"l_partkey", qty.c("l_partkey")},
-        {"l_suppkey", qty.c("l_suppkey")},
-        {"thr", lit(0.5) * qty.c("sum_qty")},
+
+    // supplier_ca = suppliers in CANADA, projected to {suppkey, name,
+    // address}. nation_ca (1 row) is the build side. Reused twice below.
+    auto nation_ca = nation.filter(
+        string_op(StringOpKind::Equal, nation.c("n_name"), {"CANADA"}));
+    auto sca_join = nation_ca.inner_join(supplier,
+        supplier.c("s_nationkey") == nation_ca.c("n_nationkey"));
+    auto supplier_ca = sca_join.project({
+        {"s_suppkey", supplier.c("s_suppkey")},
+        {"s_name",    supplier.c("s_name")},
+        {"s_address", supplier.c("s_address")},
     });
 
-    auto ps = qb.scan("partsupp",
-        {"ps_partkey", "ps_suppkey", "ps_availqty"});
-    auto ps_in_p = ps.left_semi_join(p_filt,
-        ps.c("ps_partkey") == p_filt.c("p_partkey"));
-    auto with_thr = ps_in_p.inner_join(threshold,
-            (ps_in_p.c("ps_partkey") == threshold.c("l_partkey"))
-         && (ps_in_p.c("ps_suppkey") == threshold.c("l_suppkey")));
-    auto ps_ok = with_thr.filter(
-        with_thr.c("ps_availqty") > with_thr.c("thr"));
+    // part_forest = parts whose name starts with 'forest'.
+    auto part_forest = part.filter(
+        string_op(StringOpKind::Startswith, part.c("p_name"), {"forest"}));
 
-    auto s = qb.scan("supplier",
-        {"s_suppkey", "s_name", "s_address", "s_nationkey"});
-    auto s_ok = s.left_semi_join(ps_ok,
-        s.c("s_suppkey") == ps_ok.c("ps_suppkey"));
-    auto n = qb.scan("nation", {"n_nationkey", "n_name"});
-    auto n_filt = n.filter(
-        string_op(StringOpKind::Equal, n.c("n_name"), {"CANADA"}));
-    auto joined = s_ok.inner_join(n_filt,
-        s_ok.c("s_nationkey") == n_filt.c("n_nationkey"));
+    // partsupp_forest_ca = partsupp restricted to CANADA suppliers AND
+    // forest parts (two single-key semi-joins). Reused twice (DAG).
+    auto psfca1 = partsupp.left_semi_join(supplier_ca,
+        partsupp.c("ps_suppkey") == supplier_ca.c("s_suppkey"));
+    auto partsupp_forest_ca = psfca1.left_semi_join(part_forest,
+        psfca1.c("ps_partkey") == part_forest.c("p_partkey"));
 
-    auto projected = joined.project({
-        {"s_name",    joined.c("s_name")},
-        {"s_address", joined.c("s_address")},
+    // qty_threshold: per-(partkey,suppkey) 0.5·sum(l_quantity) over the
+    // date window, restricted to partsupp_forest_ca pairs via the inner
+    // join described in the header. The group-by consumes only l_*
+    // columns, so the carried partsupp columns are inert.
+    auto l_filt = lineitem.filter(
+            (lineitem.c("l_shipdate") >= lit(19940101))
+         && (lineitem.c("l_shipdate") <  lit(19950101)));
+    auto l_pruned = partsupp_forest_ca.inner_join(l_filt,
+            (partsupp_forest_ca.c("ps_partkey") == l_filt.c("l_partkey"))
+         && (partsupp_forest_ca.c("ps_suppkey") == l_filt.c("l_suppkey")));
+    auto qty = l_pruned.aggregate(
+        {"l_partkey", "l_suppkey"},
+        {{"sum_quantity", AggKind::Sum, l_filt.c("l_quantity")}});
+    auto qty_threshold = qty.project({
+        {"l_partkey",     qty.c("l_partkey")},
+        {"l_suppkey",     qty.c("l_suppkey")},
+        {"qty_threshold", qty.c("sum_quantity") * lit(0.5)},
+    });
+
+    // over_threshold: partsupp_forest_ca ⋈ qty_threshold, keep the
+    // entries whose availqty exceeds the threshold. qty_threshold (the
+    // grouped, one-row-per-pair side) is the build side.
+    auto ot_join = qty_threshold.inner_join(partsupp_forest_ca,
+            (partsupp_forest_ca.c("ps_partkey") == qty_threshold.c("l_partkey"))
+         && (partsupp_forest_ca.c("ps_suppkey") == qty_threshold.c("l_suppkey")));
+    auto over_threshold = ot_join.filter(
+        partsupp_forest_ca.c("ps_availqty") > qty_threshold.c("qty_threshold"));
+
+    // Final: keep CANADA suppliers that appear in over_threshold.
+    auto s_final = supplier_ca.left_semi_join(over_threshold,
+        supplier_ca.c("s_suppkey") == over_threshold.c("ps_suppkey"));
+    auto projected = s_final.project({
+        {"s_name",    supplier_ca.c("s_name")},
+        {"s_address", supplier_ca.c("s_address")},
     });
     return projected.sort({asc("s_name")}).plan();
 }

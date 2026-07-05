@@ -1008,6 +1008,89 @@ without instrumentation. Both changes ship with `1d84c77` /
   invalid device ordinal` from `fill_n` inside CUB. Separate
   CudaMM bug, not pursued.
 
+## Q20 plan rewrite — semi-join reduction (2026-07-05)
+
+The original Q20 (§2) aggregated *all* date-filtered lineitem into a
+per-`(l_partkey, l_suppkey)` sum, then pruned the result down to
+forest-part / CANADA-supplier pairs. At SF=100 that group-by runs over
+~86 M rows and materializes a table keyed by essentially the whole
+partsupp space — even though the query only needs the sum for the
+handful of `(part, supplier)` pairs that survive the forest+CANADA
+filters.
+
+The current `build_q20` is a semi-join-reduction reformulation. It
+builds the small `partsupp_forest_ca` relation first — partsupp
+restricted to CANADA suppliers (semi-join against
+`supplier ⋈ nation='CANADA'`) and to forest parts (semi-join against
+`part LIKE 'forest%'`) — and reuses it in two places:
+1. to prune lineitem *before* the per-pair sum (an inner join on
+   `(l_partkey, l_suppkey)`; see the multi-key note below), and
+2. as one side of the `availqty > 0.5·sum` threshold join.
+
+The CANADA-supplier relation `supplier_ca` is likewise reused: once as
+the partsupp reducer, once as the final output side.
+
+### Reusable sub-DAGs
+
+`supplier_ca` and `partsupp_forest_ca` are each consumed by two
+parents, so the IR is a DAG, not a tree. This is honored end-to-end
+and requires nothing special from the query author — just reuse the
+`PlanBuilder` variable:
+
+- **Builder** (`builder.hpp`): a `PlanBuilder` wraps a
+  `shared_ptr<PlanNode>`. Passing the same builder to two operators
+  makes both parents' `inputs` point at the *same* `PlanNode` address.
+- **Rules** (`rules.cpp`): the rewrite engine memoizes on `PlanNode*`
+  (`_memo`) and is copy-on-write, so a node reachable from multiple
+  parents is rewritten once and the sharing is preserved.
+- **Lowering** (`lower_to_exec_plan.cpp`): `lower_node` keeps a
+  `unordered_map<const PlanNode*, ValueId> memo`; the first visit emits
+  the subtree's steps and records its output `ValueId`, later visits
+  return that id without re-emitting. A shared subtree becomes **one**
+  chain of ExecPlan steps feeding multiple consumers.
+- **Lifetime** (`executor.cpp`): `Value::last_used_step` is set to the
+  max step index over *all* consumers (`record_use`). A step may only
+  steal/free an input when it is that input's last consumer
+  (`last_used_step == step_index`); a shared value therefore stays live
+  until its final consumer runs, then is freed. No double-compute, no
+  premature free, no UAF.
+
+So the diamond here — `partsupp_forest_ca` feeding both the lineitem
+prune and (transitively, via `qty_threshold`) the threshold join —
+computes `partsupp_forest_ca` once and holds it until the later of the
+two joins.
+
+### gamax mapping points
+
+- **Multi-key semi-join → multi-key inner join.** gamax lowers only
+  *inner* multi-key equi-joins (the G1/G7 split rules are Inner-only);
+  a multi-key semi-join hits `not_implemented`. The lineitem-pruning
+  step is written as an inner join instead. It is exactly equivalent
+  because partsupp's `(ps_partkey, ps_suppkey)` is a primary key — so
+  `partsupp_forest_ca` has unique join keys and the inner join neither
+  drops nor multiplies lineitem rows relative to the semi-join — and
+  the subsequent group-by consumes only `l_*` columns. (Same trick the
+  old Q20's `with_thr` inner join relied on.)
+- **Build/probe order matters a lot.** Each inner join puts the
+  smaller relation on the build (left) side. The dominant effect is the
+  `supplier ⋈ nation` join: building on `nation='CANADA'` (1 row) and
+  streaming supplier is ~2× faster than the reverse. With the large
+  side as build, the whole rewrite is actually *slower* than the
+  original Q20 — the plan shape only wins once the join orders are
+  right.
+
+Wall (hash_gfur baseline, GPU time, source-load excluded):
+
+| SF  | old Q20   | new Q20  | speedup |
+|-----|-----------|----------|---------|
+| 10  |  11.75 ms |  6.55 ms | 1.8×    |
+| 30  |  32.87 ms | 15.1 ms  | 2.2×    |
+| 100 | 106.2 ms  | 43.6 ms  | 2.4×    |
+
+The speedup grows with scale because the avoided full-lineitem group-by
+is the part that scales with SF. Verified bit-identical to the q20
+golden at SF=1 / 10 / 100.
+
 ## What's next (if you're picking up the work)
 
 Nothing is "required" for TPC-H. The engine is complete for that
