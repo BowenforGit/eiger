@@ -309,6 +309,9 @@ gamax::ir::PlanPtr build_query(int qid, const gamax::ir::QueryBuilder& qb) {
         case 71: return build_q71(qb);
         case 72: return build_q72(qb);
         case 73: return build_q73(qb);
+        // Alternative Q9 plans (see tpch_ir.cu build_q9_alt).
+        case 91: return build_q91(qb);
+        case 92: return build_q92(qb);
         default:
             throw std::runtime_error(
                 "tpch_ir_nvbench: unknown query " + std::to_string(qid));
@@ -558,8 +561,8 @@ NVBENCH_BENCH(bench_tpch_ir)
     .add_int64_axis("query",
         {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
          12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
-         // Alternative Q7 plans (build/probe-convention variants).
-         71, 72, 73})
+         // Alternative Q7 / Q9 plans (build/probe-convention variants).
+         71, 72, 73, 91, 92})
     .add_int64_axis("scale", {1, 10, 30, 100})
     // The bench-default value of each axis is intentionally NOT
     // listed as an explicit choice — see the file header comment for

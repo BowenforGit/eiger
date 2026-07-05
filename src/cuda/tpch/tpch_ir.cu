@@ -846,6 +846,121 @@ PlanPtr build_q9(const QueryBuilder& qb) {
     return agg.sort({asc("nation"), desc("o_year")}).plan();
 }
 
+// ── Q91–Q92: alternative Q9 plan (ported from an external IR) ───────
+//
+// A different join order from build_q9 above: it starts from the green
+// partsupp slice (partsupp ⋈ green part), attaches supplier ⋈ nation,
+// then joins lineitem (multi-key) and orders, projecting aggressively
+// after each join. build_q9 instead starts from part ⋈ lineitem and
+// joins nation last.
+//
+// gamax mapping notes:
+//   * `like("p_name", "%green%")` → StringOpKind::Contains.
+//   * The lineitem ⋈ pspsn join is multi-key. It is an Inner join, so
+//     the G1 rule splits it into single-key + a residual filter (same
+//     as build_q9's plsps join). The selective partkey equality is
+//     written first so G1 splits on it — see the note at the join.
+//   * The five inner joins' build/probe order is parameterized by
+//     s1..s5. In gamax `X.inner_join(Y)` puts X on the build (left)
+//     side; swap=false keeps the source's caller as build, swap=true
+//     builds on the argument.
+//
+// In this plan the source always writes `large.inner_join(small)` — the
+// build-worthy (smaller) relation is the argument of every join — so
+// the small-side-build optimum is simply "swap every join":
+//   Q91 (00000) every join as-written (source caller = build)
+//   Q92 (11111) every join swapped   (source argument = build = the
+//               smaller side of all five joins)
+static PlanPtr build_q9_alt(const QueryBuilder& qb,
+                            bool s1, bool s2, bool s3, bool s4, bool s5) {
+    auto part     = qb.scan("part",     {"p_name", "p_partkey"});
+    auto partsupp = qb.scan("partsupp",
+        {"ps_suppkey", "ps_partkey", "ps_supplycost"});
+    auto supplier = qb.scan("supplier", {"s_suppkey", "s_nationkey"});
+    auto nation   = qb.scan("nation",   {"n_nationkey", "n_name"});
+    auto lineitem = qb.scan("lineitem",
+        {"l_suppkey", "l_partkey", "l_orderkey",
+         "l_extendedprice", "l_discount", "l_quantity"});
+    auto orders   = qb.scan("orders",   {"o_orderkey", "o_orderdate"});
+
+    // join(caller, arg, on, swap): swap=false → caller is build (left),
+    // matching the source's `caller.inner_join(arg)`; swap=true builds
+    // on arg.
+    auto join = [](const PlanBuilder& caller, const PlanBuilder& arg,
+                   Expr on, bool swap) {
+        return swap ? arg.inner_join(caller, std::move(on))
+                    : caller.inner_join(arg, std::move(on));
+    };
+
+    // Green parts, projected to just the key.
+    auto part_green = part.filter(
+        string_op(StringOpKind::Contains, part.c("p_name"), {"green"}));
+    auto p = part_green.project({{"p_partkey", part_green.c("p_partkey")}});
+
+    // psp = partsupp restricted to green parts.
+    auto psp = join(partsupp, p,
+        partsupp.c("ps_partkey") == p.c("p_partkey"), s1);
+
+    // sn = supplier ⋈ nation → {s_suppkey, n_name}.
+    auto sn_join = join(supplier, nation,
+        supplier.c("s_nationkey") == nation.c("n_nationkey"), s2);
+    auto sn = sn_join.project({
+        {"s_suppkey", supplier.c("s_suppkey")},
+        {"n_name",    nation.c("n_name")},
+    });
+
+    // pspsn = green partsupp carrying its supplier's nation.
+    auto pspsn = join(psp, sn,
+        psp.c("ps_suppkey") == sn.c("s_suppkey"), s3);
+
+    // lpspsn = lineitem ⋈ pspsn (multi-key: partkey + suppkey). The
+    // G1 rule splits a multi-key inner join on its FIRST equi clause
+    // and makes the rest a residual filter, so the partkey equality is
+    // written first: partkey (restricted to green parts) is selective,
+    // whereas splitting on suppkey first materialises a ~2.4B-row
+    // intermediate at SF=100 (every lineitem × its supplier's green
+    // partsupp rows) and OOMs before the residual can prune it.
+    auto lpspsn_join = join(lineitem, pspsn,
+            (lineitem.c("l_partkey") == pspsn.c("ps_partkey"))
+         && (lineitem.c("l_suppkey") == pspsn.c("ps_suppkey")), s4);
+    auto lpspsn = lpspsn_join.project({
+        {"l_orderkey",      lineitem.c("l_orderkey")},
+        {"l_extendedprice", lineitem.c("l_extendedprice")},
+        {"l_discount",      lineitem.c("l_discount")},
+        {"l_quantity",      lineitem.c("l_quantity")},
+        {"ps_supplycost",   pspsn.c("ps_supplycost")},
+        {"n_name",          pspsn.c("n_name")},
+    });
+
+    // all = orders ⋈ lpspsn, carrying o_orderdate.
+    auto all_join = join(orders, lpspsn,
+        orders.c("o_orderkey") == lpspsn.c("l_orderkey"), s5);
+    auto all = all_join.project({
+        {"l_extendedprice", lpspsn.c("l_extendedprice")},
+        {"l_discount",      lpspsn.c("l_discount")},
+        {"l_quantity",      lpspsn.c("l_quantity")},
+        {"ps_supplycost",   lpspsn.c("ps_supplycost")},
+        {"n_name",          lpspsn.c("n_name")},
+        {"o_orderdate",     orders.c("o_orderdate")},
+    });
+
+    // amount = l_extendedprice*(1 - l_discount) - ps_supplycost*l_quantity
+    auto projected = all.project({
+        {"nation", all.c("n_name")},
+        {"o_year", year_of(all.c("o_orderdate"))},
+        {"amount",
+            all.c("l_extendedprice") * (lit(1.0) - all.c("l_discount"))
+          - all.c("ps_supplycost") * all.c("l_quantity")},
+    });
+    auto agg = projected.aggregate(
+        {"nation", "o_year"},
+        {{"sum_profit", AggKind::Sum, projected.c("amount")}});
+    return agg.sort({asc("nation"), desc("o_year")}).plan();
+}
+
+PlanPtr build_q91(const QueryBuilder& qb) { return build_q9_alt(qb, false,false,false,false,false); }
+PlanPtr build_q92(const QueryBuilder& qb) { return build_q9_alt(qb, true, true, true, true, true ); }
+
 // ── Q10: Returned Item Reporting ───────────────────────────────────
 //
 // Returns the top-20 customers (by revenue from returned lineitems) in

@@ -75,4 +75,11 @@ PlanPtr build_q71(const QueryBuilder& qb);
 PlanPtr build_q72(const QueryBuilder& qb);
 PlanPtr build_q73(const QueryBuilder& qb);
 
+// Alternative Q9 plan (ported from an external IR) — starts from the
+// green partsupp slice and joins nation early. Q91/Q92 differ only in
+// build/probe order (as-written vs all-swapped); both verify against
+// the q09 golden. See build_q9_alt in tpch_ir.cu.
+PlanPtr build_q91(const QueryBuilder& qb);
+PlanPtr build_q92(const QueryBuilder& qb);
+
 } // namespace gamax::ir::tpch

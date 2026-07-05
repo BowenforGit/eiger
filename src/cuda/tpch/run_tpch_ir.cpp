@@ -138,6 +138,9 @@ gamax::ir::PlanPtr build_query(
         case 71: return build_q71(qb);
         case 72: return build_q72(qb);
         case 73: return build_q73(qb);
+        // Alternative Q9 plans (verify against the q09 golden).
+        case 91: return build_q91(qb);
+        case 92: return build_q92(qb);
         default:
             throw std::runtime_error(
                 "query " + std::to_string(qid) + " not wired in this runner.");
