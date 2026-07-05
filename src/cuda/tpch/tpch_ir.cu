@@ -581,6 +581,135 @@ PlanPtr build_q7(const QueryBuilder& qb) {
     return agg.sort({asc("supp_nation"), asc("cust_nation"), asc("l_year")}).plan();
 }
 
+// ── Q71–Q73: alternative Q7 plan (ported from an external IR) ───────
+//
+// A different join order from build_q7 above: it grows the CUSTOMER
+// side down through orders → lineitem first (cn → cno → cnol), then
+// joins the SUPPLIER side (sn) last — where build_q7 does the reverse
+// (supplier→lineitem→orders→customer). It also projects aggressively
+// after every join, carrying only the keys and the two nation names.
+//
+// gamax mapping notes:
+//   * gamax has no builder-level `rename`. The source renames the two
+//     nation instances to n1_*/n2_* so downstream name lookup is
+//     unambiguous; we reproduce that with a pure-ColRef project (which
+//     preserves ColumnIds — the rename is cosmetic). This also avoids
+//     the raw `col_ref(n2.schema()[1].id, ...)` the base Q7 needs.
+//   * The source spells n2 as `n1.rename(...)`, i.e. a *distinct*
+//     nation instance sharing n1's rows. gamax needs distinct
+//     ColumnIds per join side, so n1 and n2 are two independent nation
+//     scans with the same {FRANCE, GERMANY} filter (same rows, fresh
+//     ids) — exactly what base Q7 does.
+//   * Build/probe order of the five inner joins is unknown, so each is
+//     parameterized by an s1..s5 swap. In gamax `X.inner_join(Y)` puts
+//     X on the build (left) side; swap=false keeps the source's caller
+//     as build, swap=true builds on the argument instead.
+//
+// Variants:
+//   Q71 (00000): every join as-written (source caller = build)
+//   Q72 (11111): every join swapped (source argument = build)
+//   Q73 (00111): small-side-build — n1/n2 (2 rows) build joins 1-2;
+//                cn/cno/sn (the small filtered CTEs) build joins 3-5.
+static PlanPtr build_q7_alt(const QueryBuilder& qb,
+                            bool s1, bool s2, bool s3, bool s4, bool s5) {
+    auto supplier = qb.scan("supplier", {"s_nationkey", "s_suppkey"});
+    auto customer = qb.scan("customer", {"c_custkey", "c_nationkey"});
+    auto orders   = qb.scan("orders",   {"o_custkey", "o_orderkey"});
+    auto lineitem = qb.scan("lineitem",
+        {"l_orderkey", "l_suppkey", "l_shipdate",
+         "l_extendedprice", "l_discount"});
+
+    // Two independent {FRANCE, GERMANY} nation instances, columns
+    // renamed to n1_*/n2_* via a pure-ColRef project (rename emulation).
+    auto make_nation = [&](const char* key_name, const char* name_name) {
+        auto n = qb.scan("nation", {"n_nationkey", "n_name"});
+        auto nf = n.filter(string_op(StringOpKind::In,
+                                     n.c("n_name"), {"FRANCE", "GERMANY"}));
+        return nf.project({
+            {key_name,  nf.c("n_nationkey")},
+            {name_name, nf.c("n_name")},
+        });
+    };
+    auto n1 = make_nation("n1_nationkey", "n1_name");
+    auto n2 = make_nation("n2_nationkey", "n2_name");
+
+    // join(caller, arg, on, swap): swap=false → caller is build (left),
+    // matching the source's `caller.inner_join(arg)`; swap=true builds
+    // on arg.
+    auto join = [](const PlanBuilder& caller, const PlanBuilder& arg,
+                   Expr on, bool swap) {
+        return swap ? arg.inner_join(caller, std::move(on))
+                    : caller.inner_join(arg, std::move(on));
+    };
+
+    // sn = n1 ⋈ supplier → {s_suppkey, n1_name}  (supplier side)
+    auto sn_join = join(n1, supplier,
+        n1.c("n1_nationkey") == supplier.c("s_nationkey"), s1);
+    auto sn = sn_join.project({
+        {"s_suppkey", supplier.c("s_suppkey")},
+        {"n1_name",   n1.c("n1_name")},
+    });
+
+    // cn = n2 ⋈ customer → {c_custkey, n2_name}  (customer side)
+    auto cn_join = join(n2, customer,
+        n2.c("n2_nationkey") == customer.c("c_nationkey"), s2);
+    auto cn = cn_join.project({
+        {"c_custkey", customer.c("c_custkey")},
+        {"n2_name",   n2.c("n2_name")},
+    });
+
+    // cno = orders ⋈ cn → {o_orderkey, n2_name}
+    auto cno_join = join(orders, cn,
+        orders.c("o_custkey") == cn.c("c_custkey"), s3);
+    auto cno = cno_join.project({
+        {"o_orderkey", orders.c("o_orderkey")},
+        {"n2_name",    cn.c("n2_name")},
+    });
+
+    // cnol = lineitem(date-filtered) ⋈ cno
+    //        → {l_suppkey, l_shipdate, l_extendedprice, l_discount, n2_name}
+    auto l_filt = lineitem.filter(
+            (lineitem.c("l_shipdate") >= lit(19950101))
+         && (lineitem.c("l_shipdate") <= lit(19961231)));
+    auto cnol_join = join(l_filt, cno,
+        l_filt.c("l_orderkey") == cno.c("o_orderkey"), s4);
+    auto cnol = cnol_join.project({
+        {"l_suppkey",       l_filt.c("l_suppkey")},
+        {"l_shipdate",      l_filt.c("l_shipdate")},
+        {"l_extendedprice", l_filt.c("l_extendedprice")},
+        {"l_discount",      l_filt.c("l_discount")},
+        {"n2_name",         cno.c("n2_name")},
+    });
+
+    // final = cnol ⋈ sn, then keep only the two valid nation pairs.
+    auto final_join = join(cnol, sn,
+        cnol.c("l_suppkey") == sn.c("s_suppkey"), s5);
+    auto name_filter =
+           (string_op(StringOpKind::Equal, sn.c("n1_name"), {"FRANCE"})
+             && string_op(StringOpKind::Equal, cnol.c("n2_name"), {"GERMANY"}))
+        || (string_op(StringOpKind::Equal, sn.c("n1_name"), {"GERMANY"})
+             && string_op(StringOpKind::Equal, cnol.c("n2_name"), {"FRANCE"}));
+    auto filtered = final_join.filter(std::move(name_filter));
+
+    auto projected = filtered.project({
+        {"supp_nation", sn.c("n1_name")},
+        {"cust_nation", cnol.c("n2_name")},
+        {"l_year",      year_of(cnol.c("l_shipdate"))},
+        {"volume",
+            cnol.c("l_extendedprice") * (lit(1.0) - cnol.c("l_discount"))},
+    });
+    auto agg = projected.aggregate(
+        {"supp_nation", "cust_nation", "l_year"},
+        {{"revenue", AggKind::Sum, projected.c("volume")}});
+    return agg.sort({
+        asc("supp_nation"), asc("cust_nation"), asc("l_year"),
+    }).plan();
+}
+
+PlanPtr build_q71(const QueryBuilder& qb) { return build_q7_alt(qb, false,false,false,false,false); }
+PlanPtr build_q72(const QueryBuilder& qb) { return build_q7_alt(qb, true, true, true, true, true ); }
+PlanPtr build_q73(const QueryBuilder& qb) { return build_q7_alt(qb, false,false,true, true, true ); }
+
 // ── Q8: National Market Share ──────────────────────────────────────
 //
 // 7 tables, 6 joins, case-when inside an outer aggregate, ratio of

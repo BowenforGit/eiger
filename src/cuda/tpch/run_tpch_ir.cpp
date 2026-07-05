@@ -96,9 +96,14 @@ std::string golden_path_for(int qid, int scale_factor) {
             "--verify requires TPCH_DATA_PATH to be set (golden lives at "
             "$TPCH_DATA_PATH/sf<N>/golden/q<NN>.parquet)");
     }
+    // Alias queries (e.g. Q71..Q73 are alt Q7 plans, Q201.. alt Q20)
+    // verify against their base query's golden. Aliases are encoded as
+    // base*10 + variant, so a qid past the real query range (>22) maps
+    // back to its base by integer-dividing by 10 (71/10 = 7).
+    int golden_qid = (qid > 22) ? qid / 10 : qid;
     std::ostringstream os;
     os << data_path << "/sf" << scale_factor << "/golden/q"
-       << (qid < 10 ? "0" : "") << qid << ".parquet";
+       << (golden_qid < 10 ? "0" : "") << golden_qid << ".parquet";
     return os.str();
 }
 
@@ -129,6 +134,10 @@ gamax::ir::PlanPtr build_query(
         case 20: return build_q20(qb);
         case 21: return build_q21(qb);
         case 22: return build_q22(qb);
+        // Alternative Q7 plans (verify against the q07 golden).
+        case 71: return build_q71(qb);
+        case 72: return build_q72(qb);
+        case 73: return build_q73(qb);
         default:
             throw std::runtime_error(
                 "query " + std::to_string(qid) + " not wired in this runner.");

@@ -67,4 +67,12 @@ PlanPtr build_q20(const QueryBuilder& qb);
 PlanPtr build_q21(const QueryBuilder& qb);
 PlanPtr build_q22(const QueryBuilder& qb);
 
+// Alternative Q7 plan (ported from an external IR) — a different join
+// order that grows the customer side first. The three aliases share one
+// builder but differ in the build/probe order of the five inner joins;
+// all verify against the q07 golden. See build_q7_alt in tpch_ir.cu.
+PlanPtr build_q71(const QueryBuilder& qb);
+PlanPtr build_q72(const QueryBuilder& qb);
+PlanPtr build_q73(const QueryBuilder& qb);
+
 } // namespace gamax::ir::tpch
