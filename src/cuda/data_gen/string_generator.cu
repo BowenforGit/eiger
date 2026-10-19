@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "data_gen/string_generator.hpp"
 
 #include <cuda_runtime.h>
@@ -24,11 +27,10 @@ namespace {
         auto lengths = gamax::make_column(
             gamax::data_type{gamax::type_id::INT32},
             num_strings,
-            false,
             stream);
         if(options.length_dist == FIXED) {
             thrust::fill_n(
-                thrust::cuda::par(*get_thrust_allocator()).on(stream),
+                gamax::rmm_exec_policy_handle{stream}.get(),
                 lengths->template data<int32_t>(),
                 num_strings,
                 static_cast<int32_t>(options.fixed.length));
@@ -50,11 +52,10 @@ namespace {
         auto hit_mask = gamax::make_column(
             gamax::data_type{gamax::type_id::BOOL8},
             num_strings,
-            false,
             stream);
         if(options.selectivity == 1.0) {
             thrust::fill_n(
-                thrust::cuda::par(*get_thrust_allocator()).on(stream),
+                gamax::rmm_exec_policy_handle{stream}.get(),
                 hit_mask->template data<bool>(),
                 num_strings,
                 true);
@@ -185,7 +186,7 @@ namespace {
         auto hit_mask = generate_hit_mask(num_strings, options, stream);
         auto [offsets, total_bytes] = generate_offsets_from_lengths(string_lengths->view(), stream);
 
-        device_buffer string_data(total_bytes, false, stream);
+        device_buffer string_data(total_bytes, stream);
         auto d_pattern = gamax::make_string_scalar(pattern, stream);
         auto kernel_func = generate_strings_kernel<startswith_fn>;
         if(options.pattern_pos == PREFIX) {
@@ -237,9 +238,9 @@ namespace {
     string_column_ptr generate_random_strings(
         gamax::size_type num_strings,
         gamax::size_type string_length,
+        cudaStream_t stream,
         gamax::string_impl_id impl,
-        int seed,
-        cudaStream_t stream)
+        int seed)
     {
         // Create options for fixed length strings
         string_generation_options options{};
@@ -254,7 +255,7 @@ namespace {
         auto [offsets, total_bytes] = generate_offsets_from_lengths(string_lengths->view(), stream);
 
         // Allocate data buffer
-        device_buffer string_data(total_bytes, false, stream);
+        device_buffer string_data(total_bytes, stream);
         
         // Generate random strings
         generate_random_strings_kernel<<<num_tb(num_strings, 256), 256, 0, stream>>>(

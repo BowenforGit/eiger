@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
 #include <cuda_runtime.h>
 #include <vector>
@@ -89,8 +92,8 @@ TEST_F(SortTableTest, NumericKeyWithNumericColumns_Ascending) {
     int32_t keys[] = {3, 1, 4, 1, 5};
     int32_t vals[] = {30, 10, 40, 11, 50};
     
-    auto key_col = gamax::make_column_from_host(keys, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key_col = gamax::make_column_from_host(keys, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -106,7 +109,7 @@ TEST_F(SortTableTest, NumericKeyWithNumericColumns_Ascending) {
     // Expected sorted by key ascending: [1, 1, 3, 4, 5]
     // Corresponding values: [10, 11, 30, 40, 50] (stable sort behavior may vary)
     int32_t expected_keys[] = {1, 1, 3, 4, 5};
-    auto expected_key_col = gamax::make_column_from_host(expected_keys, 5);
+    auto expected_key_col = gamax::make_column_from_host(expected_keys, 5, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key_col->view()));
     
@@ -125,8 +128,8 @@ TEST_F(SortTableTest, NumericKeyWithNumericColumns_Descending) {
     int32_t keys[] = {3, 1, 4, 1, 5};
     int32_t vals[] = {30, 10, 40, 11, 50};
     
-    auto key_col = gamax::make_column_from_host(keys, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key_col = gamax::make_column_from_host(keys, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -137,7 +140,7 @@ TEST_F(SortTableTest, NumericKeyWithNumericColumns_Descending) {
     
     // Expected sorted by key descending: [5, 4, 3, 1, 1]
     int32_t expected_keys[] = {5, 4, 3, 1, 1};
-    auto expected_key_col = gamax::make_column_from_host(expected_keys, 5);
+    auto expected_key_col = gamax::make_column_from_host(expected_keys, 5, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key_col->view()));
 }
@@ -151,7 +154,7 @@ TEST_F(SortTableTest, NumericKeyWithStringColumns) {
     int32_t keys[] = {3, 1, 2};
     std::vector<std::string> vals = {"cherry", "apple", "banana"};
     
-    auto key_col = gamax::make_column_from_host(keys, 3);
+    auto key_col = gamax::make_column_from_host(keys, 3, cudaStreamDefault);
     auto val_col = makeStringColumn(vals, stream_);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
@@ -166,7 +169,7 @@ TEST_F(SortTableTest, NumericKeyWithStringColumns) {
     
     // Expected sorted by key: [1, 2, 3] -> strings: ["apple", "banana", "cherry"]
     int32_t expected_keys[] = {1, 2, 3};
-    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3);
+    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3, cudaStreamDefault);
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key_col->view()));
     
     // Verify string column
@@ -190,7 +193,7 @@ TEST_F(SortTableTest, StringKeyWithNumericColumns) {
     int32_t vals[] = {30, 10, 20};
     
     auto key_col = makeStringColumn(keys, stream_);
-    auto val_col = gamax::make_column_from_host(vals, 3);
+    auto val_col = gamax::make_column_from_host(vals, 3, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -214,7 +217,7 @@ TEST_F(SortTableTest, StringKeyWithNumericColumns) {
     }
     
     int32_t expected_vals[] = {10, 20, 30};
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3, cudaStreamDefault);
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_val_col->view()));
 }
 
@@ -260,8 +263,8 @@ TEST_F(SortTableTest, NumericKeyWithMixedColumns) {
     int32_t col1[] = {20, 10, 30};
     std::vector<std::string> col2 = {"two", "one", "three"};
     
-    auto key_col = gamax::make_column_from_host(keys, 3);
-    auto col1_ptr = gamax::make_column_from_host(col1, 3);
+    auto key_col = gamax::make_column_from_host(keys, 3, cudaStreamDefault);
+    auto col1_ptr = gamax::make_column_from_host(col1, 3, cudaStreamDefault);
     auto col2_ptr = makeStringColumn(col2, stream_);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
@@ -277,8 +280,8 @@ TEST_F(SortTableTest, NumericKeyWithMixedColumns) {
     int32_t expected_col1[] = {10, 20, 30};
     std::vector<std::string> expected_col2 = {"one", "two", "three"};
     
-    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3);
-    auto expected_col1_ptr = gamax::make_column_from_host(expected_col1, 3);
+    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3, cudaStreamDefault);
+    auto expected_col1_ptr = gamax::make_column_from_host(expected_col1, 3, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_col1_ptr->view()));
@@ -292,8 +295,8 @@ TEST_F(SortTableTest, NumericKeyWithMixedColumns) {
 // Test Case 7: Empty table
 // =============================================================================
 TEST_F(SortTableTest, EmptyTable) {
-    auto key_col = gamax::make_column<int32_t>(0, false, stream_);
-    auto val_col = gamax::make_column<int32_t>(0, false, stream_);
+    auto key_col = gamax::make_column<int32_t>(0, stream_, gamax::buffer_init::uninitialized);
+    auto val_col = gamax::make_column<int32_t>(0, stream_, gamax::buffer_init::uninitialized);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -312,7 +315,7 @@ TEST_F(SortTableTest, EmptyTable) {
 // =============================================================================
 TEST_F(SortTableTest, SingleNumericColumn) {
     int32_t keys[] = {5, 2, 8, 1, 9};
-    auto key_col = gamax::make_column_from_host(keys, 5);
+    auto key_col = gamax::make_column_from_host(keys, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -321,7 +324,7 @@ TEST_F(SortTableTest, SingleNumericColumn) {
     auto result = gamax::sort::sort_table(table->view(), 0, gamax::sort_order::ASCENDING, stream_);
     
     int32_t expected[] = {1, 2, 5, 8, 9};
-    auto expected_col = gamax::make_column_from_host(expected, 5);
+    auto expected_col = gamax::make_column_from_host(expected, 5, cudaStreamDefault);
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_col->view()));
 }
 
@@ -356,9 +359,9 @@ TEST_F(SortTableTest, MultiKeySort_TwoNumericKeys) {
     int32_t key2[] = {3, 1, 2, 1, 2};
     int32_t vals[] = {13, 11, 22, 21, 12};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -380,9 +383,9 @@ TEST_F(SortTableTest, MultiKeySort_TwoNumericKeys) {
     int32_t expected_key2[] = {1, 2, 3, 1, 2};
     int32_t expected_vals[] = {11, 12, 13, 21, 22};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 5);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 5);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 5);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 5, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 5, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 5, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -400,9 +403,9 @@ TEST_F(SortTableTest, MultiKeySort_MixedSortOrders) {
     int32_t key2[] = {1, 2, 1, 2};
     int32_t vals[] = {11, 12, 21, 22};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -423,9 +426,9 @@ TEST_F(SortTableTest, MultiKeySort_MixedSortOrders) {
     int32_t expected_key2[] = {2, 1, 2, 1};
     int32_t expected_vals[] = {12, 11, 22, 21};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -444,8 +447,8 @@ TEST_F(SortTableTest, MultiKeySort_StringAndNumericKeys) {
     int32_t vals[] = {12, 22, 11, 21};
     
     auto key1_col = makeStringColumn(key1, stream_);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -470,8 +473,8 @@ TEST_F(SortTableTest, MultiKeySort_StringAndNumericKeys) {
     auto result_key1_strings = getStringColumnContent(result_key1_col, stream_);
     ASSERT_EQ(result_key1_strings, expected_key1);
     
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(2).view(), expected_val_col->view()));
@@ -482,7 +485,7 @@ TEST_F(SortTableTest, MultiKeySort_StringAndNumericKeys) {
 // =============================================================================
 TEST_F(SortTableTest, MultiKeySorting_EmptyKeys_Throws) {
     int32_t col1[] = {1, 2, 3};
-    auto col1_ptr = gamax::make_column_from_host(col1, 3);
+    auto col1_ptr = gamax::make_column_from_host(col1, 3, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1_ptr));
@@ -502,7 +505,7 @@ TEST_F(SortTableTest, MultiKeySorting_EmptyKeys_Throws) {
 // =============================================================================
 TEST_F(SortTableTest, MultiKeySorting_MismatchedSizes_Throws) {
     int32_t col1[] = {1, 2, 3};
-    auto col1_ptr = gamax::make_column_from_host(col1, 3);
+    auto col1_ptr = gamax::make_column_from_host(col1, 3, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1_ptr));
@@ -527,8 +530,8 @@ TEST_F(SortTableTest, MultiKeySorting_SingleKey_FallsBack) {
     int32_t keys[] = {3, 1, 2};
     int32_t vals[] = {30, 10, 20};
     
-    auto key_col = gamax::make_column_from_host(keys, 3);
-    auto val_col = gamax::make_column_from_host(vals, 3);
+    auto key_col = gamax::make_column_from_host(keys, 3, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 3, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -543,8 +546,8 @@ TEST_F(SortTableTest, MultiKeySorting_SingleKey_FallsBack) {
     
     int32_t expected_keys[] = {1, 2, 3};
     int32_t expected_vals[] = {10, 20, 30};
-    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3);
+    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_val_col->view()));
@@ -568,9 +571,9 @@ TEST_F(SortTableTest, SmartKeyFusion_BasicTwoKeys) {
     int32_t key2[] = {3, 1, 2, 1, 2};
     int32_t vals[] = {13, 11, 22, 21, 12};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -587,7 +590,7 @@ TEST_F(SortTableTest, SmartKeyFusion_BasicTwoKeys) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // Expected order by (key1, key2): 
     // (1,1)->11, (1,2)->12, (1,3)->13, (2,1)->21, (2,2)->22
@@ -595,9 +598,9 @@ TEST_F(SortTableTest, SmartKeyFusion_BasicTwoKeys) {
     int32_t expected_key2[] = {1, 2, 3, 1, 2};
     int32_t expected_vals[] = {11, 12, 13, 21, 22};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 5);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 5);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 5);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 5, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 5, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 5, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -613,9 +616,9 @@ TEST_F(SortTableTest, SmartKeyFusion_SignedIntegers) {
     int32_t key2[] = {2, -1, 0, 1, 1};
     int32_t vals[] = {-52, 0-1, 50, -51, 01};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -632,16 +635,16 @@ TEST_F(SortTableTest, SmartKeyFusion_SignedIntegers) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // Expected sorted order: (-5,1)->-51, (-5,2)->-52, (0,-1)->-1, (0,1)->1, (5,0)->50
     int32_t expected_key1[] = {-5, -5, 0, 0, 5};
     int32_t expected_key2[] = {1, 2, -1, 1, 0};
     int32_t expected_vals[] = {-51, -52, -1, 1, 50};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 5);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 5);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 5);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 5, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 5, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 5, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -657,9 +660,9 @@ TEST_F(SortTableTest, SmartKeyFusion_NarrowTypes) {
     int16_t key2[] = {100, 200, 50, 100, 150};
     int32_t vals[] = {1, 2, 3, 4, 5};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -676,16 +679,16 @@ TEST_F(SortTableTest, SmartKeyFusion_NarrowTypes) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // Expected: (1,100)->4, (1,150)->5, (1,200)->2, (2,50)->3, (2,100)->1
     int8_t expected_key1[] = {1, 1, 1, 2, 2};
     int16_t expected_key2[] = {100, 150, 200, 50, 100};
     int32_t expected_vals[] = {4, 5, 2, 3, 1};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 5);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 5);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 5);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 5, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 5, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 5, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -701,9 +704,9 @@ TEST_F(SortTableTest, SmartKeyFusion_Int64Keys) {
     int64_t key2[] = {2000000002LL, 2000000001LL, 2000000001LL, 2000000002LL};
     int32_t vals[] = {1, 2, 3, 4};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -720,16 +723,16 @@ TEST_F(SortTableTest, SmartKeyFusion_Int64Keys) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // Expected: (1e9, 2e9+1)->3, (1e9, 2e9+2)->1, (1e9+1, 2e9+1)->2, (1e9+1, 2e9+2)->4
     int64_t expected_key1[] = {1000000000LL, 1000000000LL, 1000000001LL, 1000000001LL};
     int64_t expected_key2[] = {2000000001LL, 2000000002LL, 2000000001LL, 2000000002LL};
     int32_t expected_vals[] = {3, 1, 2, 4};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -746,9 +749,9 @@ TEST_F(SortTableTest, SmartKeyFusion_MixedOrders) {
     int32_t key2[] = {1, 2, 1, 2};
     int32_t vals[] = {11, 12, 21, 22};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -765,16 +768,16 @@ TEST_F(SortTableTest, SmartKeyFusion_MixedOrders) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // Expected order: (1,2)->12, (1,1)->11, (2,2)->22, (2,1)->21
     int32_t expected_key1[] = {1, 1, 2, 2};
     int32_t expected_key2[] = {2, 1, 2, 1};
     int32_t expected_vals[] = {12, 11, 22, 21};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -785,9 +788,9 @@ TEST_F(SortTableTest, SmartKeyFusion_MixedOrders) {
 // Test Case 21: Smart key fusion with empty table
 // =============================================================================
 TEST_F(SortTableTest, SmartKeyFusion_EmptyTable) {
-    auto key1_col = gamax::make_column<int32_t>(0, false, stream_);
-    auto key2_col = gamax::make_column<int32_t>(0, false, stream_);
-    auto val_col = gamax::make_column<int32_t>(0, false, stream_);
+    auto key1_col = gamax::make_column<int32_t>(0, stream_, gamax::buffer_init::uninitialized);
+    auto key2_col = gamax::make_column<int32_t>(0, stream_, gamax::buffer_init::uninitialized);
+    auto val_col = gamax::make_column<int32_t>(0, stream_, gamax::buffer_init::uninitialized);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -804,7 +807,7 @@ TEST_F(SortTableTest, SmartKeyFusion_EmptyTable) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     ASSERT_NE(result, nullptr);
     EXPECT_EQ(result->num_columns(), 3);
@@ -819,9 +822,9 @@ TEST_F(SortTableTest, SmartKeyFusion_SingleRow) {
     int32_t key2[] = {100};
     int32_t vals[] = {999};
     
-    auto key1_col = gamax::make_column_from_host(key1, 1);
-    auto key2_col = gamax::make_column_from_host(key2, 1);
-    auto val_col = gamax::make_column_from_host(vals, 1);
+    auto key1_col = gamax::make_column_from_host(key1, 1, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 1, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 1, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -838,11 +841,11 @@ TEST_F(SortTableTest, SmartKeyFusion_SingleRow) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
-    auto expected_key1_col = gamax::make_column_from_host(key1, 1);
-    auto expected_key2_col = gamax::make_column_from_host(key2, 1);
-    auto expected_val_col = gamax::make_column_from_host(vals, 1);
+    auto expected_key1_col = gamax::make_column_from_host(key1, 1, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(key2, 1, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(vals, 1, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -858,9 +861,9 @@ TEST_F(SortTableTest, SmartKeyFusion_AllSameValues) {
     int32_t key2[] = {10, 10, 10, 10};
     int32_t vals[] = {1, 2, 3, 4};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -877,11 +880,11 @@ TEST_F(SortTableTest, SmartKeyFusion_AllSameValues) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // All keys same, so any order is valid - just verify key values
-    auto expected_key1_col = gamax::make_column_from_host(key1, 4);
-    auto expected_key2_col = gamax::make_column_from_host(key2, 4);
+    auto expected_key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -903,9 +906,9 @@ TEST_F(SortTableTest, SmartKeyFusion_FallbackFloatKey) {
     int32_t key2[] = {1, 2, 3};
     int32_t vals[] = {31, 14, 27};
     
-    auto key1_col = gamax::make_column_from_host(key1, 3);
-    auto key2_col = gamax::make_column_from_host(key2, 3);
-    auto val_col = gamax::make_column_from_host(vals, 3);
+    auto key1_col = gamax::make_column_from_host(key1, 3, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 3, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 3, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -923,7 +926,7 @@ TEST_F(SortTableTest, SmartKeyFusion_FallbackFloatKey) {
     opts.smart_keys_fusion = true;
     
     // Should fall back to default sort and still produce correct results
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     ASSERT_NE(result, nullptr);
     EXPECT_EQ(result->num_columns(), 3);
@@ -933,8 +936,8 @@ TEST_F(SortTableTest, SmartKeyFusion_FallbackFloatKey) {
     float expected_key1[] = {1.41f, 2.71f, 3.14f};
     int32_t expected_vals[] = {14, 27, 31};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 3);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 3, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(2).view(), expected_val_col->view()));
@@ -950,8 +953,8 @@ TEST_F(SortTableTest, SmartKeyFusion_FallbackStringKey) {
     int32_t vals[] = {30, 10, 20};
     
     auto key1_col = makeStringColumn(key1, stream_);
-    auto key2_col = gamax::make_column_from_host(key2, 3);
-    auto val_col = gamax::make_column_from_host(vals, 3);
+    auto key2_col = gamax::make_column_from_host(key2, 3, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 3, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -968,7 +971,7 @@ TEST_F(SortTableTest, SmartKeyFusion_FallbackStringKey) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // Verify sorted by string key: apple, banana, cherry
     auto& result_str_col = dynamic_cast<const gamax::string_column&>(result->get_column(0));
@@ -978,7 +981,7 @@ TEST_F(SortTableTest, SmartKeyFusion_FallbackStringKey) {
     ASSERT_EQ(result_strings, expected_strings);
     
     int32_t expected_vals[] = {10, 20, 30};
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3, cudaStreamDefault);
     EXPECT_TRUE(check_cols_eq(result->get_column(2).view(), expected_val_col->view()));
 }
 
@@ -1002,9 +1005,9 @@ TEST_F(SortTableTest, SmartKeyFusion_LowCardinality) {
         vals_vec[i] = i;
     }
     
-    auto key1_col = gamax::make_column_from_host(key1_vec.data(), N);
-    auto key2_col = gamax::make_column_from_host(key2_vec.data(), N);
-    auto val_col = gamax::make_column_from_host(vals_vec.data(), N);
+    auto key1_col = gamax::make_column_from_host(key1_vec.data(), N, stream_);
+    auto key2_col = gamax::make_column_from_host(key2_vec.data(), N, stream_);
+    auto val_col = gamax::make_column_from_host(vals_vec.data(), N, stream_);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -1021,7 +1024,7 @@ TEST_F(SortTableTest, SmartKeyFusion_LowCardinality) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // Verify result is sorted
     ASSERT_NE(result, nullptr);
@@ -1051,10 +1054,10 @@ TEST_F(SortTableTest, SmartKeyFusion_ThreeKeys) {
     int8_t key3[] = {1, 2, 1, 1, 2, 1};
     int32_t vals[] = {111, 112, 121, 211, 212, 221};
     
-    auto key1_col = gamax::make_column_from_host(key1, 6);
-    auto key2_col = gamax::make_column_from_host(key2, 6);
-    auto key3_col = gamax::make_column_from_host(key3, 6);
-    auto val_col = gamax::make_column_from_host(vals, 6);
+    auto key1_col = gamax::make_column_from_host(key1, 6, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 6, cudaStreamDefault);
+    auto key3_col = gamax::make_column_from_host(key3, 6, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 6, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -1073,7 +1076,7 @@ TEST_F(SortTableTest, SmartKeyFusion_ThreeKeys) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // Expected order by (key1, key2, key3): 
     // (1,1,1)->111, (1,1,2)->112, (1,2,1)->121, (2,1,1)->211, (2,1,2)->212, (2,2,1)->221
@@ -1082,10 +1085,10 @@ TEST_F(SortTableTest, SmartKeyFusion_ThreeKeys) {
     int8_t expected_key3[] = {1, 2, 1, 1, 2, 1};
     int32_t expected_vals[] = {111, 112, 121, 211, 212, 221};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 6);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 6);
-    auto expected_key3_col = gamax::make_column_from_host(expected_key3, 6);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 6);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 6, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 6, cudaStreamDefault);
+    auto expected_key3_col = gamax::make_column_from_host(expected_key3, 6, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 6, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -1102,8 +1105,8 @@ TEST_F(SortTableTest, SmartKeyFusion_WithStringNonKeyColumn) {
     int32_t key2[] = {2, 2, 1, 1};
     std::vector<std::string> vals = {"two-two", "one-two", "three-one", "one-one"};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
     auto val_col = makeStringColumn(vals, stream_);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
@@ -1121,15 +1124,15 @@ TEST_F(SortTableTest, SmartKeyFusion_WithStringNonKeyColumn) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // Expected: (1,1)->"one-one", (1,2)->"one-two", (2,2)->"two-two", (3,1)->"three-one"
     int32_t expected_key1[] = {1, 1, 2, 3};
     int32_t expected_key2[] = {1, 2, 2, 1};
     std::vector<std::string> expected_vals = {"one-one", "one-two", "two-two", "three-one"};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -1157,9 +1160,9 @@ TEST_F(SortTableTest, SmartKeyFusion_LargeInput) {
         vals_vec[i] = i;
     }
     
-    auto key1_col = gamax::make_column_from_host(key1_vec.data(), N);
-    auto key2_col = gamax::make_column_from_host(key2_vec.data(), N);
-    auto val_col = gamax::make_column_from_host(vals_vec.data(), N);
+    auto key1_col = gamax::make_column_from_host(key1_vec.data(), N, stream_);
+    auto key2_col = gamax::make_column_from_host(key2_vec.data(), N, stream_);
+    auto val_col = gamax::make_column_from_host(vals_vec.data(), N, stream_);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -1176,7 +1179,7 @@ TEST_F(SortTableTest, SmartKeyFusion_LargeInput) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     ASSERT_NE(result, nullptr);
     EXPECT_EQ(result->num_rows(), N);
@@ -1201,9 +1204,9 @@ TEST_F(SortTableTest, SmartKeyFusion_AllDescending) {
     int32_t key2[] = {1, 1, 2, 2};
     int32_t vals[] = {11, 21, 12, 22};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -1220,16 +1223,16 @@ TEST_F(SortTableTest, SmartKeyFusion_AllDescending) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // Expected order (DESC, DESC): (2,2)->22, (2,1)->21, (1,2)->12, (1,1)->11
     int32_t expected_key1[] = {2, 2, 1, 1};
     int32_t expected_key2[] = {2, 1, 2, 1};
     int32_t expected_vals[] = {22, 21, 12, 11};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -1244,9 +1247,9 @@ TEST_F(SortTableTest, SmartKeyFusion_Disabled) {
     int32_t key2[] = {2, 2, 1, 1};
     int32_t vals[] = {22, 12, 21, 11};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -1263,16 +1266,16 @@ TEST_F(SortTableTest, SmartKeyFusion_Disabled) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = false;  // Explicitly disabled
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // Should still produce correct results via default path
     int32_t expected_key1[] = {1, 1, 2, 2};
     int32_t expected_key2[] = {1, 2, 1, 2};
     int32_t expected_vals[] = {11, 12, 21, 22};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -1287,9 +1290,9 @@ TEST_F(SortTableTest, SmartKeyFusion_UnsignedTypes) {
     uint16_t key2[] = {100, 300, 200, 200};
     int32_t vals[] = {1, 2, 3, 4};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -1306,16 +1309,16 @@ TEST_F(SortTableTest, SmartKeyFusion_UnsignedTypes) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // Expected: (1,200)->4, (1,300)->2, (2,200)->3, (3,100)->1
     uint32_t expected_key1[] = {1, 1, 2, 3};
     uint16_t expected_key2[] = {200, 300, 200, 100};
     int32_t expected_vals[] = {4, 2, 3, 1};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 4, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 4, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 4, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -1331,9 +1334,9 @@ TEST_F(SortTableTest, SmartKeyFusion_NegativeRangeSpanningZero) {
     int32_t key2[] = {-100, 100, 0, 50, -50};
     int32_t vals[] = {1, 2, 3, 4, 5};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -1350,16 +1353,16 @@ TEST_F(SortTableTest, SmartKeyFusion_NegativeRangeSpanningZero) {
     gamax::sort::sort_table_options opts;
     opts.smart_keys_fusion = true;
     
-    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, opts, stream_);
+    auto result = gamax::sort::sort_table(table->view(), sort_keys, sort_orders, stream_, opts);
     
     // Expected: (-10,-100)->1, (-5,50)->4, (0,0)->3, (5,-50)->5, (10,100)->2
     int32_t expected_key1[] = {-10, -5, 0, 5, 10};
     int32_t expected_key2[] = {-100, 50, 0, -50, 100};
     int32_t expected_vals[] = {1, 4, 3, 5, 2};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 5);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 5);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 5);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 5, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 5, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 5, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));

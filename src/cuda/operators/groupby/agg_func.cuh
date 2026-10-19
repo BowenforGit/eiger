@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <cuda.h>
@@ -176,7 +179,10 @@ struct Any {
     __device__ __forceinline__ void global_update(IdxT idx, 
                                         ResultT* result, 
                                         ValT val) const {
-        result[idx] = val;
+        // Shared-memory groupby runs one partial aggregate per block. Blocks
+        // with no contribution retain the identity and must not overwrite a
+        // value published by a contributing block.
+        if (val != identity) { result[idx] = val; }
     }
 
     template <typename ResultT>

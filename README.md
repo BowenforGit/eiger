@@ -1,60 +1,60 @@
-# GPU-Accelerated Maximus (GaMax)
+<!--
+Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+-->
 
-GaMax is a GPU-accelerated query engine that introduces the GPU acceleration to the Maximus, a distributed modular query engine that should be able to run on heterogeneous accelerated systems. GaMax provides a rich collection of database operators, such as joins, grouped aggregation and sorting, as well as various "sub-operators" or useful routines (e.g., partitioning, dictionary encoding) that can be used implement more complex operators. 
+# Alps: a prototype for distributed GPU-accelerated query processing on NVL72
 
-Currently, GaMax is under active development and has supported
+## License
 
-- Inner eq-join
-    * Sort-based
-- Grouped aggregation (with a single group key)
-    * Hash-based
-    * Sort-based
-    * Partition-based
-- Dictionary encoding
-- Aggregation
+The project's MIT license and copyright notices are in [LICENSE](LICENSE).
+Third-party portions retain their own terms; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [LICENSES](LICENSES).
+The notices identify unresolved source provenance that must be reviewed before
+redistribution. NVIDIA copyright notices apply only to NVIDIA's contributions.
 
 ## Dependencies
 
-- CMake 3.23.1+
-- GNU Make
-- CUDA
+- CMake 3.30.4+
+- Ninja
+- A C++ compiler with OpenMP support
+- NVIDIA CUDA Toolkit and a compatible driver
+- MPI and NCCL
 
-## Code Structure
+CMake downloads the pinned RMM, CCCL, cuCollections, NVBench, and GoogleTest
+dependencies during configuration, so the first configure requires network
+access or a populated CMake/CPM cache.
 
-All non-third-party source code are located in the `src/cuda` directory, including the tests and benchmarks code. 
+## Get Alps
 
-- `atomics/` - wrappers and implementations of atomic operations.
-- `benchmarks` - benchmarks based on NVIDIA NVBench.
-- `compress` - data compression and encoding, e.g., dictionary encoding.
-- `containers` - wrappers and implementations of data containers that facilitates the implementations of some operators.
-- `data_gen` - data generators used by the tests and benchmarks.
-- `memory` - in-memory data formats, such as columns and tables, and memory management.
-- `operators` - database operators.
-- `pullops` - volcano-style wrappers of the operators.
-- `tests/` - tests based on GoogleTest.
-- `types/` - definition of data types and related utility functions.
-- `utils` - utility functions.
-
-## Get GaMax
+Replace `REPOSITORY_URL` with the URL of this repository.
 
 ```sh
-git clone --recursive git@gitlab.inf.ethz.ch:wubo/gamax.git
+git clone --recursive REPOSITORY_URL alps
+cd alps
 ```
 
-## Build GaMax
-
-GaMax uses CMake and Make to build the source code in an out-of-source manner. Its dependencies on NVBench, GoogleTest and CuCollections are automatically resolved by CMake. To build Gamax, follow the steps below.
+If the repository was cloned without `--recursive`, initialize its submodules:
 
 ```sh
-# in the project root directory
-mkdir build && cd build
-# fill in your own build type (Release or Debug) and targeting cuda architecture
-cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86 ..
-cmake --build . -- -j
+git submodule update --init --recursive
 ```
 
-All the build files and executables are located in the `build/` directory, which mirrors the source directory hierarchy. For example, the test and benchmark executables are located in `build/src/cuda/tests` and `build/src/cuda/benchmarks` respectively. 
+## Build Alps
 
-## Contributing
+Alps uses an out-of-source CMake build. Set `CMAKE_CUDA_ARCHITECTURES` for the
+target GPU; `100` targets B200/GB200.
 
-See the [contributing guide](CONTRIBUTING.md).
+```sh
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CUDA_ARCHITECTURES=100 \
+  -DBUILD_ALPS=ON \
+  -DBUILD_TEST=OFF \
+  -DBUILD_BENCHMARK=OFF
+
+cmake --build build --target gamax_alps -j"$(nproc)"
+```
+
+For the TPC-H executables and distributed benchmark workflow, see
+[`docs/DISTRIBUTED_TPCH_BENCHMARK_GUIDE.md`](docs/DISTRIBUTED_TPCH_BENCHMARK_GUIDE.md).

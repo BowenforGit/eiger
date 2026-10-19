@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 /**
  * @file ilp_nvbench.cu
  * @brief NVBench benchmark to explore L2 cache in-flight request limits.
@@ -34,6 +37,7 @@
 #include <iostream>
 
 #include "memory/mem_manager.hpp"
+#include "memory/device_buffer.hpp"
 #include "utils/launch.cuh"
 
 constexpr int REPETITIONS = 1024;
@@ -186,7 +190,7 @@ int dispatch_occupancy_read(int vt, int block_size) {
 
 template <typename T>
 void bench_ilp_write(nvbench::state& state, nvbench::type_list<T>) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     const int num_items  = static_cast<int>(state.get_int64("num_items"));
     const int grid_dim    = static_cast<int>(state.get_int64("grid_dim"));
@@ -208,8 +212,10 @@ void bench_ilp_write(nvbench::state& state, nvbench::type_list<T>) {
     }
 
     // Allocate output buffer
-    T* d_output = nullptr;
-    allocate_mem(&d_output, true, num_items * sizeof(T));
+    gamax::device_buffer output_buffer{
+        static_cast<std::size_t>(num_items) * sizeof(T),
+        cudaStreamDefault, gamax::buffer_init::zero};
+    auto* d_output = static_cast<T*>(output_buffer.data());
     cudaDeviceSynchronize();
 
     state.set_cuda_stream(nvbench::make_cuda_stream_view(0));
@@ -232,7 +238,6 @@ void bench_ilp_write(nvbench::state& state, nvbench::type_list<T>) {
         state.skip(e.what());
     }
 
-    release_mem(d_output);
 }
 
 // ============================================================================
@@ -241,7 +246,7 @@ void bench_ilp_write(nvbench::state& state, nvbench::type_list<T>) {
 
 template <typename T>
 void bench_ilp_read(nvbench::state& state, nvbench::type_list<T>) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     const int num_items  = static_cast<int>(state.get_int64("num_items"));
     const int grid_dim    = static_cast<int>(state.get_int64("grid_dim"));
@@ -272,12 +277,15 @@ void bench_ilp_read(nvbench::state& state, nvbench::type_list<T>) {
     // }
 
     // Allocate input (cleared = data brought into L2 via memset inside allocate_mem)
-    T* d_input = nullptr;
-    allocate_mem(&d_input, true, actual_num_items * sizeof(T));
+    gamax::device_buffer input_buffer{
+        static_cast<std::size_t>(actual_num_items) * sizeof(T),
+        cudaStreamDefault, gamax::buffer_init::zero};
+    auto* d_input = static_cast<T*>(input_buffer.data());
 
     // Allocate output for accumulator write-back (one element per thread)
-    T* d_output = nullptr;
-    allocate_mem(&d_output, false, num_threads * sizeof(T));
+    gamax::device_buffer output_buffer{
+        static_cast<std::size_t>(num_threads) * sizeof(T), cudaStreamDefault};
+    auto* d_output = static_cast<T*>(output_buffer.data());
     cudaDeviceSynchronize();
 
     // Query occupancy
@@ -317,8 +325,6 @@ void bench_ilp_read(nvbench::state& state, nvbench::type_list<T>) {
         state.skip(e.what());
     }
 
-    release_mem(d_input);
-    release_mem(d_output);
 }
 
 // ============================================================================

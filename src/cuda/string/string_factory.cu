@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <cuda.h>
 #include <vector>
 #include <string>
@@ -7,6 +10,7 @@
 #include <thrust/execution_policy.h>
 #include <thrust/transform.h>
 #include <thrust/iterator/counting_iterator.h>
+#include "utils/green_safe_elementwise.cuh"
 
 #include "string/string_column.hpp"
 #include "string/string_impl.cuh"
@@ -56,13 +60,12 @@ column_ptr get_german_string_offsets(column_view offsets, cudaStream_t stream)
     constexpr auto inline_limit = german_string_impl_t::max_inlined_len();
     constexpr auto prefix_len = german_string_impl_t::prefix_len();
     
-    auto overflow_strlen = gamax::make_column<str_length_t>(offsets.size() - 1, false, stream);
-    auto itr = thrust::make_counting_iterator<gamax::size_type>(0);
-    thrust::transform(
-        thrust::cuda::par(*get_thrust_allocator()).on(stream),
-        itr,
-        itr + overflow_strlen->size(),
+    auto overflow_strlen = gamax::make_column<str_length_t>(offsets.size() - 1, stream);
+    // Green-safe: thrust::transform over a counting range routes to
+    // cub::DeviceTransform, which fails on green-context streams.
+    gamax::util::device::indexed_transform(
         overflow_strlen->template data<str_length_t>(),
+        overflow_strlen->size(), stream,
         [offsets_ptr = offsets.data<int64_t>()] __device__ (gamax::size_type i) {
             input_length_t l = offsets_ptr[i + 1] - offsets_ptr[i];
             auto res = (l <= inline_limit) ? 0 : (l - prefix_len);
@@ -136,7 +139,7 @@ std::unique_ptr<string_column> make_arrow_string_column(
         stream);
     cudaStreamSynchronize(stream);
 
-    gamax::device_buffer d_data(total_bytes, false, stream);
+    gamax::device_buffer d_data(total_bytes, stream);
     cudaMemcpyAsync(
         d_data.data(), 
         h_data, 
@@ -168,11 +171,9 @@ std::unique_ptr<string_column> make_german_string_column(
 
     auto meta_buffer = gamax::device_buffer(
         in.size() * sizeof(typename german_string_impl_t::header_entry_type), 
-        false, 
         stream);
     auto data_buffer = gamax::device_buffer(
         in.bytes(), 
-        false, 
         stream);
     auto out = std::make_unique<string_column>(
         std::move(data_buffer),

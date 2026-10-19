@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 // Benchmark for gamax::argsort_strings and gamax::sort_strings using nvbench.
 
 #include <nvbench/nvbench.cuh>
@@ -47,7 +50,7 @@ struct bm_params {
 } // namespace
 
 void bench_string_sort(nvbench::state& state) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     bm_params params(state);
     if (params.should_skip(state)) {
@@ -60,9 +63,9 @@ void bench_string_sort(nvbench::state& state) {
     auto strings = gamax::datagen::device::generate_random_strings(
         params.num_strings,
         params.string_length,
+        stream,
         params.impl,
-        42,  // seed
-        stream);
+        42);  // seed
 
     state.set_cuda_stream(nvbench::make_cuda_stream_view(stream));
     state.add_element_count(params.num_strings, "num_strings");

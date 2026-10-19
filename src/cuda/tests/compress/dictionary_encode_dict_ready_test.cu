@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <iostream>
 #include <omp.h>
 #include <gtest/gtest.h>
@@ -27,8 +30,8 @@ void check_correctness(
 
     auto data = std::make_unique<Key[]>(n);
     auto encoded_data = std::make_unique<Encode[]>(n);
-    gamax::copy_column_to_host(key, data.get());
-    gamax::copy_column_to_host(res, encoded_data.get());
+    gamax::copy_column_to_host(key, data.get(), cudaStreamDefault);
+    gamax::copy_column_to_host(res, encoded_data.get(), cudaStreamDefault);
 
     std::unordered_map<Key, Encode> dict;
     for(gamax::size_type i = 0; i < n; i++) {
@@ -57,20 +60,23 @@ void check_correctness(
 
 template <typename Key, typename Encode>
 void test_dictionary_encode(const gamax::size_type num_items, const gamax::size_type dict_size) {
-    auto dict = gamax::make_sequence<Key>(dict_size, 0, 1);
-    auto keys = gamax::make_sequence<Key>(num_items, 0, 1);
+    constexpr cudaStream_t stream = cudaStreamDefault;
+    auto dict = gamax::make_sequence<Key>(dict_size, stream, 0, 1);
+    auto keys = gamax::make_sequence<Key>(num_items, stream, 0, 1);
 
     auto raw_key_ptr = keys->template data<Key>();
     
-    thrust::for_each_n(thrust::device, raw_key_ptr, num_items, [=] __device__ (Key& key) { key = key % dict_size; });
+    auto policy = gamax::rmm_exec_policy_handle{stream};
+    thrust::for_each_n(policy.get(), raw_key_ptr, num_items, [=] __device__ (Key& key) { key = key % dict_size; });
     thrust::default_random_engine g;
-    thrust::shuffle(thrust::cuda::par(*get_thrust_allocator()), raw_key_ptr, raw_key_ptr + num_items, g);
+    thrust::shuffle(policy.get(), raw_key_ptr, raw_key_ptr + num_items, g);
     cudaDeviceSynchronize();
 
     auto res = 
         gamax::compress::dictionary_encode(
             keys->view(), 
             dict->view(), 
+            stream,
             gamax::data_type{gamax::type_to_id<Encode>()});
     cudaDeviceSynchronize();
 

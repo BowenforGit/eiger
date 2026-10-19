@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <cuda.h>
 #include <vector>
 #include <string>
@@ -790,7 +793,7 @@ column_ptr equal_bitmask(
 
     auto out = gamax::make_column(
         gamax::data_type{gamax::type_id::BOOL8},
-        in.size());
+        in.size(), stream);
     
     dispatch_string_ops<EqualLauncher>(options, in, string, out->mutable_view(), has_mask ? mask.data<bool>() : nullptr, stream);
     
@@ -816,7 +819,7 @@ column_ptr startswith_bitmask(
 
     auto out = gamax::make_column(
         gamax::data_type{gamax::type_id::BOOL8},
-        in.size());
+        in.size(), stream);
     
     dispatch_string_ops<StartsWithLauncher>(options, in, prefix, out->mutable_view(), has_mask ? mask.data<bool>() : nullptr, stream);
     
@@ -842,7 +845,7 @@ column_ptr endswith_bitmask(
 
     auto out = gamax::make_column(
         gamax::data_type{gamax::type_id::BOOL8},
-        in.size());
+        in.size(), stream);
 
     dispatch_string_ops<EndsWithLauncher>(options, in, suffix, out->mutable_view(), has_mask ? mask.data<bool>() : nullptr, stream);
     
@@ -868,7 +871,7 @@ column_ptr contains_bitmask(
 
     auto out = gamax::make_column(
         gamax::data_type{gamax::type_id::BOOL8},
-        in.size());
+        in.size(), stream);
     
     dispatch_string_ops<ContainsLauncher>(options, in, substring, out->mutable_view(), has_mask ? mask.data<bool>() : nullptr, options.use_kmp, stream);
     
@@ -897,7 +900,7 @@ column_ptr contains_multiple_bitmask(
         // result is the mask if present, otherwise all true
         auto out = gamax::make_column(
             gamax::data_type{gamax::type_id::BOOL8},
-            in.size());
+            in.size(), stream);
         if(has_mask) {
             cudaMemcpyAsync(out->mutable_view().data<bool>(), mask.data<bool>(), 
                             in.size() * sizeof(bool), cudaMemcpyDeviceToDevice, stream);
@@ -914,10 +917,11 @@ column_ptr contains_multiple_bitmask(
     
     auto out = gamax::make_column(
         gamax::data_type{gamax::type_id::BOOL8},
-        in.size());
+        in.size(), stream);
     
     // Copy pattern views to device
-    gamax::device_buffer d_patterns(patterns.size() * sizeof(string_scalar_view));
+    gamax::device_buffer d_patterns(
+        patterns.size() * sizeof(string_scalar_view), stream);
     cudaMemcpyAsync(d_patterns.data(), patterns.data(), patterns.size() * sizeof(string_scalar_view), 
                     cudaMemcpyHostToDevice, stream);
     
@@ -953,7 +957,7 @@ column_ptr in_multiple_bitmask(
     if(patterns.empty()) {
         auto out = gamax::make_column(
             gamax::data_type{gamax::type_id::BOOL8},
-            in.size());
+            in.size(), stream);
         cudaMemsetAsync(out->mutable_view().data<bool>(), 0, in.size() * sizeof(bool), stream);
         cudaStreamSynchronize(stream);
         return out;
@@ -965,10 +969,11 @@ column_ptr in_multiple_bitmask(
 
     auto out = gamax::make_column(
         gamax::data_type{gamax::type_id::BOOL8},
-        in.size());
+        in.size(), stream);
 
     // Copy pattern views to device (same shape as contains_multiple_bitmask).
-    gamax::device_buffer d_patterns(patterns.size() * sizeof(string_scalar_view));
+    gamax::device_buffer d_patterns(
+        patterns.size() * sizeof(string_scalar_view), stream);
     cudaMemcpyAsync(d_patterns.data(), patterns.data(), patterns.size() * sizeof(string_scalar_view),
                     cudaMemcpyHostToDevice, stream);
 

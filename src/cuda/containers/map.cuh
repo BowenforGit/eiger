@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <cuda.h>
@@ -16,7 +19,7 @@ namespace gamax::containers {
     template <typename Key,
               typename Value = gamax::size_type,  
               int CG_SIZE = 2,
-              typename Allocator = ThrustAllocator<cuco::pair<Key, Value>>,
+              typename Allocator = rmm_cuco_allocator<cuco::pair<Key, Value>>,
               typename KeyEqual = cuda::std::equal_to<Key>, 
               typename ProbingScheme = cuco::linear_probing<CG_SIZE, cuco::default_hash_function<Key>>>
     class map {
@@ -27,7 +30,7 @@ namespace gamax::containers {
             Key empty_key_sentinel,
             Value empty_value_sentinel,
             Allocator allocator,
-            cudaStream_t stream = cudaStreamDefault)
+            cudaStream_t stream)
         : _cuco_allocator(allocator)
         , _load_factor(load_factor)
         , _map(
@@ -46,7 +49,7 @@ namespace gamax::containers {
     
         void insert_with_tids(
             gamax::column_view const& keys, 
-            cudaStream_t stream = cudaStreamDefault) 
+            cudaStream_t stream)
         {
             auto keys_ptr = keys.data<Key>();
             auto tids = thrust::make_counting_iterator(static_cast<Value>(0));
@@ -58,7 +61,7 @@ namespace gamax::containers {
 
         std::size_t count(
             gamax::column_view const& probe_keys,
-            cudaStream_t stream = cudaStreamDefault) 
+            cudaStream_t stream)
         {
             auto keys_ptr = probe_keys.data<Key>();
             auto num_keys = probe_keys.size();

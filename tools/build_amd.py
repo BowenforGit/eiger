@@ -2,6 +2,8 @@
 
 # Adapted from PyTorch project
 # https://github.com/pytorch/pytorch/blob/main/tools/amd_build/build_amd.py
+# PyTorch copyright notices and BSD terms: LICENSES/PyTorch-BSD.txt.
+# Exact original revision is not recorded; see THIRD_PARTY_NOTICES.md.
 
 import argparse
 import os

@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
 
 #include <string>
@@ -23,7 +26,8 @@ template <typename T>
 gamax::column_ptr mk_col(const std::vector<T>& v) {
     return gamax::make_column_from_host(
         const_cast<T*>(v.data()),
-        static_cast<gamax::size_type>(v.size()));
+        static_cast<gamax::size_type>(v.size()),
+        cudaStreamDefault);
 }
 
 gamax::column_ptr mk_string_col(const std::vector<std::string>& ss) {
@@ -58,8 +62,8 @@ TEST(PhysReorder, NumericSubsetAndReorder) {
     auto out = phys::reorder(tbl->view(), {2, 0}, default_ctx());
     ASSERT_EQ(out->num_columns(), 2);
     ASSERT_EQ(out->num_rows(), 4);
-    auto col0 = gamax::copy_column_to_host<int64_t>(out->view()[0]);
-    auto col1 = gamax::copy_column_to_host<int32_t>(out->view()[1]);
+    auto col0 = gamax::copy_column_to_host<int64_t>(out->view()[0], cudaStreamDefault);
+    auto col1 = gamax::copy_column_to_host<int32_t>(out->view()[1], cudaStreamDefault);
     EXPECT_EQ(col0[0], 10); EXPECT_EQ(col0[3], 40);
     EXPECT_EQ(col1[0], 1);  EXPECT_EQ(col1[3], 4);
 }
@@ -79,7 +83,7 @@ TEST(PhysReorder, PassesSTRINGColumnsThrough) {
     ASSERT_EQ(out->num_rows(), 3);
     EXPECT_EQ(out->view()[0].type().id(), type_id::STRING);
     EXPECT_EQ(out->view()[1].type().id(), type_id::INT32);
-    auto ints = gamax::copy_column_to_host<int32_t>(out->view()[1]);
+    auto ints = gamax::copy_column_to_host<int32_t>(out->view()[1], cudaStreamDefault);
     EXPECT_EQ(ints[0], 1);
     EXPECT_EQ(ints[2], 3);
 }
@@ -92,8 +96,8 @@ TEST(PhysReorder, RepeatedOrdinalProducesIndependentCopies) {
 
     auto out = phys::reorder(tbl->view(), {0, 0, 0}, default_ctx());
     ASSERT_EQ(out->num_columns(), 3);
-    auto c0 = gamax::copy_column_to_host<int32_t>(out->view()[0]);
-    auto c2 = gamax::copy_column_to_host<int32_t>(out->view()[2]);
+    auto c0 = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
+    auto c2 = gamax::copy_column_to_host<int32_t>(out->view()[2], cudaStreamDefault);
     EXPECT_EQ(c0[0], 7);
     EXPECT_EQ(c2[2], 9);
 }
@@ -121,7 +125,7 @@ TEST(PhysFilter, NumericOnly) {
             ExprTree::constant(gamax::scalar(int32_t{7}))));
     auto out = phys::filter(tbl->view(), pred, default_ctx());
     ASSERT_EQ(out->num_rows(), 2);
-    auto kept = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto kept = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     EXPECT_EQ(kept[0], 10);
     EXPECT_EQ(kept[1], 15);
 }
@@ -164,7 +168,7 @@ TEST(PhysFilter, SelectiveOutputDropsPredicateOnlyColumn) {
     ASSERT_EQ(out->num_columns(), 1);
     ASSERT_EQ(out->num_rows(), 3);
     EXPECT_EQ(out->view()[0].type().id(), type_id::FLOAT64);
-    auto kept = gamax::copy_column_to_host<double>(out->view()[0]);
+    auto kept = gamax::copy_column_to_host<double>(out->view()[0], cudaStreamDefault);
     EXPECT_DOUBLE_EQ(kept[0], 3.5);
     EXPECT_DOUBLE_EQ(kept[1], 4.5);
     EXPECT_DOUBLE_EQ(kept[2], 5.5);
@@ -195,7 +199,7 @@ TEST(PhysFilter, SelectiveOutputDropsStringPredicateColumn) {
     ASSERT_EQ(out->num_columns(), 1);
     ASSERT_EQ(out->num_rows(), 3);
     EXPECT_EQ(out->view()[0].type().id(), type_id::INT32);
-    auto kept = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto kept = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     EXPECT_EQ(kept[0], 10); EXPECT_EQ(kept[1], 20); EXPECT_EQ(kept[2], 30);
 }
 
@@ -271,7 +275,7 @@ TEST(PhysProject, ComputesExpression) {
         ExprTree::column(1, t(type_id::FLOAT64))));
     auto out = phys::project(tbl->view(), items, default_ctx());
     ASSERT_EQ(out->num_columns(), 1);
-    auto result = gamax::copy_column_to_host<double>(out->view()[0]);
+    auto result = gamax::copy_column_to_host<double>(out->view()[0], cudaStreamDefault);
     EXPECT_DOUBLE_EQ(result[0], 10.0);
     EXPECT_DOUBLE_EQ(result[2], 90.0);
 }
@@ -434,7 +438,9 @@ std::unique_ptr<gamax::table> make_empty_table_of_types(
             cols.push_back(mk_string_col({}));
         } else {
             // Numeric 0-row column via make_column.
-            cols.push_back(gamax::make_column(t, 0, false, cudaStreamDefault));
+            cols.push_back(gamax::make_column(
+                t, 0, cudaStreamDefault,
+                gamax::buffer_init::uninitialized));
         }
     }
     return gamax::make_table(std::move(cols));
@@ -460,7 +466,7 @@ TEST(PhysEmptyInput, ScalarAggregateProducesOneRowOfZeros) {
         default_ctx());
     ASSERT_EQ(out->num_rows(), 1);
     ASSERT_EQ(out->num_columns(), 1);
-    auto v = gamax::copy_column_to_host<int64_t>(out->view()[0]);
+    auto v = gamax::copy_column_to_host<int64_t>(out->view()[0], cudaStreamDefault);
     EXPECT_EQ(v[0], 0);
 }
 
@@ -526,7 +532,7 @@ TEST(PhysAggregate, ScalarSum) {
         {{0, gamax::groupby::aggregation_id::SUM}},
         default_ctx());
     ASSERT_EQ(out->num_rows(), 1);
-    auto sum = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto sum = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     EXPECT_EQ(sum[0], 60);
 }
 
@@ -558,7 +564,7 @@ TEST(PhysSort, Ascending) {
         tbl->view(),
         {{0, gamax::sort_order::ASCENDING}},
         default_ctx());
-    auto s = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto s = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     ASSERT_EQ(out->num_rows(), 8);
     EXPECT_EQ(s[0], 1);
     EXPECT_EQ(s[7], 9);
@@ -575,7 +581,7 @@ TEST(PhysTopK, DescendingTop3) {
         3,
         default_ctx());
     ASSERT_EQ(out->num_rows(), 3);
-    auto s = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto s = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     EXPECT_EQ(s[0], 9);
     EXPECT_EQ(s[1], 6);
     EXPECT_EQ(s[2], 5);

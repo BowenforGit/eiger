@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #define CUB_STDERR
@@ -19,14 +22,14 @@ std::unique_ptr<gamax::table> groupby(
     gamax::table_view val, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 std::unique_ptr<gamax::table> groupby_gfur(
     gamax::table_view key,
     gamax::table_view val,
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 // Sort-based distinct: one row per unique key combination, materialized
 // from the original key columns. Output row order is unspecified by
@@ -45,6 +48,6 @@ std::unique_ptr<gamax::table> groupby_gfur(
 std::unique_ptr<gamax::table> distinct(
     gamax::table_view key,
     gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 } // namespace gamax::groupby::sort

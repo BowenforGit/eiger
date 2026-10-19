@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "tpch/verify.hpp"
 
 #include <algorithm>
@@ -38,13 +41,14 @@ std::shared_ptr<arrow::Table> read_parquet(const std::string& path) {
             "verify: parquet reader('" + path + "'): " +
             maybe_reader.status().ToString());
     }
-    std::shared_ptr<arrow::Table> tbl;
-    auto st = (*maybe_reader)->ReadTable(&tbl);
-    if (!st.ok()) {
+    auto reader = std::move(maybe_reader).ValueUnsafe();
+    auto maybe_table = reader->ReadTable();
+    if (!maybe_table.ok()) {
         throw std::runtime_error(
-            "verify: read('" + path + "'): " + st.ToString());
+            "verify: read('" + path + "'): " +
+            maybe_table.status().ToString());
     }
-    return tbl;
+    return std::move(maybe_table).ValueUnsafe();
 }
 
 // Concatenate a ChunkedArray down to a single Array — simplifies
@@ -106,23 +110,17 @@ bool floats_close(double a, double b, double abs_tol, double rel_tol) {
     return diff <= tol;
 }
 
-// Gather a STRING gamax column to host via the [data_ptr, meta_ptr]
-// helper buffer (same technique `run_tpch_ir::print_result` uses;
-// sidesteps the NVCC void*-arithmetic codegen quirk in
-// `string_column_view`'s host ctor).
+// Gather a STRING gamax column through its non-owning view metadata.
 std::vector<std::string> gather_strings_to_host(gamax::column_view col) {
-    void* host_ptrs[2] = {nullptr, nullptr};
-    cudaMemcpy(host_ptrs, col.data<void>(),
-               2 * sizeof(void*), cudaMemcpyDeviceToHost);
     auto n = col.size();
     std::vector<gamax::size_type> offsets(n + 1);
-    cudaMemcpy(offsets.data(), host_ptrs[1],
+    cudaMemcpy(offsets.data(), col.auxiliary_data(),
                (n + 1) * sizeof(gamax::size_type),
                cudaMemcpyDeviceToHost);
     const auto total = offsets.back();
     std::string bytes(total, '\0');
     if (total > 0) {
-        cudaMemcpy(bytes.data(), host_ptrs[0], total,
+        cudaMemcpy(bytes.data(), col.data<void>(), total,
                    cudaMemcpyDeviceToHost);
     }
     std::vector<std::string> out;
@@ -277,15 +275,18 @@ VerifyResult verify_result(
             const auto n = got_col.size();
             std::vector<double> got_host(n);
             if (got_kind == Kind::I32) {
-                auto h = gamax::copy_column_to_host<int32_t>(got_col);
+                auto h = gamax::copy_column_to_host<int32_t>(
+                    got_col, cudaStreamDefault);
                 for (gamax::size_type i = 0; i < n; ++i)
                     got_host[i] = static_cast<double>(h[i]);
             } else if (got_kind == Kind::I64) {
-                auto h = gamax::copy_column_to_host<int64_t>(got_col);
+                auto h = gamax::copy_column_to_host<int64_t>(
+                    got_col, cudaStreamDefault);
                 for (gamax::size_type i = 0; i < n; ++i)
                     got_host[i] = static_cast<double>(h[i]);
             } else {
-                auto h = gamax::copy_column_to_host<double>(got_col);
+                auto h = gamax::copy_column_to_host<double>(
+                    got_col, cudaStreamDefault);
                 for (gamax::size_type i = 0; i < n; ++i)
                     got_host[i] = h[i];
             }
@@ -324,10 +325,10 @@ VerifyResult verify_result(
             // Both sides are integer; compare in the widest kind so
             // INT32 got against INT64 golden just widens.
             auto host32 = (got_kind == Kind::I32)
-                ? gamax::copy_column_to_host<int32_t>(got_col)
+                ? gamax::copy_column_to_host<int32_t>(got_col, cudaStreamDefault)
                 : std::unique_ptr<int32_t[]>(nullptr);
             auto host64 = (got_kind == Kind::I64)
-                ? gamax::copy_column_to_host<int64_t>(got_col)
+                ? gamax::copy_column_to_host<int64_t>(got_col, cudaStreamDefault)
                 : std::unique_ptr<int64_t[]>(nullptr);
             auto got_i = [&](gamax::size_type i) -> int64_t {
                 return got_kind == Kind::I32

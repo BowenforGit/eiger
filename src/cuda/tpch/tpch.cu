@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "tpch/tpch.hpp"
 #include "tpch/tpch_ops.hpp"
 #include "expr/expr_parser.hpp"
@@ -213,7 +216,7 @@ namespace {
             auto scalar = gamax::make_string_scalar("PROMO", params_.stream);
             auto pred = gamax::select::Predicate::string_startswith(2 /*col2 - p_type */, std::move(scalar));
             auto mask = gamax::select::select_to_bitmask(
-                input->view(), pred, gamax::select::select_options{}, params_.stream);
+                input->view(), pred, params_.stream, gamax::select::select_options{});
             input->add_column(std::move(mask)); // col3: startswith(p_type, 'PROMO')
 
             if(project_join_lineitem_part_exprs_.empty()) {

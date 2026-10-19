@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
@@ -17,6 +20,8 @@
 #include "operators/groupby/groupby.hpp"
 #include "operators/sort/sort.hpp"
 #include "expr/expr_parser.hpp"
+#include "tpch/source_policy.hpp"
+#include "tpch/tpch_layout.hpp"
 
 #define TPCH_DEBUG
 
@@ -93,8 +98,51 @@ struct tpch_params {
     gamax::size_type scale_factor; // in GB
     std::unordered_map<std::string, int> algo_map;
     cudaStream_t stream = cudaStreamDefault;
+    int shard_rank = 0;
+    int shard_count = 1;
+    FileShardStrategy file_shard_strategy = FileShardStrategy::RoundRobin;
+    int parquet_decode_threads = 8;
+    bool allow_legacy_multifile = false;
+    SourceReadPoliciesPtr source_read_policies =
+        make_sharded_source_read_policies();
 
     tpch_params(gamax::size_type sf) : scale_factor(sf), algo_map() {}
+
+    void set_row_group_shard(int rank, int count) {
+        if (rank < 0 || count <= 0 || rank >= count) {
+            throw std::runtime_error("Invalid TPC-H row-group shard: rank=" +
+                std::to_string(rank) + " count=" + std::to_string(count));
+        }
+        shard_rank = rank;
+        shard_count = count;
+    }
+
+    bool row_group_sharded() const noexcept {
+        return shard_count > 1;
+    }
+
+    void set_file_shard_strategy(FileShardStrategy strategy) noexcept {
+        file_shard_strategy = strategy;
+    }
+
+    void set_parquet_decode_threads(int threads) {
+        if (threads <= 0) {
+            throw std::runtime_error(
+                "TPC-H Parquet decode thread count must be positive");
+        }
+        parquet_decode_threads = threads;
+    }
+
+    void set_source_read_policies(SourceReadPoliciesPtr policies) {
+        if (!policies) {
+            throw std::runtime_error("TPC-H source read policies cannot be null");
+        }
+        source_read_policies = std::move(policies);
+    }
+
+    SourceReadPolicy source_read_policy(const std::string& table) const noexcept {
+        return source_read_policies->for_table(table);
+    }
 
     void add_algo(std::string op, int algo_id) {
         algo_map[std::move(op)] = algo_id;

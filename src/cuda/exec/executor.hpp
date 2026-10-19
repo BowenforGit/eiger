@@ -1,9 +1,13 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <cuda_runtime_api.h>
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "exec/exec_plan.hpp"
 #include "memory/table.hpp"
@@ -21,6 +25,28 @@ using SourceResolver = std::function<gamax::table_view(
     const std::string& name,
     const std::vector<std::string>& columns)>;
 
+// Optional executor extension for physical steps implemented by a component
+// outside the core GaMax library (ALPS distributed collectives, for example).
+// Opaque values let a local PartitionRows step hand an implementation-private
+// partition descriptor to ExchangePartitions without pretending it is a table.
+struct ExtensionInput {
+    gamax::table_view view;
+    std::shared_ptr<void> opaque;
+};
+
+struct ExtensionResult {
+    std::unique_ptr<gamax::table> table;
+    std::shared_ptr<void> opaque;
+};
+
+struct StepExtension {
+    std::function<bool(StepKind)> handles;
+    std::function<ExtensionResult(
+        const Step&,
+        const std::vector<ExtensionInput>&,
+        const gamax::phys::Context&)> execute;
+};
+
 // Walk an ExecPlan step-by-step, dispatching to `phys::*` with the
 // pre-built payloads. Returns the final step's output table.
 //
@@ -33,6 +59,12 @@ std::unique_ptr<gamax::table> execute(
     const ExecPlan& plan,
     const SourceResolver& source_resolver,
     const gamax::phys::Context& ctx);
+
+std::unique_ptr<gamax::table> execute(
+    const ExecPlan& plan,
+    const SourceResolver& source_resolver,
+    const gamax::phys::Context& ctx,
+    const StepExtension& extension);
 
 // ─────────────────────────────────────────────────────────────────────
 // Two-phase execution path for benchmarking.
@@ -47,7 +79,7 @@ std::unique_ptr<gamax::table> execute(
 //     stream so all H2Ds are complete on return. Returns an opaque
 //     `BenchExecState` carrying the populated `live` map.
 //
-//   Phase 2: bench_run_steps(plan, std::move(state), ctx)
+//   Phase 2: bench_run_steps(plan, state, ctx)
 //     Walks the plan again, skips SourceTable steps, dispatches the
 //     rest. Returns the final step's output table. Honors the same
 //     `last_used_step` freeing as `execute()`.
@@ -80,7 +112,13 @@ BenchExecState bench_resolve_sources(
 
 std::unique_ptr<gamax::table> bench_run_steps(
     const ExecPlan& plan,
-    BenchExecState state,
+    const BenchExecState& state,
     const gamax::phys::Context& ctx);
+
+std::unique_ptr<gamax::table> bench_run_steps(
+    const ExecPlan& plan,
+    const BenchExecState& state,
+    const gamax::phys::Context& ctx,
+    const StepExtension& extension);
 
 } // namespace gamax::exec

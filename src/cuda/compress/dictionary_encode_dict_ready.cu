@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "dictionary_encode.hpp"
 
 #include <memory>
@@ -36,14 +39,14 @@ namespace {
             gamax::size_type map_capacity = std::ceil(dict.size() / load_factor);
             Key constexpr empty_key_sentinel     = gamax::sentinel<Key>(); // FIXME: handle negative values and unsigned values correctly 
             Encode constexpr empty_value_sentinel = gamax::sentinel<Encode>();    
-            auto cuco_allocator = *get_thrust_allocator<cuco::pair<Key, Encode>>(stream);   
+            auto cuco_allocator = gamax::rmm_allocator_handle<cuco::pair<Key, Encode>>{stream};
             auto map = cuco::static_map{map_capacity,
                                         cuco::empty_key{empty_key_sentinel},
                                         cuco::empty_value{empty_value_sentinel},
                                         thrust::equal_to<Key>{},
                                         cuco::linear_probing<1, cuco::default_hash_function<Key>>{},
                                         {}, {}, 
-                                        cuco_allocator,
+                                        cuco_allocator.get(),
                                         stream};
             
             auto pairs_begin = thrust::make_zip_iterator(thrust::make_tuple(dict.data<Key>(), thrust::make_counting_iterator<Encode>(0)));
@@ -63,10 +66,10 @@ namespace {
 std::unique_ptr<gamax::column> dictionary_encode(
     const gamax::column_view column, 
     const gamax::column_view dict,
-    const gamax::data_type encoded_type,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    const gamax::data_type encoded_type)
 {
-    auto encoded_col = gamax::make_column(encoded_type, column.size());
+    auto encoded_col = gamax::make_column(encoded_type, column.size(), stream);
 
     /* somehow using double_type_dispatcher will not compile, so I have to write it explicitly */
     // if(encoded_type.id() == gamax::type_id::INT16) {
@@ -84,9 +87,9 @@ std::unique_ptr<gamax::column> dictionary_encode(
 std::unique_ptr<gamax::column> dictionary_encode(
     const gamax::column& column, 
     const gamax::column& dict,
-    const gamax::data_type encoded_type,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    const gamax::data_type encoded_type)
 {
-    return dictionary_encode(column.view(), dict.view(), encoded_type, stream);
+    return dictionary_encode(column.view(), dict.view(), stream, encoded_type);
 }
 }

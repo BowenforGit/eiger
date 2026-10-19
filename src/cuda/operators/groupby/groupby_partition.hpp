@@ -1,8 +1,12 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #define CUB_STDERR
 
 #include <memory>
+#include <stdexcept>
 #include <vector>
 #include <cuda_runtime_api.h>
 
@@ -12,6 +16,12 @@
 #include "operators/groupby/groupby.hpp"
 
 namespace gamax::groupby::partition {
+
+class capacity_error : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 /**
  * @brief A partition-based groupby implementation.
  * 
@@ -54,12 +64,12 @@ std::unique_ptr<gamax::table> groupby(
     gamax::table_view val, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 std::unique_ptr<gamax::table> groupby_gfur(
     gamax::table_view key, 
     gamax::table_view val, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 } // namespace gamax::groupby::partition

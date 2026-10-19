@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <unordered_map>
@@ -63,7 +66,7 @@ struct Histogram {
     Histogram& operator=(Histogram&&) = default;
     
     // Deep copy for histogram
-    Histogram deep_copy(cudaStream_t stream = cudaStreamDefault) const {
+    Histogram deep_copy(cudaStream_t stream) const {
         Histogram copy;
         if (boundaries) {
             copy.boundaries = boundaries->deep_copy(stream);
@@ -186,29 +189,55 @@ private:
  * This class provides thread-safe access to column statistics and
  * supports distinguishing between base and intermediate columns.
  * 
- * Columns are identified by their data pointer, which uniquely identifies
- * the underlying data buffer. This means multiple column_views created from
- * the same column will share the same statistics cache entry.
+ * Columns are identified by a monotonic logical owner token plus subview
+ * offset/size/type. Device addresses are deliberately excluded because an
+ * allocator can reuse an address for unrelated column contents.
  */
 class StatsStorage {
 public:
+    struct ColumnCacheKey {
+        gamax::column_identity identity{};
+        gamax::size_type offset{};
+        gamax::size_type size{};
+        gamax::type_id type{gamax::type_id::EMPTY};
+
+        bool operator==(ColumnCacheKey const& other) const noexcept {
+            return identity == other.identity && offset == other.offset &&
+                   size == other.size && type == other.type;
+        }
+    };
+
+    struct ColumnCacheKeyHash {
+        std::size_t operator()(ColumnCacheKey const& key) const noexcept {
+            auto mix = [](std::size_t seed, std::size_t value) {
+                return seed ^ (value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+            };
+            std::size_t result = std::hash<gamax::column_identity>{}(key.identity);
+            result = mix(result, std::hash<gamax::size_type>{}(key.offset));
+            result = mix(result, std::hash<gamax::size_type>{}(key.size));
+            return mix(result, std::hash<int>{}(static_cast<int>(key.type)));
+        }
+    };
+
     /**
      * @brief Get the singleton instance of the stats storage.
      */
     static StatsStorage& instance() {
-        static StatsStorage storage;
-        return storage;
+        // Explicit reset/shutdown clears GPU owners. Leak the host registry so
+        // static destruction can never invoke CUDA after runtime teardown.
+        static auto* storage = new StatsStorage;
+        return *storage;
     }
     
     /**
      * @brief Register a column for statistics tracking.
      * 
-     * @param column The column view (identified by its data pointer which includes offset)
+     * @param column The identified logical column/subview
      * @param is_base True if this is a base table column, false if intermediate
      */
     void register_column(gamax::column_view column, bool is_base = false) {
         std::lock_guard<std::mutex> lock(_mutex);
-        const void* key = column.data();
+        auto const key = cache_key(column);
         if (_column_stats.find(key) == _column_stats.end()) {
             _column_stats[key] = ColumnStats(is_base);
         }
@@ -219,35 +248,7 @@ public:
      */
     bool is_registered(gamax::column_view column) const {
         std::lock_guard<std::mutex> lock(_mutex);
-        return _column_stats.find(column.data()) != _column_stats.end();
-    }
-    
-    /**
-     * @brief Get the statistics for a column. Creates entry if not exists.
-     * 
-     * Note: If the column is not registered, it will be registered as intermediate (is_base=false).
-     */
-    ColumnStats& get_column_stats(gamax::column_view column) {
-        std::lock_guard<std::mutex> lock(_mutex);
-        const void* key = column.data();
-        auto it = _column_stats.find(key);
-        if (it == _column_stats.end()) {
-            // Auto-register as intermediate if not found
-            _column_stats[key] = ColumnStats(false);
-        }
-        return _column_stats[key];
-    }
-    
-    /**
-     * @brief Get the statistics for a column (const version).
-     */
-    const ColumnStats* get_column_stats(gamax::column_view column) const {
-        std::lock_guard<std::mutex> lock(_mutex);
-        auto it = _column_stats.find(column.data());
-        if (it != _column_stats.end()) {
-            return &it->second;
-        }
-        return nullptr;
+        return _column_stats.find(cache_key(column)) != _column_stats.end();
     }
     
     /**
@@ -255,7 +256,7 @@ public:
      */
     bool has_stat(gamax::column_view column, StatsType type) const {
         std::lock_guard<std::mutex> lock(_mutex);
-        auto it = _column_stats.find(column.data());
+        auto it = _column_stats.find(cache_key(column));
         if (it != _column_stats.end()) {
             return it->second.has_stat(type);
         }
@@ -267,7 +268,7 @@ public:
      */
     std::optional<StatsValue> get_stat(gamax::column_view column, StatsType type) const {
         std::lock_guard<std::mutex> lock(_mutex);
-        auto it = _column_stats.find(column.data());
+        auto it = _column_stats.find(cache_key(column));
         if (it != _column_stats.end()) {
             return it->second.get_stat(type);
         }
@@ -279,7 +280,7 @@ public:
      */
     std::optional<gamax::scalar> get_scalar_stat(gamax::column_view column, StatsType type) const {
         std::lock_guard<std::mutex> lock(_mutex);
-        auto it = _column_stats.find(column.data());
+        auto it = _column_stats.find(cache_key(column));
         if (it != _column_stats.end()) {
             return it->second.get_scalar_stat(type);
         }
@@ -291,7 +292,7 @@ public:
      */
     std::shared_ptr<Histogram> get_histogram_stat(gamax::column_view column, StatsType type) const {
         std::lock_guard<std::mutex> lock(_mutex);
-        auto it = _column_stats.find(column.data());
+        auto it = _column_stats.find(cache_key(column));
         if (it != _column_stats.end()) {
             return it->second.get_histogram_stat(type);
         }
@@ -305,7 +306,7 @@ public:
      */
     void set_stat(gamax::column_view column, StatsType type, StatsValue value) {
         std::lock_guard<std::mutex> lock(_mutex);
-        const void* key = column.data();
+        auto const key = cache_key(column);
         auto it = _column_stats.find(key);
         if (it == _column_stats.end()) {
             _column_stats[key] = ColumnStats(false);
@@ -335,7 +336,7 @@ public:
      */
     void clear_column_stats(gamax::column_view column) {
         std::lock_guard<std::mutex> lock(_mutex);
-        _column_stats.erase(column.data());
+        _column_stats.erase(cache_key(column));
     }
     
     /**
@@ -381,8 +382,16 @@ private:
     StatsStorage(const StatsStorage&) = delete;
     StatsStorage& operator=(const StatsStorage&) = delete;
     
+    static ColumnCacheKey cache_key(gamax::column_view column) {
+        if (column.identity() == 0) {
+            throw std::invalid_argument(
+                "StatsStorage requires a column_view with a stable logical identity");
+        }
+        return {column.identity(), column.offset(), column.size(), column.type().id()};
+    }
+
     mutable std::mutex _mutex;
-    std::unordered_map<const void*, ColumnStats> _column_stats;
+    std::unordered_map<ColumnCacheKey, ColumnStats, ColumnCacheKeyHash> _column_stats;
 };
 
 /**

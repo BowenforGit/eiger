@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <nvbench/nvbench.cuh>
 
 #include <string>
@@ -88,7 +91,7 @@ bool check_skip(join_params const& params) {
 
 template<typename KeyT>
 void bench_inner_eq_join(nvbench::state& state, nvbench::type_list<KeyT>) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     join_params params(state);
 
@@ -102,11 +105,16 @@ void bench_inner_eq_join(nvbench::state& state, nvbench::type_list<KeyT>) {
     auto hint = params.hint();
     
     auto key_type = gamax::data_type(gamax::type_to_id<KeyT>());
-    auto left = gamax::datagen::device::pk_uniform_id(key_type, npk, params.left_ncols, 42);
+    auto left = gamax::datagen::device::pk_uniform_id(
+        key_type, npk, params.left_ncols, 42, cudaStreamDefault);
     std::unique_ptr<gamax::table> right = 
         (params.zipf_factor == 0.0) ? 
-        gamax::datagen::device::fk_uniform_id(key_type, npk, nfk, params.right_ncols, params.match_ratio, 39) :
-        gamax::datagen::device::fk_zipf_id(key_type, npk, nfk, params.right_ncols, params.zipf_factor, 39);
+        gamax::datagen::device::fk_uniform_id(
+            key_type, npk, nfk, params.right_ncols, params.match_ratio, 39,
+            cudaStreamDefault) :
+        gamax::datagen::device::fk_zipf_id(
+            key_type, npk, nfk, params.right_ncols, params.zipf_factor, 39,
+            cudaStreamDefault);
 
     state.set_cuda_stream(nvbench::make_cuda_stream_view(0));
     state.add_element_count(params.left_num_items+params.right_num_items, "NumElements");

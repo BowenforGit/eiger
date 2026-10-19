@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "table_gen.hpp"
 
 #include <iostream>
@@ -48,7 +51,7 @@ namespace {
         {
             const auto num_values = src.size();
             thrust::for_each_n(
-                thrust::cuda::par(*get_thrust_allocator()).on(stream), 
+                gamax::rmm_exec_policy_handle{stream}.get(),
                 thrust::counting_iterator<gamax::size_type>(0),
                 n, 
                 [src, res, num_values] __device__ (gamax::size_type i) {
@@ -60,18 +63,18 @@ namespace {
     std::unique_ptr<gamax::column> generate_from_values(
     gamax::column_view values, // set of values to sample from
     const gamax::size_type n,
+    cudaStream_t stream,
     const bool shuffle = true, 
-    const int seed = 42,
-    cudaStream_t stream = cudaStreamDefault) 
+    const int seed = 42)
     {
         const auto num_values = values.size();
 
-        auto ret = std::make_unique<gamax::column>(values.type(), n);
+        auto ret = std::make_unique<gamax::column>(values.type(), n, stream);
         type_dispatcher(values.type(), circular_fill_impl{}, values, ret->mutable_view(), n, stream);
         cudaStreamSynchronize(stream);
 
         if(shuffle) {
-            return gamax::util::device::shuffle(ret->view(), seed, stream);
+            return gamax::util::device::shuffle(ret->view(), stream, seed);
         } else {
             return ret;
         }
@@ -81,7 +84,8 @@ namespace {
         template<typename T>
         void operator()(
             gamax::mutable_column_view src,
-            const double match_ratio)
+            const double match_ratio,
+            cudaStream_t stream)
         {
             const auto nkeys = src.size();
             if(match_ratio < 1.0) {
@@ -89,7 +93,7 @@ namespace {
                                                     (1.0 / match_ratio) 
                                                     : nkeys+1;
                 thrust::for_each_n(
-                    thrust::cuda::par(*get_thrust_allocator()), 
+                    gamax::rmm_exec_policy_handle{stream}.get(),
                     thrust::counting_iterator<gamax::size_type>(0),
                     nkeys, 
                     [src, inv_ratio, match_ratio] __device__ (gamax::size_type i) {
@@ -113,9 +117,10 @@ namespace {
 
     void apply_match_ratio(
         gamax::mutable_column_view src,
-        const double match_ratio)
+        const double match_ratio,
+        cudaStream_t stream)
     {
-        type_dispatcher(src.type(), apply_match_ratio_impl{}, src, match_ratio);
+        type_dispatcher(src.type(), apply_match_ratio_impl{}, src, match_ratio, stream);
     }
 
     struct pk_uniform_id_impl {
@@ -124,10 +129,12 @@ namespace {
             const gamax::size_type card,
             const gamax::size_type ncols,
             const int seed,
+            cudaStream_t stream,
             const uint64_t start) const
         {
-            auto src = gamax::make_sequence<T>(card, static_cast<T>(start));
-            return generate_table(src->view(), card, ncols, seed);
+            auto src = gamax::make_sequence<T>(
+                card, stream, static_cast<T>(start));
+            return generate_table(src->view(), card, ncols, seed, stream);
         }
     };
 
@@ -171,10 +178,12 @@ namespace {
             const gamax::size_type ncols,
             const double match_ratio,
             const int seed,
+            cudaStream_t stream,
             const uint64_t start) const
         {
-            auto src = gamax::make_sequence<T>(n_unique_keys, static_cast<T>(start));
-            return fk_uniform(src->view(), card, ncols, match_ratio, seed);
+            auto src = gamax::make_sequence<T>(
+                n_unique_keys, stream, static_cast<T>(start));
+            return fk_uniform(src->view(), card, ncols, match_ratio, seed, stream);
         }
     };
 
@@ -186,10 +195,12 @@ namespace {
             const gamax::size_type ncols,
             const double zipf_factor,
             const int seed,
+            cudaStream_t stream,
             const uint64_t start) const
         {
-            auto seq = gamax::make_sequence<T>(n_unique_keys, static_cast<T>(start));
-            return fk_zipf(seq->view(), card, ncols, zipf_factor, seed);
+            auto seq = gamax::make_sequence<T>(
+                n_unique_keys, stream, static_cast<T>(start));
+            return fk_zipf(seq->view(), card, ncols, zipf_factor, seed, stream);
         }
     };
 } // namespace
@@ -199,16 +210,18 @@ namespace {
         gamax::column_view src,
         const gamax::size_type card,
         const gamax::size_type ncols,
-        const int seed)
+        const int seed,
+        cudaStream_t stream)
     {
-        auto keys = generate_from_values(src, card, true, seed);
+        auto keys = generate_from_values(
+            src, card, stream, true, seed);
 
         auto t = std::make_unique<gamax::table>();
         for(gamax::size_type i = 0; i < ncols; i++) {
-            t->add_column(keys->deep_copy());
+            t->add_column(keys->deep_copy(stream));
         }
 
-        cudaDeviceSynchronize();
+        cudaStreamSynchronize(stream);
         return t;
     }
 
@@ -218,10 +231,11 @@ namespace {
         const gamax::size_type card,
         const gamax::size_type ncols,
         const int seed,
+        cudaStream_t stream,
         const uint64_t start)
     {
         check_valid_start(type, start);
-        return type_dispatcher(type, pk_uniform_id_impl{}, card, ncols, seed, start);
+        return type_dispatcher(type, pk_uniform_id_impl{}, card, ncols, seed, stream, start);
     }
 
     // std::unique_ptr<gamax::table>
@@ -242,10 +256,13 @@ namespace {
         const gamax::size_type ncols,
         const double match_ratio,
         const int seed,
+        cudaStream_t stream,
         const uint64_t start)
     {
         check_valid_start(type, start);
-        return type_dispatcher(type, fk_uniform_id_impl{}, n_unique_keys, card, ncols, match_ratio, seed, start);
+        return type_dispatcher(
+            type, fk_uniform_id_impl{}, n_unique_keys, card, ncols,
+            match_ratio, seed, stream, start);
     }
 
     std::unique_ptr<gamax::table>
@@ -256,10 +273,13 @@ namespace {
         const gamax::size_type ncols,
         const double zipf_factor,
         const int seed,
+        cudaStream_t stream,
         const uint64_t start)
     {
         check_valid_start(type, start);
-        return type_dispatcher(type, fk_zipf_id_impl{}, n_unique_keys, card, ncols, zipf_factor, seed, start);
+        return type_dispatcher(
+            type, fk_zipf_id_impl{}, n_unique_keys, card, ncols,
+            zipf_factor, seed, stream, start);
     }
 
     std::unique_ptr<gamax::table>
@@ -268,12 +288,13 @@ namespace {
         const gamax::size_type card,
         const gamax::size_type ncols,
         const double match_ratio,
-        const int seed)
+        const int seed,
+        cudaStream_t stream)
     {
         std::cout << "[!!WARNING!!] Modifying match ratio for FK only works when the key are IDs" << std::endl;
-        auto seq_copy = gamax::make_column_from_view(seq);
-        apply_match_ratio(seq_copy->mutable_view(), match_ratio);
-        return generate_table(seq_copy->view(), card, ncols, seed);
+        auto seq_copy = gamax::make_column_from_view(seq, stream);
+        apply_match_ratio(seq_copy->mutable_view(), match_ratio, stream);
+        return generate_table(seq_copy->view(), card, ncols, seed, stream);
     }
 
     std::unique_ptr<gamax::table>
@@ -282,12 +303,15 @@ namespace {
         const gamax::size_type card,
         const gamax::size_type ncols,
         const double zipf_factor,
-        const int seed)
+        const int seed,
+        cudaStream_t stream)
     {   
         // Generate Zipfian-distributed indices directly on GPU
-        auto d_idx = generate_zipf<gamax::size_type>(card, zipf_factor, seq.size(), seed);
-        auto src = gamax::util::device::gather(d_idx->view(), seq);
+        auto d_idx = generate_zipf<gamax::size_type>(
+            card, zipf_factor, seq.size(), stream, seed);
+        auto src = gamax::util::device::gather(
+            d_idx->view(), seq, stream);
 
-        return generate_table(src->view(), card, ncols, seed);
+        return generate_table(src->view(), card, ncols, seed, stream);
     }
 }

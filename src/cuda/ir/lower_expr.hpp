@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <cuda_runtime_api.h>
@@ -39,7 +42,7 @@ gamax::expression::ExprTree lower_expr_to_tree(
 gamax::select::Predicate lower_expr_to_predicate(
     const Expr& e,
     const Schema& input,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 // Exposed for tests and emitter-local use: walks `e` and reports whether
 // any node (any depth) is a StringOp. Drives the lowering heuristic

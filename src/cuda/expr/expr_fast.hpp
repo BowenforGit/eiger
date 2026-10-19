@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
@@ -415,17 +418,32 @@ public:
         return program_exprs;
     }
 
-    auto make_program(cudaStream_t stream = cudaStreamDefault) {
+    auto make_program(cudaStream_t stream) {
         std::vector<Expr> program_exprs = make_program_host();
 
-        Expr* d_exprs;
         gamax::size_type n_exprs = program_exprs.size();
-        allocate_mem(&d_exprs, false, n_exprs * sizeof(Expr), stream);
-        cudaMemcpyAsync(d_exprs, program_exprs.data(), n_exprs * sizeof(Expr), cudaMemcpyHostToDevice, stream);
+        gamax::device_buffer storage{n_exprs * sizeof(Expr), stream};
+        auto* d_exprs = static_cast<Expr*>(storage.data());
+        if (n_exprs != 0) {
+            // `program_exprs` is pageable storage. CUDA stages pageable H2D
+            // input before returning, which is safe but may synchronize the
+            // host and cannot provide true copy/compute overlap.
+            auto const error = cudaMemcpyAsync(
+                d_exprs, program_exprs.data(), n_exprs * sizeof(Expr),
+                cudaMemcpyHostToDevice, stream);
+            if (error != cudaSuccess) {
+                throw std::runtime_error(
+                    std::string("expression program upload failed: ") +
+                    cudaGetErrorString(error));
+            }
+        }
 
-        auto deleter = [](ExprProgram* t) { release_mem(t->exprs); };
-        return std::unique_ptr<ExprProgram, decltype(deleter)>{
-            new ExprProgram(d_exprs, n_exprs), deleter};
+        struct program_deleter {
+            gamax::device_buffer storage;
+            void operator()(ExprProgram* program) { delete program; }
+        };
+        return std::unique_ptr<ExprProgram, program_deleter>{
+            new ExprProgram(d_exprs, n_exprs), program_deleter{std::move(storage)}};
     }
 
     int max_regs() const {
@@ -576,13 +594,13 @@ private:
 std::unique_ptr<gamax::column> evaluate_expr(
     gamax::table_view table,
     ExprTree& et, 
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 // one operator per kernel
 std::unique_ptr<gamax::column> evaluate_expr_nofuse(
     gamax::table_view table,
     ExprTree& et, 
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 // Return a human-readable, indented representation of the expression tree.
 std::string expr_tree_to_string(const ExprTree& tree, int indent_spaces = 2);

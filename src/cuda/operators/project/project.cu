@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "operators/project/project.hpp"
 
 #include <memory>
@@ -14,8 +17,8 @@ namespace gamax::project {
     std::unique_ptr<gamax::table> project(
         gamax::table_view table,
         std::vector<gamax::expression::ExprTree>& expr,
-        project_options options,
-        cudaStream_t stream)
+        cudaStream_t stream,
+        project_options options)
     {
         if (options.fuse_operations) {
             return project_fuse(table, expr, stream);
@@ -57,8 +60,8 @@ namespace gamax::project {
     std::unique_ptr<gamax::table> project(
         std::unique_ptr<gamax::table> input_table,
         std::vector<gamax::expression::ExprTree>& expr,
-        project_options options,
-        cudaStream_t stream)
+        cudaStream_t stream,
+        project_options options)
     {
         // Create a view before we start moving columns
         // This view is used for evaluating complex expressions

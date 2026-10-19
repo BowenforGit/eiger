@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
 
 #include "ir/expr.hpp"
@@ -156,7 +159,7 @@ TEST(IrLowerExpr, PurelyNumericFilterFoldsIntoOnePredicateExpr) {
      && (discount <= gir::lit(0.07))
      && (qty      <  gir::lit(24));
 
-    auto p = gir::lower_expr_to_predicate(filter, b.schema);
+    auto p = gir::lower_expr_to_predicate(filter, b.schema, cudaStreamDefault);
     // Pure numeric => a single Predicate::expr leaf wrapping one
     // ExprTree (no Predicate::AND decomposition).
     EXPECT_EQ(p.type(), gamax::select::PredicateNodeType::EXPR);
@@ -166,7 +169,7 @@ TEST(IrLowerExpr, PurelyNumericFilterFoldsIntoOnePredicateExpr) {
 TEST(IrLowerExpr, NeInPredicateBecomesNotEq) {
     auto b = make_schema({t(type_id::INT32)});
     auto c = gir::col_ref(b.ids[0], t(type_id::INT32), false);
-    auto p = gir::lower_expr_to_predicate(c != gir::lit(10), b.schema);
+    auto p = gir::lower_expr_to_predicate(c != gir::lit(10), b.schema, cudaStreamDefault);
     EXPECT_EQ(p.type(), gamax::select::PredicateNodeType::NOT);
     ASSERT_EQ(p.children().size(), 1u);
     EXPECT_EQ(p.children()[0]->type(),
@@ -182,7 +185,7 @@ TEST(IrLowerExpr, MixedStringAndNumericDecomposesAtPredicateLevel) {
         gir::string_op(gir::StringOpKind::Startswith, std::move(s), {"PROMO"})
      && (i >= gir::lit(10));
 
-    auto p = gir::lower_expr_to_predicate(filter, b.schema);
+    auto p = gir::lower_expr_to_predicate(filter, b.schema, cudaStreamDefault);
     EXPECT_EQ(p.type(), gamax::select::PredicateNodeType::AND);
     ASSERT_EQ(p.children().size(), 2u);
     EXPECT_EQ(p.children()[0]->type(),
@@ -199,7 +202,8 @@ TEST(IrLowerExpr, StringOpLeavesReferenceOrdinal) {
     auto s = gir::col_ref(b.ids[1], t(type_id::STRING), false);
     auto p = gir::lower_expr_to_predicate(
         gir::string_op(gir::StringOpKind::Equal, std::move(s), {"x"}),
-        b.schema);
+        b.schema,
+        cudaStreamDefault);
     EXPECT_EQ(p.type(), gamax::select::PredicateNodeType::STRING_EQUAL);
     EXPECT_EQ(p.string_cid(), 1);  // ordinal 1 in this schema
 }
@@ -216,7 +220,8 @@ TEST(IrLowerExpr, ContainsMultipleLowersToStringContainsMultiple) {
     auto p = gir::lower_expr_to_predicate(
         gir::string_op(gir::StringOpKind::ContainsMultiple, std::move(s),
                        {"Customer", "Complaints"}),
-        b.schema);
+        b.schema,
+        cudaStreamDefault);
     EXPECT_EQ(p.type(),
               gamax::select::PredicateNodeType::STRING_CONTAINS_MULTIPLE);
     EXPECT_EQ(p.string_cid(), 1);

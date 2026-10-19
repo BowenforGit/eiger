@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
 #include <cuda_runtime.h>
 #include <vector>
@@ -61,9 +64,9 @@ TEST_P(GroupbyMultiKeysTest, TwoIntKeyColumns_Sum) {
     int32_t key2[] = {10, 20, 10, 20, 10};
     int32_t vals[] = {100, 200, 300, 400, 500};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -120,10 +123,10 @@ TEST_P(GroupbyMultiKeysTest, ThreeIntKeyColumns_Sum) {
     int32_t key3[] = {1, 2, 1, 2, 1, 2};
     int32_t vals[] = {10, 20, 30, 40, 50, 60};
     
-    auto key1_col = gamax::make_column_from_host(key1, 6);
-    auto key2_col = gamax::make_column_from_host(key2, 6);
-    auto key3_col = gamax::make_column_from_host(key3, 6);
-    auto val_col = gamax::make_column_from_host(vals, 6);
+    auto key1_col = gamax::make_column_from_host(key1, 6, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 6, cudaStreamDefault);
+    auto key3_col = gamax::make_column_from_host(key3, 6, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 6, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -181,9 +184,9 @@ TEST_P(GroupbyMultiKeysTest, TwoIntKeyColumns_Max) {
     int32_t key2[] = {1, 1, 2, 1, 2, 2};
     int32_t vals[] = {10, 50, 30, 40, 20, 60};
     
-    auto key1_col = gamax::make_column_from_host(key1, 6);
-    auto key2_col = gamax::make_column_from_host(key2, 6);
-    auto val_col = gamax::make_column_from_host(vals, 6);
+    auto key1_col = gamax::make_column_from_host(key1, 6, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 6, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 6, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -235,9 +238,9 @@ TEST_P(GroupbyMultiKeysTest, MixedTypeKeys_Int32AndInt64) {
     int64_t key2[] = {100, 200, 100, 200};
     int32_t vals[] = {10, 20, 30, 40};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -297,10 +300,10 @@ TEST_P(GroupbyMultiKeysTest, TwoKeys_MultipleAggregations) {
     int32_t val1[] = {10, 20, 30, 40, 50};
     int32_t val2[] = {5, 15, 25, 35, 45};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val1_col = gamax::make_column_from_host(val1, 5);
-    auto val2_col = gamax::make_column_from_host(val2, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val1_col = gamax::make_column_from_host(val1, 5, cudaStreamDefault);
+    auto val2_col = gamax::make_column_from_host(val2, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -352,9 +355,9 @@ TEST_P(GroupbyMultiKeysTest, SingleGroup_AllSameKeys) {
     int32_t key2[] = {100, 100, 100, 100, 100};
     int32_t vals[] = {10, 20, 30, 40, 50};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -395,9 +398,9 @@ TEST_P(GroupbyMultiKeysTest, AllUniqueKeys_EachRowIsGroup) {
     int32_t key2[] = {10, 20, 30, 40, 50};
     int32_t vals[] = {100, 200, 300, 400, 500};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -447,9 +450,9 @@ TEST_P(GroupbyMultiKeysTest, NegativeKeyValues) {
     int32_t key2[] = {-10, 10, -10, 10};
     int32_t vals[] = {100, 200, 300, 400};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -497,9 +500,9 @@ TEST_P(GroupbyMultiKeysTest, FirstKeyMatchesSecondDiffers) {
     int32_t key2[] = {1, 2, 3, 1, 2, 3};
     int32_t vals[] = {10, 20, 30, 40, 50, 60};
     
-    auto key1_col = gamax::make_column_from_host(key1, 6);
-    auto key2_col = gamax::make_column_from_host(key2, 6);
-    auto val_col = gamax::make_column_from_host(vals, 6);
+    auto key1_col = gamax::make_column_from_host(key1, 6, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 6, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 6, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -552,9 +555,12 @@ TEST_P(GroupbyMultiKeysTest, LargeNumberOfGroups) {
         val_data[i] = 1;        // All ones for easy sum verification
     }
     
-    auto key1_col = gamax::make_column_from_host(key1_data.data(), N);
-    auto key2_col = gamax::make_column_from_host(key2_data.data(), N);
-    auto val_col = gamax::make_column_from_host(val_data.data(), N);
+    auto key1_col = gamax::make_column_from_host(
+        key1_data.data(), N, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(
+        key2_data.data(), N, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(
+        val_data.data(), N, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -613,9 +619,9 @@ TEST_P(GroupbyMultiKeysTest, TwoKeys_SumAndMaxOnSameColumn) {
     int32_t key2[] = {1, 1, 2, 1, 1};
     int32_t vals[] = {10, 30, 20, 50, 40};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -665,9 +671,9 @@ TEST_P(GroupbyMultiKeysTest, FloatValues_IntegerKeys) {
     int32_t key2[] = {1, 2, 1, 2};
     float vals[] = {1.5f, 2.5f, 3.5f, 4.5f};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -718,9 +724,9 @@ TEST_P(GroupbyMultiKeysTest, DoubleValues_Max) {
     int32_t key2[] = {1, 1, 2, 1, 2, 2};
     double vals[] = {1.1, 3.3, 2.2, 5.5, 4.4, 6.6};
     
-    auto key1_col = gamax::make_column_from_host(key1, 6);
-    auto key2_col = gamax::make_column_from_host(key2, 6);
-    auto val_col = gamax::make_column_from_host(vals, 6);
+    auto key1_col = gamax::make_column_from_host(key1, 6, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 6, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 6, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -778,9 +784,9 @@ TEST_P(GroupbyMultiKeysTest, TwoKeys_BasicAvg) {
     int32_t key2[] = {10, 10, 20, 20, 10};
     int32_t vals[] = {10, 20, 30, 40, 30};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -840,9 +846,9 @@ TEST_P(GroupbyMultiKeysTest, TwoKeys_AvgAndSumSameColumn) {
     int32_t key2[] = {1, 1, 2, 2};
     int32_t vals[] = {10, 30, 20, 40};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -901,9 +907,9 @@ TEST_P(GroupbyMultiKeysTest, TwoKeys_AvgBeforeSumSameColumn) {
     int32_t key2[] = {1, 1, 2, 2};
     int32_t vals[] = {10, 30, 20, 40};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -969,10 +975,10 @@ TEST_P(GroupbyMultiKeysTest, TwoKeys_MultipleAvgDifferentColumns) {
     int32_t val1[] = {10, 20, 30, 40};
     int32_t val2[] = {100, 200, 300, 400};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val1_col = gamax::make_column_from_host(val1, 4);
-    auto val2_col = gamax::make_column_from_host(val2, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val1_col = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto val2_col = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -1032,9 +1038,9 @@ TEST_P(GroupbyMultiKeysTest, TwoKeys_MultipleAvgSameColumn) {
     int32_t key2[] = {1, 1, 2, 2};
     int32_t vals[] = {10, 30, 20, 40};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -1089,9 +1095,9 @@ TEST_P(GroupbyMultiKeysTest, TwoKeys_AvgAndMaxSameColumn) {
     int32_t key2[] = {1, 1, 1, 2, 2};
     int32_t vals[] = {10, 20, 30, 40, 50};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -1151,9 +1157,9 @@ TEST_P(GroupbyMultiKeysTest, TwoKeys_AvgSumMaxSameColumn) {
     int32_t key2[] = {1, 1, 2, 2};
     int32_t vals[] = {10, 30, 20, 60};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -1214,9 +1220,9 @@ TEST_P(GroupbyMultiKeysTest, TwoKeys_AvgFloatValues) {
     int32_t key2[] = {1, 1, 2, 2};
     float vals[] = {1.5f, 2.5f, 3.5f, 4.5f};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -1266,9 +1272,9 @@ TEST_P(GroupbyMultiKeysTest, SingleGroup_Avg) {
     int32_t key2[] = {10, 10, 10, 10, 10};
     int32_t vals[] = {10, 20, 30, 40, 50};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -1306,9 +1312,9 @@ TEST_P(GroupbyMultiKeysTest, AllUniqueKeys_Avg) {
     int32_t key2[] = {10, 20, 30, 40, 50};
     int32_t vals[] = {100, 200, 300, 400, 500};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -1355,9 +1361,9 @@ TEST_P(GroupbyMultiKeysTest, TwoKeys_AvgWithCountHint) {
     int32_t key2[] = {1, 1, 2, 2, 2};
     int32_t vals[] = {10, 20, 30, 40, 50};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));
@@ -1415,10 +1421,10 @@ TEST_P(GroupbyMultiKeysTest, TwoKeys_ComplexMixedAggregations) {
     int32_t val1[] = {10, 20, 30, 40};
     int32_t val2[] = {100, 200, 300, 400};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val1_col = gamax::make_column_from_host(val1, 4);
-    auto val2_col = gamax::make_column_from_host(val2, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val1_col = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto val2_col = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> key_columns;
     key_columns.push_back(std::move(key1_col));

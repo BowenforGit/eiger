@@ -1,86 +1,63 @@
-cmake_minimum_required(VERSION 3.23.1 FATAL_ERROR)
+# Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# See LICENSE and THIRD_PARTY_NOTICES.md for license information.
 
-project(GPUOPS LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.30.4 FATAL_ERROR)
+
+# Bootstrap one RAPIDS 26.06 dependency table before any dependency is
+# configured.  RMM 26.06 is built against this exact cohort (notably CCCL and
+# cuCollections), so allowing a nested project to initialize RAPIDS first can
+# produce an unsupported mixture of versions.
+set(rapids-cmake-version "26.06")
+set(rapids-cmake-tag "v26.06.00")
+set(_gamax_rapids_bootstrap "${CMAKE_CURRENT_BINARY_DIR}/RAPIDS.cmake")
+file(
+  DOWNLOAD
+  https://raw.githubusercontent.com/rapidsai/rapids-cmake/v26.06.00/RAPIDS.cmake
+  "${_gamax_rapids_bootstrap}"
+  EXPECTED_HASH SHA256=f21479e8ba5af680d9302a8d1f5cba4e0505072a1d8b4c5482a15ae7ecdaefd3
+  TLS_VERIFY ON
+)
+include("${_gamax_rapids_bootstrap}")
+include(rapids-cpm)
+rapids_cpm_init()
+
+project(GPUOPS LANGUAGES CXX CUDA)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(USE_NVIDIA "Use CUDA. [Default=ON]" OFF)
-option(USE_ROCM "Use ROCm. [Default=OFF]" OFF)
 option(BUILD_TEST "Build tests. [Default=ON]" ON)
 option(BUILD_BENCHMARK "Build benchmarks. [Default=ON]" ON)
 option(BUILD_TPCH "Build TPC-H query runner (requires Arrow and Parquet). [Default=OFF]" OFF)
-# `USE_DEFAULT_MEMALLOC` was a compile-time switch between
-# UserSpaceMM and CudaMM. Replaced by the runtime function
-# `use_cuda_mm()` (declared in `memory/mem_manager.hpp`); debug
-# binaries call it at startup without rebuilding the library.
+option(BUILD_ALPS "Build ALPS multi-GPU component (requires NCCL + MPI). [Default=OFF]" OFF)
 
+# ALPS ships a FindNCCL module and registers ctest tests from
+# src/cuda/alps (a sibling of src/cuda/tests), so its module path must be
+# discoverable and testing must be enabled at the top level for ctest to
+# find them.
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+if(BUILD_TEST OR BUILD_ALPS)
+  enable_testing()
+endif()
 if (NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
 MESSAGE(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
-include(CheckLanguage)
-check_language(CUDA)
-if(CMAKE_CUDA_COMPILER)
-    set(USE_NVIDIA ON)
-    MESSAGE(STATUS "CUDA is enabled.")
-    enable_language(CUDA)
-    set(SubDirName "cuda")
-    set(LangGPU "CUDA")
-else()
-    check_language(HIP)
-    if(CMAKE_HIP_COMPILER)
-        set(USE_ROCM ON)
-        MESSAGE(STATUS "ROCm is enabled.")
-        enable_language(HIP)
-        set(SubDirName "hip")
-        set(LangGPU "HIP")
-    else()
-        MESSAGE(FATAL_ERROR "Neither CUDA nor ROCm is enabled.")
-    endif()
-endif()
+set(SubDirName "cuda")
+message(STATUS "CUDA is enabled (the ROCm/hipify build path is no longer supported).")
 
 add_library(common INTERFACE)
 
-if(USE_ROCM)
-    target_compile_features(common INTERFACE cxx_std_17 hip_std_17)
-else(USE_NVIDIA)
-    target_compile_features(common INTERFACE cxx_std_17 cuda_std_17)
-endif()
-
-# manually set the include path for ROCm platform
-# so that find_package(OpenMP) can find the OpenMP headers
-if(USE_ROCM)
-    set(OpenMP_CXX_INCLUDE_DIR "/usr/lib/gcc/x86_64-linux-gnu/11/include")
-endif()
+target_compile_features(common INTERFACE cxx_std_17 cuda_std_17)
 
 find_package(OpenMP REQUIRED)
+find_package(CUDAToolkit REQUIRED)
 MESSAGE(STATUS "OpenMP_CXX_LIBRARIES: ${OpenMP_CXX_LIBRARIES}")
 MESSAGE(STATUS "OpenMP_CXX_INCLUDE_DIRS: ${OpenMP_CXX_INCLUDE_DIRS}")
 MESSAGE(STATUS "OpenMP_CXX_FLAGS: ${OpenMP_CXX_FLAGS}")
 
-if(USE_ROCM)
-    set(HIP_COMPILER_FLAGS "")
-    list(APPEND HIP_COMPILER_FLAGS -O3)
-    list(APPEND HIP_COMPILER_FLAGS -Wno-unused-result -Wno-non-c-typedef-for-linkage -Wno-pass-failed)
-    target_include_directories(
-        common
-        INTERFACE
-        ${OpenMP_CXX_INCLUDE_DIRS}
-    )
-    target_compile_options(
-        common
-        INTERFACE
-        $<$<COMPILE_LANGUAGE:HIP>:${HIP_COMPILER_FLAGS}>
-    )
-    target_compile_definitions(
-        common
-        INTERFACE 
-        $<$<COMPILE_LANGUAGE:HIP>:ROCm_${CMAKE_HIP_ARCHITECTURES}>
-    )
-else(USE_NVIDIA)
-    message(STATUS "CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
+message(STATUS "CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
     
     # no need to set the -gencode flag for because cmake will automatically add it based on CMAKE_CUDA_ARCHITECTURES
     # no need to add -fopenmp because it is automatically added by cmake when linking to OpenMP::OpenMP_CXX
@@ -106,7 +83,6 @@ else(USE_NVIDIA)
         INTERFACE 
         $<$<COMPILE_LANGUAGE:CUDA>:SM${CMAKE_CUDA_ARCHITECTURES}0>
     )
-endif()
 
 target_include_directories(
     common 
@@ -120,30 +96,7 @@ target_compile_definitions(
     $<$<CONFIG:Debug>:DEBUG>
 )
 
-# (USE_DEFAULT_MEMALLOC compile-time switch retired; see
-# memory/mem_manager.hpp::use_cuda_mm() for the runtime equivalent.)
-
-# download CPM.cmake
-file(
-  DOWNLOAD
-  https://github.com/cpm-cmake/CPM.cmake/releases/download/v0.38.3/CPM.cmake
-  ${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake
-  EXPECTED_HASH SHA256=cc155ce02e7945e7b8967ddfaff0b050e958a723ef7aad3766d368940cb15494
-)
-include(${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake)
-
 # Use a shared CPM source cache so dependencies are not re-downloaded across build directories.
 set(CPM_SOURCE_CACHE "$ENV{HOME}/.cache/CPM" CACHE PATH "CPM shared source cache")
-
-# hipify the code
-if(USE_ROCM)
-    execute_process(
-        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/build_amd.py
-        RESULT_VARIABLE hipify_return_value
-    )
-    if (NOT hipify_return_value EQUAL 0)
-        message(FATAL_ERROR "Failed to hipify files!")
-    endif()
-endif()
 
 add_subdirectory(src/${SubDirName})

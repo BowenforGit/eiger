@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 /**
  * @file gather_nvbench.cu
  * @brief NVBench benchmark for gamax::util::device::gather function.
@@ -43,9 +46,9 @@ template <typename ValueT>
 std::unique_ptr<gamax::column> simple_gather(
     gamax::column_view gather_map,
     gamax::column_view input,
-    cudaStream_t stream = cudaStreamDefault) {
+    cudaStream_t stream) {
     const gamax::size_type n = gather_map.size();
-    auto output = std::make_unique<gamax::column>(input.type(), n);
+    auto output = std::make_unique<gamax::column>(input.type(), n, stream);
 
     constexpr int block_size = 256;
     const int grid_size = (n + block_size - 1) / block_size;
@@ -66,7 +69,7 @@ std::unique_ptr<gamax::column> simple_gather(
 template<typename ValueT>
 void bench_gather(nvbench::state& state, nvbench::type_list<ValueT>) {
     // Memory cleanup to ensure consistent state
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     const gamax::size_type num_inputs = state.get_int64("num_inputs");
     const gamax::size_type gather_map_size = state.get_int64("gather_map_size");
@@ -82,14 +85,15 @@ void bench_gather(nvbench::state& state, nvbench::type_list<ValueT>) {
     // Generate input column with uniformly distributed values
     auto input_type = gamax::data_type(gamax::type_to_id<ValueT>());
     auto input_table = gamax::datagen::device::pk_uniform_id(
-        input_type, num_inputs, 1, seed);
+        input_type, num_inputs, 1, seed, cudaStreamDefault);
     auto input_col = input_table->get_column(0).view();
 
     // Generate shuffled gather map using fk_uniform_id
     // This creates indices in [0, num_inputs) with uniform distribution and shuffling
     auto gather_map_type = gamax::data_type(gamax::type_to_id<gamax::size_type>());
     auto gather_map_table = gamax::datagen::device::fk_uniform_id(
-        gather_map_type, num_inputs, gather_map_size, 1, 1.0, seed + 1);
+        gather_map_type, num_inputs, gather_map_size, 1, 1.0, seed + 1,
+        cudaStreamDefault);
     auto gather_map_col = gather_map_table->get_column(0).view();
 
     cudaDeviceSynchronize();

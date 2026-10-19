@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <cuda_runtime_api.h>
@@ -17,7 +20,7 @@ struct string_op_options {
 column_ptr equal(
     gamax::string_column_view in,
     gamax::string_scalar_view string,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 
@@ -25,14 +28,14 @@ column_ptr equal_bitmask(
     gamax::string_column_view in,
     gamax::string_scalar_view string,
     gamax::column_view const& mask,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 
 column_ptr startswith(
     gamax::string_column_view in,
     gamax::string_scalar_view prefix,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 
@@ -40,14 +43,14 @@ column_ptr startswith_bitmask(
     gamax::string_column_view in,
     gamax::string_scalar_view prefix,
     gamax::column_view const& mask,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 
 column_ptr endswith(
     gamax::string_column_view in,
     gamax::string_scalar_view suffix,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 
@@ -55,14 +58,14 @@ column_ptr endswith_bitmask(
     gamax::string_column_view in,
     gamax::string_scalar_view suffix,
     gamax::column_view const& mask,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 
 column_ptr contains(
     gamax::string_column_view in,
     gamax::string_scalar_view substring,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 
@@ -70,14 +73,14 @@ column_ptr contains_bitmask(
     gamax::string_column_view in,
     gamax::string_scalar_view substring,
     gamax::column_view const& mask,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 
 column_ptr contains_multiple(
     gamax::string_column_view in,
     const std::vector<gamax::string_scalar_view>& patterns,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 
@@ -85,7 +88,7 @@ column_ptr contains_multiple_bitmask(
     gamax::string_column_view in,
     const std::vector<gamax::string_scalar_view>& patterns,
     gamax::column_view const& mask,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 
@@ -97,7 +100,7 @@ column_ptr contains_multiple_bitmask(
 column_ptr in_multiple(
     gamax::string_column_view in,
     const std::vector<gamax::string_scalar_view>& patterns,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 
@@ -105,7 +108,7 @@ column_ptr in_multiple_bitmask(
     gamax::string_column_view in,
     const std::vector<gamax::string_scalar_view>& patterns,
     gamax::column_view const& mask,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 
@@ -118,26 +121,48 @@ string_column_ptr substring(
     gamax::string_column_view in,
     gamax::size_type sql_offset,
     gamax::size_type length,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 column_ptr argsort_strings(
     gamax::string_column_view in,
     gamax::sort_order order,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 
 string_column_ptr sort_strings(
     gamax::string_column_view in,
     gamax::sort_order order,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
+
+// Two-stage string gather for callers that need to batch the host-visible
+// output-size readback across several columns. Planning is fully asynchronous:
+// it gathers per-row lengths and builds Arrow offsets on `stream`. After the
+// caller obtains offsets[map.size()] at a coordinated synchronization point,
+// materialize_gathered_strings allocates and fills the exact character buffer.
+struct string_gather_plan {
+    column_ptr lengths;
+    column_ptr offsets;
+};
+
+string_gather_plan plan_gather_strings(
+    gamax::string_column_view in,
+    gamax::column_view const& gather_map,
+    cudaStream_t stream);
+
+string_column_ptr materialize_gathered_strings(
+    gamax::string_column_view in,
+    gamax::column_view const& gather_map,
+    column_ptr offsets,
+    gamax::size_type total_bytes,
+    cudaStream_t stream);
 
 string_column_ptr gather_strings(
     gamax::string_column_view in,
     gamax::column_view const& gather_map,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_op_options options = {}
 );
 }

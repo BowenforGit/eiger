@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
@@ -18,6 +21,6 @@ namespace gamax {
  */
 std::unique_ptr<column> copy_column(
     column_view const& view,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 } // namespace gamax

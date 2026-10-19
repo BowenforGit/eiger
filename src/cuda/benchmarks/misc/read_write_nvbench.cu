@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 /**
  * @file read_write_nvbench.cu
  * @brief NVBench benchmark for simple read-write memory bandwidth.
@@ -44,7 +47,7 @@ __global__ void read_add_write_kernel(const T* __restrict__ input,
 template<typename ValueT>
 void bench_read_write(nvbench::state& state, nvbench::type_list<ValueT>) {
     // Memory cleanup to ensure consistent state
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     const gamax::size_type num_items = state.get_int64("num_items");
     constexpr int seed = 42;
@@ -52,11 +55,11 @@ void bench_read_write(nvbench::state& state, nvbench::type_list<ValueT>) {
     // Generate input column with random values
     auto input_type = gamax::data_type(gamax::type_to_id<ValueT>());
     auto input_table = gamax::datagen::device::fk_uniform_id(
-        input_type, num_items, num_items, 1, 1.0, seed);
+        input_type, num_items, num_items, 1, 1.0, seed, cudaStreamDefault);
     auto input_col = input_table->get_column(0).view();
 
     // Allocate output column
-    auto output_col = gamax::make_column<ValueT>(num_items);
+    auto output_col = gamax::make_column<ValueT>(num_items, cudaStreamDefault);
 
     cudaDeviceSynchronize();
 

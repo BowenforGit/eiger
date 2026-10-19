@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <iostream>
 #include <gtest/gtest.h>
 #include <vector>
@@ -19,7 +22,7 @@ namespace {
         std::vector<std::unique_ptr<gamax::column>> cols;
         for(int i = 0; i < ncols; i++) {
             int val[] = {i, i+1, i+2, i+3};
-            auto col = gamax::make_column_from_host(val, 4);
+            auto col = gamax::make_column_from_host(val, 4, cudaStreamDefault);
             cols.push_back(std::move(col));
         }
         

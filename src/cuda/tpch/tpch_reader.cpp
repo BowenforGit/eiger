@@ -1,5 +1,9 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "tpch/tpch.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
@@ -11,12 +15,14 @@
 
 #include <arrow/api.h>
 #include <arrow/io/file.h>
+#include <arrow/util/thread_pool.h>
 #include <parquet/arrow/reader.h>
 #include <parquet/properties.h>
 
 #include "memory/column.hpp"
 #include "memory/table.hpp"
 #include "string/string_column.hpp"
+#include "tpch/tpch_layout.hpp"
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
 
@@ -284,7 +290,7 @@ std::unique_ptr<gamax::column> column_from_pinned_cache(
     const PinnedColumnData& cache,
     cudaStream_t stream)
 {
-    gamax::device_buffer buf(cache.byte_size, false, stream);
+    gamax::device_buffer buf(cache.byte_size, stream);
     cudaMemcpyAsync(buf.data(), cache.pinned_ptr, cache.byte_size,
                     cudaMemcpyHostToDevice, stream);
     return std::make_unique<gamax::column>(cache.type, cache.num_rows, std::move(buf));
@@ -432,13 +438,13 @@ std::unique_ptr<gamax::column> string_column_from_pinned_cache(
     cudaStream_t stream)
 {
     // Offsets → device meta buffer
-    gamax::device_buffer meta_buf(cache.offsets_byte_size, false, stream);
+    gamax::device_buffer meta_buf(cache.offsets_byte_size, stream);
     cudaMemcpyAsync(meta_buf.data(), cache.pinned_offsets, cache.offsets_byte_size,
                     cudaMemcpyHostToDevice, stream);
 
     // Data → device data buffer
     gamax::device_buffer data_buf(
-        cache.data_byte_size > 0 ? cache.data_byte_size : 1, false, stream);
+        cache.data_byte_size > 0 ? cache.data_byte_size : 1, stream);
     if (cache.data_byte_size > 0) {
         cudaMemcpyAsync(data_buf.data(), cache.pinned_data, cache.data_byte_size,
                         cudaMemcpyHostToDevice, stream);
@@ -447,6 +453,24 @@ std::unique_ptr<gamax::column> string_column_from_pinned_cache(
     return std::make_unique<gamax::string_column>(
         std::move(data_buf), std::move(meta_buf),
         cache.num_rows, gamax::string_impl_id::ARROW_STRING);
+}
+
+std::unique_ptr<gamax::column> make_empty_column_for_arrow_type(
+    const std::shared_ptr<arrow::DataType>& arrow_type,
+    cudaStream_t stream)
+{
+    const auto target_type = arrow_type_to_gamax(arrow_type);
+    if (target_type == gamax::type_id::STRING) {
+        int64_t zero = 0;
+        gamax::device_buffer meta_buf(sizeof(int64_t), stream);
+        cudaMemcpyAsync(meta_buf.data(), &zero, sizeof(int64_t),
+                        cudaMemcpyHostToDevice, stream);
+        gamax::device_buffer data_buf(1, stream);
+        return std::make_unique<gamax::string_column>(
+            std::move(data_buf), std::move(meta_buf),
+            gamax::size_type{0}, gamax::string_impl_id::ARROW_STRING);
+    }
+    return gamax::make_column(gamax::data_type{target_type}, 0, stream);
 }
 
 // ---------------------------------------------------------------------------
@@ -535,21 +559,69 @@ std::string get_tpch_data_dir(gamax::size_type scale_factor) {
 // columns not yet cached.
 // ---------------------------------------------------------------------------
 struct TpchTableReader::Impl {
-    struct TableHandle {
+    struct FileHandle {
+        std::string path;
         std::unique_ptr<parquet::arrow::FileReader> reader;
+    };
+    struct TableHandle {
+        std::vector<FileHandle> files;
         std::shared_ptr<arrow::Schema> schema;
+        bool file_partitioned {false};
     };
     std::unordered_map<std::string, TableHandle> table_handles;
     std::unordered_map<std::string, PinnedColumnData> pinned_column_cache;
     std::unordered_map<std::string, PinnedStringColumnData> pinned_string_column_cache;
 };
 
+std::string source_cache_suffix(
+    const tpch_params& params, SourceReadPolicy read_policy)
+{
+    std::string suffix = "#policy=";
+    suffix += source_read_policy_name(read_policy);
+    if (!params.row_group_sharded() ||
+        read_policy == SourceReadPolicy::Replicated) {
+        return suffix;
+    }
+    return suffix + "#shard=" + std::to_string(params.shard_rank) +
+           "/" + std::to_string(params.shard_count) +
+           "#files=" + file_shard_strategy_name(params.file_shard_strategy);
+}
+
+std::vector<int> assigned_row_groups(
+    const parquet::arrow::FileReader& reader,
+    const tpch_params& params,
+    SourceReadPolicy read_policy)
+{
+    std::vector<int> groups;
+    if (!params.row_group_sharded() ||
+        read_policy == SourceReadPolicy::Replicated) {
+        return groups;
+    }
+    const int n = reader.num_row_groups();
+    for (int i = 0; i < n; ++i) {
+        if ((i % params.shard_count) == params.shard_rank) {
+            groups.push_back(i);
+        }
+    }
+    return groups;
+}
+
 // ---------------------------------------------------------------------------
 // TpchTableReader constructors / destructor / move
 // ---------------------------------------------------------------------------
 TpchTableReader::TpchTableReader(const tpch_params& params)
     : params_(params)
-    , impl_(std::make_unique<Impl>()) {}
+    , impl_(std::make_unique<Impl>())
+{
+    auto status = arrow::SetCpuThreadPoolCapacity(
+        params_.parquet_decode_threads);
+    if (!status.ok()) {
+        throw std::runtime_error(
+            "Failed to set Arrow CPU thread-pool capacity to " +
+            std::to_string(params_.parquet_decode_threads) + ": " +
+            status.ToString());
+    }
+}
 
 TpchTableReader::~TpchTableReader() = default;
 
@@ -572,25 +644,49 @@ std::unique_ptr<gamax::table> TpchTableReader::load(
     const std::string& table_name,
     std::vector<std::string> column_names)
 {
+    const auto read_policy = params_.source_read_policy(table_name);
+
     // Lazily open + cache the Parquet reader for this table.
     auto handle_it = impl_->table_handles.find(table_name);
     if (handle_it == impl_->table_handles.end()) {
         std::string data_dir = get_tpch_data_dir(params_.scale_factor);
-        std::string file_path = data_dir + "/" + table_name + ".parquet";
-        std::cout << "[TpchTableReader] Opening Parquet file: " << file_path << std::endl;
-        auto op = open_parquet_for_projection(file_path);
-        Impl::TableHandle h{std::move(op.reader), std::move(op.schema)};
+        auto resolved = resolve_tpch_files(
+            data_dir, table_name, static_cast<int>(params_.scale_factor),
+            params_.shard_rank, params_.shard_count, read_policy,
+            params_.file_shard_strategy, params_.allow_legacy_multifile);
+        Impl::TableHandle h;
+        h.file_partitioned = resolved.file_partitioned;
+
+        auto schema_open = open_parquet_for_projection(resolved.schema_path);
+        h.schema = std::move(schema_open.schema);
+
+        for (const auto& file_path : resolved.paths) {
+            std::cout << "[TpchTableReader] Opening Parquet file: "
+                      << file_path << " ("
+                      << source_read_policy_name(read_policy) << ")" << std::endl;
+            auto op = open_parquet_for_projection(file_path);
+            if (!h.schema->Equals(*op.schema, /*check_metadata=*/true)) {
+                throw std::runtime_error(
+                    "Parquet schema mismatch for table '" + table_name +
+                    "' file '" + file_path + "': expected " +
+                    h.schema->ToString() + ", got " + op.schema->ToString());
+            }
+            h.files.push_back(Impl::FileHandle{
+                file_path, std::move(op.reader)});
+        }
         handle_it = impl_->table_handles.emplace(table_name, std::move(h)).first;
     }
     const auto& handle = handle_it->second;
 
     std::vector<std::unique_ptr<gamax::column>> gpu_columns(column_names.size());
+    const std::string shard_suffix =
+        source_cache_suffix(params_, read_policy);
 
     // Partition: cache hits vs. missing (dedup'd by column name, since
     // a caller could legitimately request the same column twice).
     std::unordered_map<std::string, std::vector<size_t>> missing;
     for (size_t i = 0; i < column_names.size(); ++i) {
-        std::string cache_key = table_name + "." + column_names[i];
+        std::string cache_key = table_name + "." + column_names[i] + shard_suffix;
         auto pinned_it = impl_->pinned_column_cache.find(cache_key);
         if (pinned_it != impl_->pinned_column_cache.end()) {
             gpu_columns[i] = column_from_pinned_cache(pinned_it->second, params_.stream);
@@ -628,17 +724,96 @@ std::unique_ptr<gamax::table> TpchTableReader::load(
             ordered_missing.push_back(name);
         }
 
+        auto make_empty_result = [&]() {
+            for (size_t mi = 0; mi < ordered_missing.size(); ++mi) {
+                const std::string& name = ordered_missing[mi];
+                const std::string cache_key =
+                    table_name + "." + name + shard_suffix;
+                auto arrow_type = handle.schema
+                    ->field(handle.schema->GetFieldIndex(name))->type();
+                for (size_t pos : missing.at(name)) {
+                    gpu_columns[pos] =
+                        make_empty_column_for_arrow_type(arrow_type, params_.stream);
+                }
+                if (arrow_type->id() == arrow::Type::STRING ||
+                    arrow_type->id() == arrow::Type::LARGE_STRING) {
+                    int64_t zero = 0;
+                    void* pinned_offsets = nullptr;
+                    cudaMallocHost(&pinned_offsets, sizeof(int64_t));
+                    std::memcpy(pinned_offsets, &zero, sizeof(int64_t));
+                    PinnedStringColumnData str_cache(
+                        pinned_offsets, nullptr, 0, sizeof(int64_t), 0);
+                    impl_->pinned_string_column_cache.emplace(
+                        cache_key, std::move(str_cache));
+                } else {
+                    PinnedColumnData pinned_cache(
+                        nullptr, 0,
+                        gamax::data_type{arrow_type_to_gamax(arrow_type)}, 0);
+                    impl_->pinned_column_cache.emplace(
+                        cache_key, std::move(pinned_cache));
+                }
+            }
+            cudaStreamSynchronize(params_.stream);
+            return gamax::make_table(std::move(gpu_columns));
+        };
+
+        std::vector<std::shared_ptr<arrow::Table>> projected_parts;
+        projected_parts.reserve(handle.files.size());
+        for (const auto& file : handle.files) {
+            std::shared_ptr<arrow::Table> part_projected;
+            if (params_.row_group_sharded() &&
+                read_policy == SourceReadPolicy::Sharded &&
+                !handle.file_partitioned) {
+                std::vector<int> row_groups =
+                    assigned_row_groups(*file.reader, params_, read_policy);
+                if (row_groups.empty()) {
+                    continue;
+                }
+                auto projected_status = file.reader->ReadRowGroups(
+                    row_groups, col_indices, &part_projected);
+                if (!projected_status.ok()) {
+                    throw std::runtime_error(
+                        "Parquet ReadRowGroups (projected) failed for table '" +
+                        table_name + "' file '" + file.path + "': " +
+                        projected_status.ToString());
+                }
+            } else {
+                auto projected_status =
+                    file.reader->ReadTable(col_indices, &part_projected);
+                if (!projected_status.ok()) {
+                    throw std::runtime_error(
+                        "Parquet ReadTable (projected) failed for table '" +
+                        table_name + "' file '" + file.path + "': " +
+                        projected_status.ToString());
+                }
+            }
+            projected_parts.push_back(std::move(part_projected));
+        }
+
+        if (projected_parts.empty()) {
+            return make_empty_result();
+        }
+
         std::shared_ptr<arrow::Table> projected;
-        auto st = handle.reader->ReadTable(col_indices, &projected);
-        if (!st.ok()) {
-            throw std::runtime_error(
-                "Parquet ReadTable (projected) failed for table '" +
-                table_name + "': " + st.ToString());
+        if (projected_parts.size() == 1) {
+            projected = projected_parts.front();
+        } else {
+            auto maybe_projected = arrow::ConcatenateTables(projected_parts);
+            if (!maybe_projected.ok()) {
+                throw std::runtime_error(
+                    "Arrow ConcatenateTables failed for table '" + table_name +
+                    "': " + maybe_projected.status().ToString());
+            }
+            projected = *maybe_projected;
+        }
+
+        if (projected->num_rows() == 0) {
+            return make_empty_result();
         }
 
         for (size_t mi = 0; mi < ordered_missing.size(); ++mi) {
             const std::string& name = ordered_missing[mi];
-            const std::string cache_key = table_name + "." + name;
+            const std::string cache_key = table_name + "." + name + shard_suffix;
             auto chunked = projected->column(static_cast<int>(mi));
             auto arrow_type = projected->schema()->field(static_cast<int>(mi))->type();
             const auto& positions = missing.at(name);

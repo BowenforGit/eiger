@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "tpch/ir_source_resolver.hpp"
 
 #include <stdexcept>
@@ -39,8 +42,7 @@ gamax::table_view IrSourceResolver::operator()(
 
     // TpchTableReader::load returns columns in the requested order and
     // reuses its pinned per-column cache across calls, so two Scans of
-    // the same table with different subsets only pay the parquet read
-    // once and the H2D per distinct column once.
+    // the same table with different subsets only pay the parquet read once.
     auto tbl = _reader->load(table_name, columns);
 
     auto ins = _cache.emplace(std::move(key), std::move(tbl));

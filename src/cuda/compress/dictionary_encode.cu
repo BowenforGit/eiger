@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "compress/dictionary_encode.hpp"
 
 #include <memory>
@@ -171,7 +174,7 @@ namespace {
             gamax::size_type constexpr empty_key_sentinel = gamax::sentinel<gamax::size_type>();
             
             // Get allocator for cuco
-            auto cuco_allocator = *get_thrust_allocator<gamax::size_type>(stream);
+            auto cuco_allocator = gamax::rmm_allocator_handle<gamax::size_type>{stream};
             
             // Create custom equality and hash functors
             auto data_ptr = column.data<T>();
@@ -186,19 +189,20 @@ namespace {
                 cuco::linear_probing<1, key_hasher<T>>{hasher},
                 cuco::thread_scope_device,
                 cuco::storage<1>{},
-                cuco_allocator,
+                cuco_allocator.get(),
                 stream
             };
             auto set_ref = set.ref(cuco::insert_and_find);
             
             // Sparse encoded IDs array - stores encoded value at representative index
-            auto sparse_encoded_ids = gamax::make_column<EncodedT>(num_items, false);
+            auto sparse_encoded_ids = gamax::make_column<EncodedT>(num_items, stream);
             
             // Group IDs location - stores the representative index for each row
-            auto group_ids_loc = gamax::make_idx_column(num_items, false);
+            auto group_ids_loc = gamax::make_idx_column(num_items, stream);
             
             // Counter for dictionary size
-            auto d_dict_size = gamax::make_idx_column(1, true);
+            auto d_dict_size = gamax::make_idx_column(
+                1, stream, gamax::buffer_init::zero);
 
             // First kernel: build the hash set and assign encoded IDs to representatives
             dictionary_encode_set_kernel<<<num_tb(num_items, 256), 256, 0, stream>>>(
@@ -255,7 +259,7 @@ namespace {
             gamax::size_type constexpr empty_key_sentinel = gamax::sentinel<gamax::size_type>();
             
             // Get allocator for cuco
-            auto cuco_allocator = *get_thrust_allocator<gamax::size_type>(stream);
+            auto cuco_allocator = gamax::rmm_allocator_handle<gamax::size_type>{stream};
             
             // Create custom equality and hash functors
             auto data_ptr = column.data<T>();
@@ -270,16 +274,17 @@ namespace {
                 cuco::linear_probing<1, key_hasher<T>>{hasher},
                 cuco::thread_scope_device,
                 cuco::storage<1>{},
-                cuco_allocator,
+                cuco_allocator.get(),
                 stream
             };
             auto set_ref = set.ref(cuco::insert_and_find);
             
             // Group IDs location - stores the representative index for each row
-            auto group_ids_loc = gamax::make_idx_column(num_items, false);
+            auto group_ids_loc = gamax::make_idx_column(num_items, stream);
             
             // Counter for dictionary size
-            auto d_dict_size = gamax::make_idx_column(1, true);
+            auto d_dict_size = gamax::make_idx_column(
+                1, stream, gamax::buffer_init::zero);
 
             // Step 1: Build the hash set and populate group_ids_loc (no encoding yet)
             dictionary_encode_set_no_encode_kernel<<<num_tb(num_items, 256), 256, 0, stream>>>(
@@ -295,7 +300,7 @@ namespace {
             cudaStreamSynchronize(stream);
 
             // Step 2: Retrieve all unique representative row IDs from the set
-            auto retrieved_row_ids = gamax::make_idx_column(dict_size, false);
+            auto retrieved_row_ids = gamax::make_idx_column(dict_size, stream);
             set.retrieve_all(retrieved_row_ids->template data<gamax::size_type>(), 
                             cuda::stream_ref{stream});
             
@@ -308,13 +313,13 @@ namespace {
             // Step 4: Argsort the unique values to get sorted indices
             auto [sorted_values, argsort_indices] = gamax::sort::argsort(
                 unique_values->view(),
+                stream,
                 0, -1,
                 gamax::sort_order::ASCENDING,
-                nullptr, 0,
-                stream);
+                nullptr, 0);
             
             // Step 5: Scatter ranks into sparse_encoded_ids based on sorted order
-            auto sparse_encoded_ids = gamax::make_column<EncodedT>(num_items, false);
+            auto sparse_encoded_ids = gamax::make_column<EncodedT>(num_items, stream);
             scatter_ranks_kernel<<<num_tb(dict_size, 256), 256, 0, stream>>>(
                 dict_size,
                 retrieved_row_ids->template data<gamax::size_type>(),
@@ -335,11 +340,11 @@ namespace {
 }
 
 std::pair<std::unique_ptr<gamax::column>, gamax::size_type> dictionary_encode(
-    const gamax::column_view column, 
+    const gamax::column_view column,
+    cudaStream_t stream,
     const data_type encode_type,
     const gamax::size_type dictionary_size_hint,
-    const double load_factor,
-    cudaStream_t stream)
+    const double load_factor)
 {
     check_dictionary_encode_solvable(column, encode_type);
 
@@ -354,11 +359,11 @@ std::pair<std::unique_ptr<gamax::column>, gamax::size_type> dictionary_encode(
 }
 
 std::pair<std::unique_ptr<gamax::column>, gamax::size_type> dictionary_encode_with_order(
-    const gamax::column_view column, 
+    const gamax::column_view column,
+    cudaStream_t stream,
     const data_type encode_type,
     const gamax::size_type dictionary_size_hint,
-    const double load_factor,
-    cudaStream_t stream)
+    const double load_factor)
 {
     check_dictionary_encode_solvable(column, encode_type);
 
@@ -373,11 +378,11 @@ std::pair<std::unique_ptr<gamax::column>, gamax::size_type> dictionary_encode_wi
 }
 
 std::pair<std::unique_ptr<gamax::column>, gamax::size_type> dictionary_encode(
-    const gamax::table_view table, 
+    const gamax::table_view table,
+    cudaStream_t stream,
     const data_type encode_type,
     const gamax::size_type dictionary_size_hint,
-    const double load_factor,
-    cudaStream_t stream) 
+    const double load_factor)
 {
     check_dictionary_encode_solvable(table, encode_type);
     return std::make_pair(nullptr, 0);

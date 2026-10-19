@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
 #include <memory>
 #include <vector>
@@ -22,7 +25,8 @@ std::unique_ptr<gamax::table> make_test_table(
 {
     std::vector<std::unique_ptr<gamax::column>> columns;
     for (const auto& col_data : column_data) {
-        auto col = gamax::make_column_from_host(col_data.data(), col_data.size());
+        auto col = gamax::make_column_from_host(
+            col_data.data(), col_data.size(), cudaStreamDefault);
         columns.push_back(std::move(col));
     }
     return gamax::make_table(std::move(columns));
@@ -47,7 +51,8 @@ bool verify_table_result(
     for (gamax::size_type col_idx = 0; col_idx < result.num_columns(); ++col_idx) {
         auto expected_col = gamax::make_column_from_host(
             expected_data[col_idx].data(), 
-            expected_data[col_idx].size());
+            expected_data[col_idx].size(),
+            cudaStreamDefault);
         if (!gamax::test::check_cols_eq(result[col_idx], expected_col->view())) {
             std::cout << "Column " << col_idx << " data mismatch" << std::endl;
             return false;
@@ -74,7 +79,7 @@ void test_select_float_arithmetic() {
         ExprTree::constant(gamax::scalar(5.0f))
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col1 * col2 > 5.0
     // Row 0: 1.5*0.5=0.75 (no), Row 1: 2.5*1.0=2.5 (no), Row 2: 3.5*1.5=5.25 (yes)
@@ -102,7 +107,7 @@ void test_select_double_comparison() {
         ExprTree::column(1, double_type)
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col1 >= col2
     // Row 0: 1.5>=2.0 (no), Row 1: 2.5>=2.5 (yes), Row 2: 3.5>=3.0 (yes)
@@ -139,7 +144,7 @@ void test_select_float_complex() {
         )
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where (col1 + col2 > 6.0) AND (col1 < 5.0)
     // Row 0: 1.0+1.5=2.5>6.0 (no), Row 1: 2.0+2.5=4.5>6.0 (no)
@@ -171,7 +176,7 @@ void test_select_double_division() {
         ExprTree::constant(gamax::scalar(5.0))
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col1 / col2 >= 5.0
     // Row 0: 10.0/2.0=5.0 (yes), Row 1: 20.0/4.0=5.0 (yes), Row 2: 30.0/5.0=6.0 (yes)
@@ -201,7 +206,7 @@ void test_select_single_column_high_selectivity() {
     );
 
     // Execute select
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col[0] > 1 (i.e., 2, 3, 4, 5, 6, 7, 8, 9)
     std::vector<std::vector<int>> expected_data = {
@@ -226,7 +231,7 @@ void test_select_single_column_low_selectivity() {
         ExprTree::constant(gamax::scalar(2))
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col[0] < 2 (i.e., 0, 1)
     std::vector<std::vector<int>> expected_data = {
@@ -251,7 +256,7 @@ void test_select_single_column_medium_selectivity() {
         ExprTree::constant(gamax::scalar(5))
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col[0] >= 5 (i.e., 5, 6, 7, 8, 9)
     std::vector<std::vector<int>> expected_data = {
@@ -280,7 +285,7 @@ void test_select_two_columns_high_selectivity() {
         ExprTree::constant(gamax::scalar(5))
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col1 + col2 > 5
     // Row 0: 1+0=1 (no), Row 1: 2+1=3 (no), Row 2: 3+2=5 (no)
@@ -313,7 +318,7 @@ void test_select_two_columns_low_selectivity() {
         ExprTree::constant(gamax::scalar(1))
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col1 - col2 < 1 (i.e., difference is 0 or negative)
     // All differences are 4, so no rows should be selected
@@ -336,7 +341,7 @@ void test_select_two_columns_medium_selectivity() {
         ExprTree::column(1, int_type)
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col1 <= col2
     // Row 0: 1<=4 (yes), Row 1: 5<=3 (no), Row 2: 3<=6 (yes), Row 3: 7<=2 (no)
@@ -372,7 +377,7 @@ void test_select_three_columns() {
         ExprTree::constant(gamax::scalar(20))
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where (col1 + col2) * col3 > 20
     // Row 0: (1+2)*1=3 (no), Row 1: (2+3)*2=10 (no), Row 2: (3+4)*3=21 (yes)
@@ -410,7 +415,7 @@ void test_select_four_columns() {
         )
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col1 + col2 == col3 + col4
     // All rows satisfy this condition
@@ -438,7 +443,7 @@ void test_select_all_rows() {
         ExprTree::constant(gamax::scalar(0))
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: all rows
     ASSERT_TRUE(verify_table_result(result->view(), input_data));
@@ -458,7 +463,7 @@ void test_select_no_rows() {
         ExprTree::constant(gamax::scalar(0))
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: no rows
     ASSERT_EQ(result->num_rows(), 0);
@@ -485,7 +490,7 @@ void test_select_and_predicate() {
         )
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col[0] > 2 AND col[0] < 7 (i.e., 3, 4, 5, 6)
     std::vector<std::vector<int>> expected_data = {
@@ -516,7 +521,7 @@ void test_select_or_predicate() {
         )
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col[0] < 2 OR col[0] > 8 (i.e., 0, 1, 9, 10)
     std::vector<std::vector<int>> expected_data = {
@@ -548,7 +553,7 @@ void test_select_and_two_columns() {
         )
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col1 > 3 AND col2 < 5
     std::vector<std::vector<int>> expected_data = {
@@ -581,7 +586,7 @@ void test_select_or_two_columns() {
         )
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col1 <= 2 OR col2 >= 7
     std::vector<std::vector<int>> expected_data = {
@@ -619,7 +624,7 @@ void test_select_nested_and_or() {
         )
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where (col1 > 2 AND col1 < 6) OR col2 == 9
     std::vector<std::vector<int>> expected_data = {
@@ -657,7 +662,7 @@ void test_select_nested_or_and() {
         )
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where (col1 < 3 OR col1 > 7) AND col2 >= 5
     std::vector<std::vector<int>> expected_data = {
@@ -697,7 +702,7 @@ void test_select_three_way_and() {
         )
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col1 > 2 AND col2 < 8 AND col3 >= 5
     std::vector<std::vector<int>> expected_data = {
@@ -722,7 +727,7 @@ void test_select_with_operators() {
     auto expr = (ExprTree::column(0, int_type) + ExprTree::column(1, int_type)) 
               > ExprTree::constant(gamax::scalar(5));
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col1 + col2 > 5
     // Row 0: 1+2=3 (no), Row 1: 2+3=5 (no), Row 2: 3+4=7 (yes)
@@ -747,7 +752,7 @@ void test_select_with_logical_operators() {
     auto expr = (ExprTree::column(0, int_type) > ExprTree::constant(gamax::scalar(2)))
              && (ExprTree::column(0, int_type) < ExprTree::constant(gamax::scalar(7)));
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col[0] > 2 AND col[0] < 7 (i.e., 3, 4, 5, 6)
     std::vector<std::vector<int>> expected_data = {
@@ -768,7 +773,7 @@ void test_select_with_shift_operators() {
     auto int_type = gamax::data_type(gamax::type_id::INT32);
     auto expr = (ExprTree::column(0, int_type) >> 2) > ExprTree::constant(gamax::scalar(10));
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where col[0] >> 2 > 10
     // Row 0: 8>>2=2 (no), Row 1: 16>>2=4 (no), Row 2: 32>>2=8 (no)
@@ -893,7 +898,7 @@ TEST(SelectFastTest, WithSqrtFunction) {
         ExprTree::constant(gamax::scalar(4.0))
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where sqrt(col[0]) > 4.0
     // sqrt(4)=2 (no), sqrt(9)=3 (no), sqrt(16)=4 (no), sqrt(25)=5 (yes), sqrt(36)=6 (yes)
@@ -918,7 +923,7 @@ TEST(SelectFastTest, WithLogFunction) {
         ExprTree::constant(gamax::scalar(2.0))
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where log(col[0]) >= 2.0
     // log(1)=0 (no), log(e)=1 (no), log(e^2)=2 (yes), log(e^3)=3 (yes), log(e^4)=4 (yes)
@@ -943,7 +948,7 @@ TEST(SelectFastTest, WithExpFunction) {
         ExprTree::constant(gamax::scalar(3.0))
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where exp(col[0]) > 3.0
     // exp(0)=1 (no), exp(0.5)≈1.65 (no), exp(1)≈2.72 (no), exp(1.5)≈4.48 (yes), exp(2)≈7.39 (yes)
@@ -969,7 +974,7 @@ TEST(SelectFastTest, ComplexMathFunctions) {
         ExprTree::column(1, double_type)
     );
 
-    auto result = gamax::select::select(table->view(), expr);
+    auto result = gamax::select::select(table->view(), expr, cudaStreamDefault);
 
     // Expected: rows where sqrt(col[0]) == col[1]
     // All rows should match

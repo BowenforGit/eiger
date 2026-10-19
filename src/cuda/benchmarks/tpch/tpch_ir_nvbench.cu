@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 // IR-driven TPC-H benchmark using NVBench's manual-timer mode.
 //
 // Methodology:
@@ -349,15 +352,9 @@ void bench_tpch_ir(nvbench::state& state) {
         return;
     }
 
-    // Per-cell pool reset. UserSpaceMM never returns blocks to the
-    // driver on its own, so without this every sweep would carry a
-    // monotonically-growing freelist + fragmentation across all 22 ×
-    // {scale} cells. release_all_mem() does NOT touch the reader's
-    // pinned-host cache (it's host memory, not GPU), so column-decode
-    // amortization across cells is preserved. Sample-to-sample within
-    // this cell still benefits from the post-reset freelist warming
-    // up over the first few samples.
-    release_all_mem();
+    // Prewarm outside measured work. Successful cells share the persistent
+    // RMM arena; confirmed OOM recovery is handled at an owning cell boundary.
+    gamax::prewarm_device_memory_resource();
 
     // Build the IR plan once per cell. The plan / catalog / resolver
     // outlive the lambda; NVBench reuses them across all samples of

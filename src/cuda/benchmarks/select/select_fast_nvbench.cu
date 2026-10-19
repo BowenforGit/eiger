@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <nvbench/nvbench.cuh>
 
 #include <string>
@@ -146,7 +149,7 @@ bool check_skip(select_params const& params) {
 
 template<typename KeyT>
 void bench_select_fast(nvbench::state& state, nvbench::type_list<KeyT>) {
-    release_all_mem(); // ensure clean state
+    gamax::prewarm_device_memory_resource(); // ensure clean state
 
     select_params params(state);
 
@@ -163,7 +166,8 @@ void bench_select_fast(nvbench::state& state, nvbench::type_list<KeyT>) {
     
     // Generate table with uniform distribution
     auto key_type = gamax::data_type(gamax::type_to_id<KeyT>());
-    auto table = gamax::datagen::device::pk_uniform_id(key_type, num_items, ncols, 42);
+    auto table = gamax::datagen::device::pk_uniform_id(
+        key_type, num_items, ncols, 42, cudaStreamDefault);
     
     // Build expression tree using the new API
     auto expr_tree = (*expr_builder)(table->view());
@@ -186,7 +190,7 @@ void bench_select_fast(nvbench::state& state, nvbench::type_list<KeyT>) {
     try {
         state.exec(nvbench::exec_tag::sync,
             [&](nvbench::launch& launch) { 
-                auto res = fn(table->view(), expr_tree, options, launch.get_stream()); 
+                auto res = fn(table->view(), expr_tree, launch.get_stream(), options);
                 cudaStreamSynchronize(launch.get_stream());
             });
     }

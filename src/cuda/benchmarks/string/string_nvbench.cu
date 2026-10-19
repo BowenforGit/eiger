@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 // Benchmark for gamax::startswith using nvbench.
 
 #include <nvbench/nvbench.cuh>
@@ -107,7 +110,7 @@ struct bm_params {
 } // namespace
 
 void bench_string_ops(nvbench::state& state) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     bm_params params(state);
     if (params.should_skip(state)) {

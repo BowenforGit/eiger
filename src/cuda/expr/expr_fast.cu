@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <memory>
 #include <vector>
 #include <variant>
@@ -385,7 +388,7 @@ struct project_col_impl_reg {
         cudaStream_t stream)
     {
         gamax::size_type nrows = table.num_rows();
-        auto col = gamax::make_column<T>(nrows);
+        auto col = gamax::make_column<T>(nrows, stream);
 
         auto device_table_ptr = table.device_view(stream);
 
@@ -412,7 +415,7 @@ struct project_col_impl_shared {
         cudaStream_t stream)
     {
         gamax::size_type nrows = table.num_rows();
-        auto col = gamax::make_column<T>(nrows);
+        auto col = gamax::make_column<T>(nrows, stream);
 
         auto device_table_ptr = table.device_view(stream);
 
@@ -733,7 +736,7 @@ struct project_col_impl_reg {
         cudaStream_t stream)
     {
         gamax::size_type nrows = table.num_rows();
-        auto col = gamax::make_column<RetType>(nrows);
+        auto col = gamax::make_column<RetType>(nrows, stream);
 
         auto device_table_ptr = table.device_view(stream);
 
@@ -760,7 +763,7 @@ struct project_col_impl_shared {
         cudaStream_t stream)
     {
         gamax::size_type nrows = table.num_rows();
-        auto col = gamax::make_column<RetType>(nrows);
+        auto col = gamax::make_column<RetType>(nrows, stream);
 
         auto device_table_ptr = table.device_view(stream);
 

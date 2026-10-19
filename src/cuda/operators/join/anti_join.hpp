@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
@@ -19,7 +22,7 @@ std::unique_ptr<gamax::table> anti_join(
     gamax::table_view left,
     gamax::table_view right,
     gamax::join::join_hint const& hint,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 namespace detail {
     // Hash-based anti-join. Reuses the membership-mask helper that
@@ -29,7 +32,7 @@ namespace detail {
         gamax::table_view left,
         gamax::table_view right,
         gamax::join::join_hint const& hint,
-        cudaStream_t stream = cudaStreamDefault);
+        cudaStream_t stream);
 } // namespace detail
 
 } // namespace gamax::join

@@ -1,6 +1,11 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <vector>
 #include <cuda_runtime_api.h>
 
@@ -16,19 +21,10 @@ class table_device_view_base {
 public:
     using column_view = column_view_t;
 
-    table_device_view_base() = delete;
+    table_device_view_base() = default;
     table_device_view_base(table_device_view_base const&) = default; // shallow copy
     table_device_view_base(table_device_view_base&&)      = default;
     ~table_device_view_base() = default;
-    
-    __host__ table_device_view_base(std::vector<column_view_t> const& cols, cudaStream_t stream = cudaStreamDefault) {
-        _num_columns = cols.size();
-        allocate_mem(&_columns, false, _num_columns*sizeof(column_view_t), stream);
-
-        for (gamax::size_type i = 0; i < _num_columns; ++i) {
-            cudaMemcpyAsync(&_columns[i], &cols[i], sizeof(column_view_t), cudaMemcpyHostToDevice, stream);
-        }
-    }
     
     __host__ __device__ table_device_view_base(column_view_t* columns, gamax::size_type num_columns) 
         : _columns(columns)
@@ -62,10 +58,6 @@ public:
         return _columns;
     }
 
-    __host__ void destroy() {
-        release_mem(_columns);
-    }
-
 private:
     column_view_t* _columns {nullptr};
     gamax::size_type _num_columns {0};
@@ -75,9 +67,51 @@ using table_device_view = table_device_view_base<gamax::column_view>;
 using mutable_table_device_view = table_device_view_base<gamax::mutable_column_view>;
 } // namespace experimental
 
+template <typename column_view_t>
+class table_device_view_owner {
+public:
+    using view_type = experimental::table_device_view_base<column_view_t>;
+
+    table_device_view_owner(std::vector<column_view_t> const& columns, cudaStream_t stream)
+        : storage_{columns.size() * sizeof(column_view_t), stream}
+        , view_{static_cast<column_view_t*>(storage_.data()),
+                static_cast<gamax::size_type>(columns.size())}
+    {
+        if (!columns.empty()) {
+            // `columns` is pageable std::vector storage. CUDA stages pageable
+            // H2D input before returning, which is safe but may synchronize the
+            // host and cannot provide true copy/compute overlap.
+            auto const error = cudaMemcpyAsync(
+                storage_.data(), columns.data(), storage_.size(),
+                cudaMemcpyHostToDevice, stream);
+            if (error != cudaSuccess) {
+                throw std::runtime_error(
+                    std::string("table device-view metadata upload failed: ") +
+                    cudaGetErrorString(error));
+            }
+        }
+    }
+
+    table_device_view_owner(table_device_view_owner const&) = delete;
+    table_device_view_owner& operator=(table_device_view_owner const&) = delete;
+    table_device_view_owner(table_device_view_owner&&) = default;
+    table_device_view_owner& operator=(table_device_view_owner&&) = default;
+
+    [[nodiscard]] view_type const& operator*() const noexcept { return view_; }
+    [[nodiscard]] view_type& operator*() noexcept { return view_; }
+    [[nodiscard]] view_type const* operator->() const noexcept { return &view_; }
+    [[nodiscard]] view_type* operator->() noexcept { return &view_; }
+
+private:
+    device_buffer storage_;
+    view_type view_;
+};
+
 template<typename column_view_t>
 class table_view_base {
 public:
+    // Host-side collection of borrowed column views. It owns no column data;
+    // all source columns must outlive asynchronous consumers of this view.
     using column_view = column_view_t;
     using device_view_t = experimental::table_device_view_base<column_view_t>;
 
@@ -112,10 +146,8 @@ public:
         return get_column(column_index);
     }
 
-    auto device_view(cudaStream_t stream = cudaStreamDefault) {
-        auto deleter = [](device_view_t* t) { t->destroy(); };
-        return std::unique_ptr<device_view_t, decltype(deleter)>{
-            new device_view_t(_columns, stream), deleter};
+    auto device_view(cudaStream_t stream) {
+        return table_device_view_owner<column_view_t>{_columns, stream};
     }
 
     auto select_columns(std::vector<size_type> const& column_indices) const {

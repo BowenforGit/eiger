@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
 
 #include <string>
@@ -28,9 +31,7 @@ namespace {
 
 template <typename T>
 gamax::column_ptr mk_col(const std::vector<T>& v) {
-    return gamax::make_column_from_host(
-        const_cast<T*>(v.data()),
-        static_cast<gamax::size_type>(v.size()));
+    return gamax::make_column_from_host(const_cast<T*>(v.data()), static_cast<gamax::size_type>(v.size()), cudaStreamDefault);
 }
 
 bool contains(const std::string& h, const std::string& n) {
@@ -205,7 +206,7 @@ TEST(ExecExecutor, Q6RoundTripThroughExecPlan) {
     //   row 2: 300 * 0.06 = 18.0
     ASSERT_EQ(out->num_rows(), 1);
     ASSERT_EQ(out->num_columns(), 1);
-    auto total = gamax::copy_column_to_host<double>(out->view()[0]);
+    auto total = gamax::copy_column_to_host<double>(out->view()[0], cudaStreamDefault);
     EXPECT_DOUBLE_EQ(total[0], 10.0 + 18.0);
 }
 
@@ -376,7 +377,7 @@ TEST(ExecExecutor, PrunedFilterProducesCorrectResult) {
     auto out = gex::execute(ep, wide_resolver_for(f), ctx);
     ASSERT_EQ(out->num_rows(), 2);
     ASSERT_EQ(out->num_columns(), 1);
-    auto rev = gamax::copy_column_to_host<double>(out->view()[0]);
+    auto rev = gamax::copy_column_to_host<double>(out->view()[0], cudaStreamDefault);
     EXPECT_DOUBLE_EQ(rev[0], 10.0);
     EXPECT_DOUBLE_EQ(rev[1], 18.0);
 }

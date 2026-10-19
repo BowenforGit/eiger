@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <memory>
 #include <vector>
 
@@ -39,7 +42,7 @@ sort_table_fused_keys(
     compress_opts.out_total_bits = &total_bits;
     
     auto fused_keys = gamax::compress::multikey_compress(
-        key_table, sort_orders, compress_opts, stream);
+        key_table, sort_orders, stream, compress_opts);
     
     if (!fused_keys) {
         // Cannot fuse all keys, fall back to default multi-key sort
@@ -49,8 +52,8 @@ sort_table_fused_keys(
     // Argsort the fused keys (always ascending since descending is
     // already handled by bit-flipping inside multikey_compress)
     auto [sorted_fused_keys, sorted_indices] = argsort(
-        fused_keys->view(), 0, total_bits, 
-        gamax::sort_order::ASCENDING, nullptr, 0, stream);
+        fused_keys->view(), stream, 0, total_bits,
+        gamax::sort_order::ASCENDING, nullptr, 0);
     
     // Apply sorted indices to reorder all columns using gather
     return detail::create_sorted_table_from_indices(table, sorted_indices->view(), stream);
@@ -63,8 +66,8 @@ sort_table(
     gamax::table_view const& table,
     std::vector<int> const& sort_keys,
     std::vector<gamax::sort_order> const& sort_orders,
-    sort_table_options const& options,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    sort_table_options const& options)
 {
     if (!options.smart_keys_fusion) {
         // Fallback to default implementation

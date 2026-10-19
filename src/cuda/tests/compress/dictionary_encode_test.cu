@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <iostream>
 #include <omp.h>
 #include <gtest/gtest.h>
@@ -25,7 +28,8 @@ void check_correctness(
     ASSERT_EQ(ndv, dict_size);
 
     auto encoded_data = std::make_unique<EncodedT[]>(n);
-    gamax::copy_column_to_host(encoded_col, encoded_data.get());
+    gamax::copy_column_to_host(
+        encoded_col, encoded_data.get(), cudaStreamDefault);
 
     std::unordered_map<T, EncodedT> dict;
     for(gamax::size_type i = 0; i < n; i++) {
@@ -59,10 +63,12 @@ void test_dictionary_encode(const gamax::size_type n, const gamax::size_type ndv
     }
     knuth_shuffle(data.get(), n);
 
-    auto col = gamax::make_column_from_host(data.get(), n);
+    auto col = gamax::make_column_from_host(data.get(), n, cudaStreamDefault);
     std::cout << "Data generated\n";
 
-    auto [encoded_col, dict_size] = gamax::compress::dictionary_encode(col->view(), gamax::data_type{gamax::type_to_id<T>()}, ndv, 0.25);
+    auto [encoded_col, dict_size] = gamax::compress::dictionary_encode(
+        col->view(), cudaStreamDefault,
+        gamax::data_type{gamax::type_to_id<T>()}, ndv, 0.25);
 
     cudaDeviceSynchronize();
 
@@ -79,11 +85,12 @@ void test_dictionary_encode_typed(const gamax::size_type n, const gamax::size_ty
     }
     knuth_shuffle(data.get(), n);
 
-    auto col = gamax::make_column_from_host(data.get(), n);
+    auto col = gamax::make_column_from_host(data.get(), n, cudaStreamDefault);
     std::cout << "Data generated\n";
 
     auto [encoded_col, dict_size] = gamax::compress::dictionary_encode(
-        col->view(), gamax::data_type{gamax::type_to_id<EncodedT>()}, ndv, 0.25);
+        col->view(), cudaStreamDefault,
+        gamax::data_type{gamax::type_to_id<EncodedT>()}, ndv, 0.25);
 
     cudaDeviceSynchronize();
 
@@ -169,7 +176,8 @@ void check_order_correctness(
     ASSERT_EQ(ndv, dict_size);
 
     auto encoded_data = std::make_unique<EncodedT[]>(n);
-    gamax::copy_column_to_host(encoded_col, encoded_data.get());
+    gamax::copy_column_to_host(
+        encoded_col, encoded_data.get(), cudaStreamDefault);
 
     // Check basic correctness (same value -> same encoding, different value -> different encoding)
     std::unordered_map<T, EncodedT> dict;
@@ -209,11 +217,12 @@ void test_dictionary_encode_with_order(const gamax::size_type n, const gamax::si
     }
     knuth_shuffle(data.get(), n);
 
-    auto col = gamax::make_column_from_host(data.get(), n);
+    auto col = gamax::make_column_from_host(data.get(), n, cudaStreamDefault);
     std::cout << "Data generated\n";
 
     auto [encoded_col, dict_size] = gamax::compress::dictionary_encode_with_order(
-        col->view(), gamax::data_type{gamax::type_to_id<T>()}, ndv, 0.25);
+        col->view(), cudaStreamDefault,
+        gamax::data_type{gamax::type_to_id<T>()}, ndv, 0.25);
 
     cudaDeviceSynchronize();
 
@@ -229,11 +238,12 @@ void test_dictionary_encode_with_order_typed(const gamax::size_type n, const gam
     }
     knuth_shuffle(data.get(), n);
 
-    auto col = gamax::make_column_from_host(data.get(), n);
+    auto col = gamax::make_column_from_host(data.get(), n, cudaStreamDefault);
     std::cout << "Data generated\n";
 
     auto [encoded_col, dict_size] = gamax::compress::dictionary_encode_with_order(
-        col->view(), gamax::data_type{gamax::type_to_id<EncodedT>()}, ndv, 0.25);
+        col->view(), cudaStreamDefault,
+        gamax::data_type{gamax::type_to_id<EncodedT>()}, ndv, 0.25);
 
     cudaDeviceSynchronize();
 

@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "cross_join.hpp"
 
 #include <cuda.h>
@@ -8,8 +11,10 @@
 #include <thrust/transform.h>
 
 #include "memory/column.hpp"
+#include "memory/mem_manager.hpp"
 #include "memory/table.hpp"
 #include "operators/join/materialize.hpp"
+#include "string/string_column.hpp"
 #include "types/data_type.hpp"
 
 namespace gamax::join {
@@ -27,19 +32,20 @@ std::unique_ptr<gamax::column> build_tid_column(
     tid_kind kind,
     cudaStream_t stream)
 {
-    auto col = gamax::make_idx_column(len, /*clear=*/false, stream);
+    auto col = gamax::make_idx_column(len, stream);
     auto* out = col->data<gamax::size_type>();
     auto first = thrust::make_counting_iterator<gamax::size_type>(0);
+    auto policy = gamax::rmm_exec_policy_handle{stream};
     if (kind == tid_kind::quotient) {
         thrust::transform(
-            thrust::cuda::par.on(stream),
+            policy.get(),
             first, first + len, out,
             [divisor] __host__ __device__ (gamax::size_type i) {
                 return i / divisor;
             });
     } else {
         thrust::transform(
-            thrust::cuda::par.on(stream),
+            policy.get(),
             first, first + len, out,
             [divisor] __host__ __device__ (gamax::size_type i) {
                 return i % divisor;
@@ -54,10 +60,15 @@ std::unique_ptr<gamax::table> empty_cross_shape(
     std::vector<gamax::column_ptr> cols;
     cols.reserve(L.num_columns() + R.num_columns());
     auto push_zero_row = [&](gamax::column_view in) {
-        // Match the existing phys::reorder "empty-input" branch: allocate
-        // a 0-row column of the right type rather than gather through a
-        // 0-length map (some gather kernels dislike 0-length inputs).
-        cols.push_back(gamax::make_column(in.type(), 0, false, stream));
+        if (in.type().id() == gamax::type_id::STRING) {
+            static const char empty_data[1] {'\0'};
+            static const int32_t empty_length[1] {0};
+            auto strings = gamax::make_string_column(
+                empty_data, empty_length, 0, stream, gamax::ARROW_STRING);
+            cols.push_back(gamax::column_ptr(strings.release()));
+            return;
+        }
+        cols.push_back(gamax::make_column(in.type(), 0, stream));
     };
     for (int i = 0; i < L.num_columns(); ++i) push_zero_row(L.get_column(i));
     for (int i = 0; i < R.num_columns(); ++i) push_zero_row(R.get_column(i));

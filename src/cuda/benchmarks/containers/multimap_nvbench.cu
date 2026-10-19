@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <nvbench/nvbench.cuh>
 
 #include <string>
@@ -58,7 +61,7 @@ bool check_skip(multimap_params const& params) {
 
 template<typename KeyT>
 void bench_multimap_count(nvbench::state& state, nvbench::type_list<KeyT>) {
-    release_all_mem(); // make sure if a test fails, the following test will not be affected
+    gamax::prewarm_device_memory_resource(); // make sure if a test fails, the following test will not be affected
 
     using value_t = KeyT;
 
@@ -70,17 +73,23 @@ void bench_multimap_count(nvbench::state& state, nvbench::type_list<KeyT>) {
     
     constexpr int ncols = 1;
     auto key_type = gamax::data_type(gamax::type_to_id<KeyT>());
-    auto build = gamax::datagen::device::fk_uniform_id(key_type, params.unique_keys, params.build_num_keys, ncols, 1.0, 42);
-    auto probe = gamax::datagen::device::fk_uniform_id(key_type, params.unique_keys, params.probe_num_keys, ncols, params.hit_ratio, 39);
+    auto build = gamax::datagen::device::fk_uniform_id(
+        key_type, params.unique_keys, params.build_num_keys, ncols, 1.0, 42,
+        cudaStreamDefault);
+    auto probe = gamax::datagen::device::fk_uniform_id(
+        key_type, params.unique_keys, params.probe_num_keys, ncols, params.hit_ratio, 39,
+        cudaStreamDefault);
 
     cudaStream_t stream = 0;
 
-    auto map = gamax::containers::multimap<KeyT, value_t, ThrustAllocator<char>, CG_SIZE>(
+    gamax::rmm_allocator_handle<cuco::pair<KeyT, value_t>> allocator{stream};
+    auto map = gamax::containers::multimap<
+        KeyT, value_t, gamax::rmm_cuco_allocator<cuco::pair<KeyT, value_t>>, CG_SIZE>(
             build->num_rows(),
             params.load_factor,
             gamax::sentinel<KeyT>(),
             gamax::sentinel<value_t>(),
-            *get_thrust_allocator<char>(stream),
+            allocator.get(),
             stream);
     
     map.insert_with_tids(build->get_column(0).view(), stream);

@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "transform.hpp"
 
 #include <thrust/gather.h>
@@ -40,7 +43,9 @@ namespace {
             thrust::device_ptr<const T> input_ptr(input.data<T>());
             thrust::device_ptr<T> output_ptr(output.data<T>());
 
-            thrust::gather(thrust::device.on(stream), gather_map_ptr, gather_map_ptr + N, input_ptr, output_ptr);
+            auto policy = gamax::rmm_exec_policy_handle{stream};
+            thrust::gather(
+                policy.get(), gather_map_ptr, gather_map_ptr + N, input_ptr, output_ptr);
         }
 
         template <typename T, typename GatherMapT,
@@ -65,7 +70,7 @@ namespace {
         {
             thrust::default_random_engine g(seed);
             thrust::shuffle_copy(
-                thrust::cuda::par(*get_thrust_allocator()).on(stream), 
+                gamax::rmm_exec_policy_handle{stream}.get(),
                 input.data<T>(), input.data<T>() + input.size(), 
                 output.data<T>(), g);
         }
@@ -79,10 +84,10 @@ namespace {
             gamax::size_type output_size,
             cudaStream_t stream)
         {
-            auto output = gamax::make_column<T>(output_size);
-            auto d_output_size = gamax::make_column<gamax::size_type>(1);
+            auto output = gamax::make_column<T>(output_size, stream);
+            auto d_output_size = gamax::make_column<gamax::size_type>(1, stream);
 
-            CALL_CUB_FUNC(cub::DeviceSelect::Flagged, 
+            CALL_CUB_FUNC(stream, cub::DeviceSelect::Flagged,
                 input.template data<T>(),
                 mask.template data<bool>(),
                 output->template data<T>(),
@@ -102,7 +107,8 @@ namespace {
         gamax::prefix_sum_options option,
         cudaStream_t stream)
         {
-            const auto& policy = thrust::cuda::par(*get_thrust_allocator()).on(stream);
+            auto policy_owner = gamax::rmm_exec_policy_handle{stream};
+            auto& policy = policy_owner.get();
             auto in_ptr = input.data<T>();
             auto out_ptr = output.data<U>();
             auto n = input.size();
@@ -131,14 +137,14 @@ namespace {
 
             switch(option) {
                 case INCLUSIVE:
-                thrust::inclusive_scan(thrust::cuda::par(*get_thrust_allocator()).on(stream), itr_in, itr_in + n, out_ptr);
+                thrust::inclusive_scan(gamax::rmm_exec_policy_handle{stream}.get(), itr_in, itr_in + n, out_ptr);
                 break;
                 case EXCLUSIVE:
-                thrust::exclusive_scan(thrust::cuda::par(*get_thrust_allocator()).on(stream), itr_in, itr_in + n, out_ptr);
+                thrust::exclusive_scan(gamax::rmm_exec_policy_handle{stream}.get(), itr_in, itr_in + n, out_ptr);
                 break;
                 case INCLUSIVE_PAD_ZERO:
                 cudaMemsetAsync(out_ptr, 0, sizeof(U), stream);
-                thrust::inclusive_scan(thrust::cuda::par(*get_thrust_allocator()).on(stream), itr_in, itr_in + n, out_ptr + 1);
+                thrust::inclusive_scan(gamax::rmm_exec_policy_handle{stream}.get(), itr_in, itr_in + n, out_ptr + 1);
                 break;
             }
         }
@@ -156,7 +162,7 @@ namespace {
                     { return val != static_cast<T>(0) ? static_cast<gamax::size_type>(1) : static_cast<gamax::size_type>(0); });
             
             return thrust::reduce(
-                thrust::cuda::par(*get_thrust_allocator()).on(stream), 
+                gamax::rmm_sync_exec_policy_handle{stream}.get(),
                 itr, 
                 itr + input.size(), 
                 static_cast<gamax::size_type>(0),
@@ -165,22 +171,38 @@ namespace {
     };
 }
 
-    std::unique_ptr<gamax::column> gather(
-        gamax::column_view gather_map, 
-        gamax::column_view input, 
+    void gather_into(
+        gamax::column_view gather_map,
+        gamax::column_view input,
+        gamax::mutable_column_view output,
         cudaStream_t stream)
     {
-        auto output = std::make_unique<gamax::column>(input.type(), gather_map.size());
-        double_type_dispatcher(input.type(), gather_map.type(), gather_impl{}, gather_map, input, output->mutable_view(), stream);
+        if (output.type() != input.type()) {
+            throw std::invalid_argument("gather_into output type differs from input type");
+        }
+        if (output.size() < gather_map.size()) {
+            throw std::invalid_argument("gather_into output is smaller than gather map");
+        }
+        double_type_dispatcher(
+            input.type(), gather_map.type(), gather_impl{}, gather_map, input, output, stream);
+    }
+
+    std::unique_ptr<gamax::column> gather(
+        gamax::column_view gather_map,
+        gamax::column_view input,
+        cudaStream_t stream)
+    {
+        auto output = std::make_unique<gamax::column>(input.type(), gather_map.size(), stream);
+        gather_into(gather_map, input, output->mutable_view(), stream);
         return output;
     }
 
     std::unique_ptr<gamax::column> shuffle(
         gamax::column_view input,
-        const int seed,
-        cudaStream_t stream)
+        cudaStream_t stream,
+        const int seed)
     {
-        auto output = std::make_unique<gamax::column>(input.type(), input.size());
+        auto output = std::make_unique<gamax::column>(input.type(), input.size(), stream);
         type_dispatcher(input.type(), shuffle_impl{}, input, output->mutable_view(), seed, stream);
         return output;
     }
@@ -191,7 +213,7 @@ namespace {
         cudaStream_t stream)
     {
         auto output_size = thrust::reduce(
-            thrust::cuda::par(*get_thrust_allocator()).on(stream), 
+            gamax::rmm_sync_exec_policy_handle{stream}.get(),
             mask.data<bool>(), 
             mask.data<bool>() + mask.size(), 
             0);
@@ -247,14 +269,14 @@ namespace {
 
         // Mixed path: materialise surviving tids once, then gather each column.
         auto seq = gamax::make_sequence<gamax::size_type>(
-            input.num_rows(), 0, 1, stream);
+            input.num_rows(), stream, 0, 1);
         auto compact_tids = compact(seq->view(), mask, stream);
         auto map_view = compact_tids->view();
 
         for(gamax::size_type i = 0; i < input.num_columns(); i++) {
             auto col = input[i];
             if (col.type().id() == gamax::type_id::STRING) {
-                gamax::string_column_view sv(col, gamax::ARROW_STRING, stream);
+                gamax::string_column_view sv(col, gamax::ARROW_STRING);
                 auto gathered = gamax::gather_strings(sv, map_view, stream);
                 res->add_column(std::unique_ptr<gamax::column>(std::move(gathered)));
             } else {
@@ -271,7 +293,7 @@ namespace {
         cudaStream_t stream)
     {
         auto output_size = input.size() + ((option == INCLUSIVE_PAD_ZERO) ? 1 : 0);
-        auto output = gamax::make_column(output_type, output_size, false, stream);
+        auto output = gamax::make_column(output_type, output_size, stream);
 
         double_type_dispatcher(input.type(), output_type, prefix_sum_impl{}, input, output->mutable_view(), option, stream);
         return output;
@@ -313,7 +335,8 @@ namespace {
         cudaStream_t stream)
     {
         auto n = lhs.size();
-        auto output = gamax::make_column(gamax::data_type{gamax::type_id::BOOL8}, n, false, stream);
+        auto output = gamax::make_column(
+            gamax::data_type{gamax::type_id::BOOL8}, n, stream);
         constexpr int block_size = 256;
         int grid_size = (n + block_size - 1) / block_size;
         bitmask_and_kernel<<<grid_size, block_size, 0, stream>>>(
@@ -327,7 +350,8 @@ namespace {
         cudaStream_t stream)
     {
         auto n = lhs.size();
-        auto output = gamax::make_column(gamax::data_type{gamax::type_id::BOOL8}, n, false, stream);
+        auto output = gamax::make_column(
+            gamax::data_type{gamax::type_id::BOOL8}, n, stream);
         constexpr int block_size = 256;
         int grid_size = (n + block_size - 1) / block_size;
         bitmask_or_kernel<<<grid_size, block_size, 0, stream>>>(
@@ -340,7 +364,8 @@ namespace {
         cudaStream_t stream)
     {
         auto n = input.size();
-        auto output = gamax::make_column(gamax::data_type{gamax::type_id::BOOL8}, n, false, stream);
+        auto output = gamax::make_column(
+            gamax::data_type{gamax::type_id::BOOL8}, n, stream);
         constexpr int block_size = 256;
         int grid_size = (n + block_size - 1) / block_size;
         bitmask_not_kernel<<<grid_size, block_size, 0, stream>>>(

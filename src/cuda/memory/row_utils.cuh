@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <cuco/hash_functions.cuh>
@@ -27,7 +30,7 @@ struct element_equal_functor {
         
         auto lhs_view = str_impl.viewAt(lhs_idx);
         auto rhs_view = str_impl.viewAt(rhs_idx);
-        
+        if (lhs_view.size() != rhs_view.size()) return false;
         return lhs_view.compare(rhs_view);
     }
 };
@@ -61,7 +64,8 @@ struct element_hash_functor {
 struct row_equal {
     gamax::experimental::table_device_view _keys;
 
-    __host__ row_equal(gamax::experimental::table_device_view keys) : _keys{keys} {}
+    __host__ __device__ row_equal(gamax::experimental::table_device_view keys)
+        : _keys{keys} {}
 
     __device__ bool operator()(gamax::size_type lhs, gamax::size_type rhs) const
     {
@@ -78,7 +82,8 @@ struct row_equal {
 struct row_hasher {
     gamax::experimental::table_device_view _keys;
 
-    __host__ row_hasher(gamax::experimental::table_device_view keys) : _keys{keys} {}
+    __host__ __device__ row_hasher(gamax::experimental::table_device_view keys)
+        : _keys{keys} {}
 
     __device__ std::size_t operator()(gamax::size_type index) const
     {

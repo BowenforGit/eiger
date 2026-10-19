@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <cuda.h>
 #include <vector>
 #include <string>
@@ -8,6 +11,7 @@
 #include <thrust/transform.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/execution_policy.h>
+#include "utils/green_safe_elementwise.cuh"
 
 #include "string/string.hpp"
 #include "string/string_column.hpp"
@@ -150,13 +154,14 @@ namespace {
     {
         using string_col_impl_t = typename id_to_string_impl<ARROW_STRING>::string_col_impl;
 
-        auto tid = gamax::make_sequence<gamax::size_type>(in.size(), 0, 1, stream);
+        auto tid = gamax::make_sequence<gamax::size_type>(in.size(), stream, 0, 1);
 
         if(!options.use_prefix_sort) {
             string_sort_comparator<string_col_impl_t> comparator(in, order);
             CALL_CUB_FUNC(
+                stream,
                 cub::DeviceMergeSort::SortKeys, 
-                tid->template data<gamax::size_type>(),
+                tid->data<gamax::size_type>(),
                 in.size(),
                 comparator,
                 stream);
@@ -166,11 +171,10 @@ namespace {
         }
 
         auto prefix_col = gamax::make_column<prefix_t>(in.size(), stream);;
-        auto itr = thrust::make_counting_iterator<gamax::size_type>(0);
-        thrust::transform(
-            thrust::cuda::par(*get_thrust_allocator()).on(stream),
-            itr, itr + in.size(),
-            prefix_col->template data<prefix_t>(),
+        // Green-safe: thrust::transform over a counting range routes to
+        // cub::DeviceTransform, which fails on green-context streams.
+        gamax::util::device::indexed_transform(
+            prefix_col->template data<prefix_t>(), in.size(), stream,
             [in] __device__ (gamax::size_type idx) {
                 prefix_t prefix = static_cast<prefix_t>(0);
                 string_col_impl_t str_impl(in);
@@ -185,8 +189,9 @@ namespace {
         
         string_sort_comparator_fast<string_col_impl_t> comparator(in, prefix_col->view(), order);
         CALL_CUB_FUNC(
+            stream,
             cub::DeviceMergeSort::SortKeys, 
-            tid->template data<gamax::size_type>(),
+            tid->data<gamax::size_type>(),
             in.size(),
             comparator,
             stream);
@@ -205,26 +210,30 @@ namespace {
         return gather_strings(in, sorted_indices->view(), stream, options);
     }
 
-    string_column_ptr gather_strings(
+    string_gather_plan plan_gather_strings(
         gamax::string_column_view in,
         gamax::column_view const& gather_map,
-        cudaStream_t stream,
-        string_op_options options)
+        cudaStream_t stream)
     {
         using string_col_impl_t = typename id_to_string_impl<ARROW_STRING>::string_col_impl;
         using len_type = typename string_col_impl_t::LengthType;
         using buffer_index_type = typename string_col_impl_t::header_entry_type::buffer_offset_type;
 
+        if (in.impl() != ARROW_STRING ||
+            gather_map.type().id() != type_to_id<gamax::size_type>()) {
+            throw std::invalid_argument(
+                "plan_gather_strings: expected Arrow strings and size_type indices");
+        }
+
         const buffer_index_type* offsets = reinterpret_cast<const buffer_index_type*>(in.meta());
 
         auto out_strlen = gamax::make_column<len_type>(gather_map.size(), stream);
-        auto itr = thrust::make_counting_iterator<gamax::size_type>(0);
 
         const auto gather_map_data = gather_map.data<gamax::size_type>();
-        thrust::transform(
-            thrust::cuda::par(*get_thrust_allocator()).on(stream),
-            itr, itr + gather_map.size(),
-            out_strlen->template data<len_type>(),
+        // Green-safe: thrust::transform over a counting range routes to
+        // cub::DeviceTransform, which fails on green-context streams.
+        gamax::util::device::indexed_transform(
+            out_strlen->template data<len_type>(), gather_map.size(), stream,
             [gather_map_data, offsets] __device__ (gamax::size_type idx) {
                 const auto gather_idx = gather_map_data[idx];
                 const auto str_len = offsets[gather_idx + 1] - offsets[gather_idx];
@@ -236,31 +245,79 @@ namespace {
             gamax::prefix_sum_options::INCLUSIVE_PAD_ZERO,
             gamax::data_type{type_to_id<buffer_index_type>()},
             stream);
+
+        return string_gather_plan{
+            std::move(out_strlen), std::move(out_offsets)};
+    }
+
+    string_column_ptr materialize_gathered_strings(
+        gamax::string_column_view in,
+        gamax::column_view const& gather_map,
+        column_ptr offsets,
+        gamax::size_type total_bytes,
+        cudaStream_t stream)
+    {
+        using string_col_impl_t = typename id_to_string_impl<ARROW_STRING>::string_col_impl;
+        using buffer_index_type = typename string_col_impl_t::header_entry_type::buffer_offset_type;
+        if (in.impl() != ARROW_STRING || total_bytes < 0 || !offsets ||
+            offsets->type().id() != type_to_id<buffer_index_type>() ||
+            offsets->size() != gather_map.size() + 1 ||
+            gather_map.type().id() != type_to_id<gamax::size_type>()) {
+            throw std::invalid_argument(
+                "materialize_gathered_strings: invalid Arrow gather plan");
+        }
+
+        gamax::device_buffer out_data(
+            static_cast<std::size_t>(total_bytes), stream);
+        char* out_data_ptr = reinterpret_cast<char*>(out_data.data());
+        const buffer_index_type* out_offsets_ptr =
+            offsets->data<buffer_index_type>();
+        const auto gather_map_data = gather_map.data<gamax::size_type>();
+
+        if (gather_map.size() > 0) {
+            constexpr int block_size = 256;
+            int num_blocks = (gather_map.size() + block_size - 1) / block_size;
+            gather_strings_kernel<string_col_impl_t, buffer_index_type>
+                <<<num_blocks, block_size, 0, stream>>>(
+                    in, gather_map_data, out_data_ptr, out_offsets_ptr,
+                    gather_map.size());
+            const auto status = cudaGetLastError();
+            if (status != cudaSuccess) {
+                throw std::runtime_error(
+                    std::string("materialize_gathered_strings: ") +
+                    cudaGetErrorString(status));
+            }
+        }
+
+        return gamax::make_string_column(
+            std::move(out_data), std::move(offsets->buffer()),
+            gather_map.size(), stream, ARROW_STRING);
+    }
+
+    string_column_ptr gather_strings(
+        gamax::string_column_view in,
+        gamax::column_view const& gather_map,
+        cudaStream_t stream,
+        string_op_options options)
+    {
+        (void)options;
+        using string_col_impl_t = typename id_to_string_impl<ARROW_STRING>::string_col_impl;
+        using buffer_index_type = typename string_col_impl_t::header_entry_type::buffer_offset_type;
+
+        auto plan = plan_gather_strings(in, gather_map, stream);
         gamax::size_type total_bytes = 0;
         cudaMemcpyAsync(
-            &total_bytes, 
-            out_offsets->data<buffer_index_type>() + gather_map.size(),
+            &total_bytes,
+            plan.offsets->data<buffer_index_type>() + gather_map.size(),
             sizeof(buffer_index_type),
             cudaMemcpyDeviceToHost,
             stream);
         cudaStreamSynchronize(stream);
-        
-        gamax::device_buffer out_data(total_bytes, false, stream);
-        char* out_data_ptr = reinterpret_cast<char*>(out_data.data());
-        const buffer_index_type* out_offsets_ptr = out_offsets->data<buffer_index_type>();
-        
-        constexpr int block_size = 256;
-        int num_blocks = (gather_map.size() + block_size - 1) / block_size;
-        gather_strings_kernel<string_col_impl_t, buffer_index_type><<<num_blocks, block_size, 0, stream>>>(
-            in, gather_map_data, out_data_ptr, out_offsets_ptr, gather_map.size());
-        
+        plan.lengths.reset();
+        auto result = materialize_gathered_strings(
+            in, gather_map, std::move(plan.offsets), total_bytes, stream);
         cudaStreamSynchronize(stream);
-        return gamax::make_string_column(
-            std::move(out_data),
-            std::move(out_offsets->buffer()),
-            gather_map.size(),
-            stream,
-            ARROW_STRING);
+        return result;
     }
 
     namespace {
@@ -314,11 +371,10 @@ namespace {
         // Output string lengths: clamp against remaining row width and
         // the caller-provided `length`.
         auto out_strlen = gamax::make_column<buffer_index_type>(n, stream);
-        auto itr = thrust::make_counting_iterator<gamax::size_type>(0);
-        thrust::transform(
-            thrust::cuda::par(*get_thrust_allocator()).on(stream),
-            itr, itr + n,
-            out_strlen->template data<buffer_index_type>(),
+        // Green-safe: thrust::transform over a counting range routes to
+        // cub::DeviceTransform, which fails on green-context streams.
+        gamax::util::device::indexed_transform(
+            out_strlen->template data<buffer_index_type>(), n, stream,
             [in_offsets, start, length] __device__ (gamax::size_type idx) {
                 const auto row_len = in_offsets[idx + 1] - in_offsets[idx];
                 if (start >= row_len) return static_cast<buffer_index_type>(0);
@@ -342,7 +398,7 @@ namespace {
             stream);
         cudaStreamSynchronize(stream);
 
-        gamax::device_buffer out_data(total_bytes, false, stream);
+        gamax::device_buffer out_data(total_bytes, stream);
         char* out_data_ptr = reinterpret_cast<char*>(out_data.data());
         const buffer_index_type* out_offsets_ptr =
             out_offsets->data<buffer_index_type>();

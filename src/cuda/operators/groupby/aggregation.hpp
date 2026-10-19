@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include "types/data_type.hpp"
@@ -35,7 +38,7 @@ namespace aggregate {
 std::unique_ptr<gamax::table> aggregate(
     gamax::table_view input, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 }
 
 #define DISPATCH_AGGREGATE(fn, SPECIFIER) \

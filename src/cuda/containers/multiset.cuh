@@ -1,6 +1,11 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <cuda.h>
+#include <cuda/iterator>
+#include <cuda/std/functional>
 #include <memory>
 #include <cmath>
 #include <cuda/std/tuple>
@@ -10,6 +15,8 @@
 #include "memory/mem_manager.hpp"
 #include "types/data_type.hpp"
 #include "cuco/static_multiset.cuh"
+#include "cuco/detail/open_addressing/kernels.cuh"
+#include "cuco/detail/utils.hpp"
 #include "thrust/iterator/counting_iterator.h"
 #include "thrust/distance.h"
 
@@ -107,7 +114,7 @@ namespace detail {
      */
     template <typename Key,
               typename TID = gamax::size_type,
-              typename Allocator = ThrustAllocator<char>,
+              typename Allocator = rmm_cuco_allocator<TID>,
               int CG_SIZE = 4>
     class multiset {
     public:
@@ -120,7 +127,7 @@ namespace detail {
             double load_factor, // (0.0, 1.0]
             TID empty_tid_sentinel,
             Allocator allocator,
-            cudaStream_t stream = cudaStreamDefault)
+            cudaStream_t stream)
         : _cuco_allocator(allocator)
         , _load_factor(load_factor)
         , _build_keys_ptr(build_keys.data<Key>())
@@ -146,11 +153,38 @@ namespace detail {
          * Only TIDs are stored. The TIDs are hashed and compared based on their 
          * corresponding key values using the build_keys column provided at construction.
          */
-        void insert_with_tids(cudaStream_t stream = cudaStreamDefault) 
+        void insert_with_tids(cudaStream_t stream)
         {
-            auto tids = thrust::make_counting_iterator(static_cast<TID>(0));
-            _multiset.insert(tids, tids + _num_build_keys, stream);
+            insert_with_tids_async(stream);
             cudaStreamSynchronize(stream);
+        }
+
+        /**
+         * @brief Asynchronously insert TIDs (0, 1, ..., num_build_keys-1).
+         *
+         * The caller must keep the multiset and its build-key column alive until
+         * all work previously submitted to `stream` has completed.
+         */
+        void insert_with_tids_async(cudaStream_t stream)
+        {
+            insert_with_tids_async(static_cast<TID>(0), _num_build_keys, stream);
+        }
+
+        /**
+         * @brief Asynchronously insert a half-open range of build TIDs.
+         *
+         * The range must lie within `[0, num_build_keys]`. Hashing and equality
+         * still refer to the full build-key column supplied at construction.
+         */
+        void insert_with_tids_async(TID first_tid, TID last_tid, cudaStream_t stream)
+        {
+            if (first_tid < static_cast<TID>(0) || first_tid > last_tid ||
+                last_tid > _num_build_keys) {
+                throw std::invalid_argument("multiset insert TID range is out of bounds");
+            }
+            if (first_tid == last_tid) { return; }
+            auto tids = thrust::make_counting_iterator(first_tid);
+            _multiset.insert_async(tids, tids + (last_tid - first_tid), stream);
         }
 
         /**
@@ -162,9 +196,66 @@ namespace detail {
          */
         void insert_with_tids(
             gamax::column_view const& keys, 
-            cudaStream_t stream = cudaStreamDefault) 
+            cudaStream_t stream)
         {
             insert_with_tids(stream);
+        }
+
+        /**
+         * @brief Asynchronously reset the multiset to its empty state.
+         */
+        void clear_async(cudaStream_t stream)
+        {
+            _multiset.clear_async(stream);
+        }
+
+        /**
+         * @brief Asynchronously find one matching build TID for every probe key.
+         *
+         * This is the single-match counterpart of probe/retrieve. It is useful
+         * when the build side contains at most one row per key: output element
+         * `i` is the matching build TID for probe row `i`, or the empty TID
+         * sentinel when no match exists. Unlike probe(), this method performs no
+         * allocation, compaction, host readback, or stream synchronization.
+         *
+         * cuCollections' host find_async overload does not expose heterogeneous
+         * lookup. Since this container stores build TIDs rather than key values,
+         * launch the same cuCollections find kernel with hash/equality rebound to
+         * the probe-key column.
+         */
+        void find_async(
+            gamax::column_view const& probe_keys,
+            gamax::mutable_column_view build_tids_out,
+            cudaStream_t stream) const
+        {
+            if (build_tids_out.size() < probe_keys.size()) {
+                throw std::invalid_argument("find_async output is smaller than probe input");
+            }
+
+            auto const probe_keys_ptr = probe_keys.data<Key>();
+            auto const num_probe_keys = probe_keys.size();
+            if (num_probe_keys == 0) { return; }
+
+            auto probe_tids = thrust::make_counting_iterator(static_cast<TID>(0));
+            auto probe_hash = cuda::std::make_tuple(
+                detail::probe_tid_hasher<Key, TID>{probe_keys_ptr},
+                detail::probe_tid_hasher<Key, TID>{probe_keys_ptr});
+            auto probe_eq = detail::probe_tid_equal<Key, TID>{probe_keys_ptr, _build_keys_ptr};
+            auto set_ref = _multiset.ref(cuco::op::find)
+                               .rebind_key_eq(probe_eq)
+                               .rebind_hash_function(probe_hash);
+
+            constexpr int block_size = cuco::detail::default_block_size();
+            auto const grid_size = cuco::detail::grid_size(num_probe_keys, CG_SIZE);
+            auto const stencil = cuda::constant_iterator<bool>{true};
+            cuco::detail::open_addressing_ns::find_if_n<CG_SIZE, block_size>
+                <<<grid_size, block_size, 0, stream>>>(
+                    probe_tids,
+                    num_probe_keys,
+                    stencil,
+                    cuda::std::identity{},
+                    build_tids_out.template data<TID>(),
+                    set_ref);
         }
     
         /**
@@ -182,7 +273,7 @@ namespace detail {
         probe(
             gamax::column_view const& probe_keys,
             gamax::size_type output_size,
-            cudaStream_t stream = cudaStreamDefault) 
+            cudaStream_t stream)
         {
             auto probe_keys_ptr = probe_keys.data<Key>();
             auto num_probe_keys = probe_keys.size();
@@ -191,8 +282,8 @@ namespace detail {
             auto probe_tids_in = thrust::make_counting_iterator(static_cast<TID>(0));
 
             // Create output columns
-            auto probe_tids_out = gamax::make_column<TID>(output_size);
-            auto build_tids_out = gamax::make_column<TID>(output_size);
+            auto probe_tids_out = gamax::make_column<TID>(output_size, stream);
+            auto build_tids_out = gamax::make_column<TID>(output_size, stream);
 
             // Create probe functors that access probe_keys via pointer
             // Note: double_hashing requires a tuple of two hash functions
@@ -231,7 +322,7 @@ namespace detail {
          */
         std::size_t count(
             gamax::column_view const& probe_keys,
-            cudaStream_t stream = cudaStreamDefault) 
+            cudaStream_t stream)
         {
             auto probe_keys_ptr = probe_keys.data<Key>();
             auto num_probe_keys = probe_keys.size();

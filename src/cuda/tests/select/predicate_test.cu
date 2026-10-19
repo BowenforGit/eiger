@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
 #include <memory>
 #include <vector>
@@ -28,7 +31,8 @@ protected:
     // Helper: create a numeric column from host data
     template<typename T>
     std::unique_ptr<gamax::column> make_numeric_col(const std::vector<T>& data) {
-        return gamax::make_column_from_host(data.data(), data.size());
+        return gamax::make_column_from_host(
+            data.data(), data.size(), stream_);
     }
 
     // Helper: create a string_column from a vector of std::string

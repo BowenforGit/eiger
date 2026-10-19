@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 // Unit tests for phys::distinct — hash-based dedup over input key
 // columns. Covers empty input, all-unique, all-duplicate, mixed
 // numeric, multi-key numeric, STRING, and multi-key STRING+numeric
@@ -33,9 +36,7 @@ phys::Context default_ctx() { return phys::Context{cudaStreamDefault}; }
 
 template <typename T>
 gamax::column_ptr mk_col(const std::vector<T>& v) {
-    return gamax::make_column_from_host(
-        const_cast<T*>(v.data()),
-        static_cast<gamax::size_type>(v.size()));
+    return gamax::make_column_from_host(const_cast<T*>(v.data()), static_cast<gamax::size_type>(v.size()), cudaStreamDefault);
 }
 
 gamax::column_ptr mk_string_col(const std::vector<std::string>& ss) {
@@ -58,7 +59,7 @@ std::vector<std::string> dump_string_column(
     gamax::column_view col,
     cudaStream_t stream = cudaStreamDefault)
 {
-    gamax::string_column_view sv(col, gamax::ARROW_STRING, stream);
+    gamax::string_column_view sv(col, gamax::ARROW_STRING);
     const auto n = col.size();
     std::vector<gamax::size_type> offsets(n + 1);
     cudaMemcpyAsync(offsets.data(), sv.meta(),
@@ -102,7 +103,7 @@ TEST(PhysDistinct, AllUniqueIsIdentityInShape) {
     auto tbl = gamax::make_table(std::move(cols));
     auto out = phys::distinct(tbl->view(), default_ctx());
     ASSERT_EQ(out->num_rows(), 10);
-    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     std::set<int32_t> as_set(host.get(), host.get() + 10);
     std::set<int32_t> expected(a.begin(), a.end());
     EXPECT_EQ(as_set, expected);
@@ -115,7 +116,7 @@ TEST(PhysDistinct, AllDuplicatesCollapseToOneRow) {
     auto tbl = gamax::make_table(std::move(cols));
     auto out = phys::distinct(tbl->view(), default_ctx());
     ASSERT_EQ(out->num_rows(), 1);
-    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     EXPECT_EQ(host[0], 7);
 }
 
@@ -127,7 +128,7 @@ TEST(PhysDistinct, Int32ThreeOfTenUnique) {
     auto tbl = gamax::make_table(std::move(cols));
     auto out = phys::distinct(tbl->view(), default_ctx());
     ASSERT_EQ(out->num_rows(), 3);
-    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     std::set<int32_t> as_set(host.get(), host.get() + 3);
     std::set<int32_t> expected = {1, 2, 3};
     EXPECT_EQ(as_set, expected);
@@ -144,8 +145,8 @@ TEST(PhysDistinct, MultiKeyInt32AndInt64FourOfEight) {
     auto out = phys::distinct(tbl->view(), default_ctx());
     ASSERT_EQ(out->num_rows(), 3);  // (1,10), (2,20), (3,30)
     ASSERT_EQ(out->num_columns(), 2);
-    auto h1 = gamax::copy_column_to_host<int32_t>(out->view()[0]);
-    auto h2 = gamax::copy_column_to_host<int64_t>(out->view()[1]);
+    auto h1 = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
+    auto h2 = gamax::copy_column_to_host<int64_t>(out->view()[1], cudaStreamDefault);
     std::set<std::tuple<int32_t, int64_t>> as_set;
     for (int i = 0; i < 3; ++i) as_set.emplace(h1[i], h2[i]);
     std::set<std::tuple<int32_t, int64_t>> expected = {
@@ -191,7 +192,7 @@ TEST(PhysDistinct, MultiKeyStringAndInt32Q16Shape) {
     ASSERT_EQ(out->num_columns(), 3);
     auto b = dump_string_column(out->view()[0]);
     auto ty = dump_string_column(out->view()[1]);
-    auto s = gamax::copy_column_to_host<int32_t>(out->view()[2]);
+    auto s = gamax::copy_column_to_host<int32_t>(out->view()[2], cudaStreamDefault);
     std::set<std::tuple<std::string, std::string, int32_t>> as_set;
     for (int i = 0; i < 4; ++i) {
         as_set.emplace(b[i], ty[i], s[i]);
@@ -234,7 +235,7 @@ TEST(PhysDistinctSort, SingleColInt32ThreeOfTen) {
     auto hint = sort_hint(/*enable_skf=*/false);
     auto out = phys::distinct(tbl->view(), default_ctx(), hint);
     ASSERT_EQ(out->num_rows(), 3);
-    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     std::set<int32_t> as_set(host.get(), host.get() + 3);
     EXPECT_EQ(as_set, (std::set<int32_t>{1, 2, 3}));
 }
@@ -249,7 +250,7 @@ TEST(PhysDistinctSort, SingleColInt64AllUnique) {
     auto hint = sort_hint(/*enable_skf=*/false);
     auto out = phys::distinct(tbl->view(), default_ctx(), hint);
     ASSERT_EQ(out->num_rows(), 6);
-    auto host = gamax::copy_column_to_host<int64_t>(out->view()[0]);
+    auto host = gamax::copy_column_to_host<int64_t>(out->view()[0], cudaStreamDefault);
     std::set<int64_t> as_set(host.get(), host.get() + 6);
     EXPECT_EQ(as_set, (std::set<int64_t>{7, 13, 42, 99, 100, 1000}));
 }
@@ -270,8 +271,8 @@ TEST(PhysDistinctSort, MultiKeyInt32Int64WithSKF) {
     auto out = phys::distinct(tbl->view(), default_ctx(), hint);
     ASSERT_EQ(out->num_rows(), 3);
     ASSERT_EQ(out->num_columns(), 2);
-    auto h1 = gamax::copy_column_to_host<int32_t>(out->view()[0]);
-    auto h2 = gamax::copy_column_to_host<int64_t>(out->view()[1]);
+    auto h1 = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
+    auto h2 = gamax::copy_column_to_host<int64_t>(out->view()[1], cudaStreamDefault);
     std::set<std::tuple<int32_t, int64_t>> as_set;
     for (int i = 0; i < 3; ++i) as_set.emplace(h1[i], h2[i]);
     EXPECT_EQ(as_set,
@@ -293,8 +294,8 @@ TEST(PhysDistinctSort, MultiKeyAllUniqueFastPath) {
     auto out = phys::distinct(tbl->view(), default_ctx(), hint);
     ASSERT_EQ(out->num_rows(), 4);
     ASSERT_EQ(out->num_columns(), 2);
-    auto h1 = gamax::copy_column_to_host<int32_t>(out->view()[0]);
-    auto h2 = gamax::copy_column_to_host<int64_t>(out->view()[1]);
+    auto h1 = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
+    auto h2 = gamax::copy_column_to_host<int64_t>(out->view()[1], cudaStreamDefault);
     std::set<std::tuple<int32_t, int64_t>> as_set;
     for (int i = 0; i < 4; ++i) as_set.emplace(h1[i], h2[i]);
     EXPECT_EQ(as_set,

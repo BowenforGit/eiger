@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
 #include <cuda_runtime.h>
 #include <vector>
@@ -208,7 +211,8 @@ protected:
     {
         auto mask_col = gamax::make_column(
             gamax::data_type{gamax::type_id::BOOL8},
-            static_cast<size_type>(mask_vals.size()));
+            static_cast<size_type>(mask_vals.size()),
+            stream);
         std::vector<bool> tmp(mask_vals.begin(), mask_vals.end());
         // std::vector<bool> is bit-packed; copy to a contiguous byte buffer
         std::vector<uint8_t> bytes(tmp.size());

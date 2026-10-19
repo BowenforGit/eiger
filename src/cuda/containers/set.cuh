@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <cuda.h>
@@ -21,10 +24,11 @@ public:
         gamax::size_type capacity,
         double load_factor,
         Key empty_key_sentinel,
-        cudaStream_t stream = cudaStreamDefault,
+        cudaStream_t stream,
         KeyEqual key_equal = KeyEqual{},
         HashFn hash_fn = HashFn{})
-    : _cuco_allocator(get_thrust_allocator<Key>(stream))
+    : _resource(get_device_memory_resource())
+    , _cuco_allocator(_resource)
     , _set(
         capacity, 
         load_factor, 
@@ -33,26 +37,27 @@ public:
         ProbingScheme{hash_fn}, 
         cuco::thread_scope_device, 
         cuco::storage<1>{}, 
-        *_cuco_allocator, 
+        _cuco_allocator,
         stream) {}
 
-    void insert(gamax::column_view const& keys, cudaStream_t stream = cudaStreamDefault) {
+    void insert(gamax::column_view const& keys, cudaStream_t stream) {
         auto keys_ptr = keys.data<Key>();
         auto num_keys = keys.size();
         _set.insert(keys_ptr, keys_ptr+num_keys, stream); // this synchronizes the stream
     }
 
-    std::unique_ptr<gamax::column> contains(gamax::column_view const& keys, cudaStream_t stream = cudaStreamDefault) {
+    std::unique_ptr<gamax::column> contains(
+        gamax::column_view const& keys, cudaStream_t stream) {
         auto keys_ptr = keys.data<Key>();
         auto num_keys = keys.size();
-        auto result = gamax::make_column<bool>(num_keys);
+        auto result = gamax::make_column<bool>(num_keys, stream);
         _set.contains(keys_ptr, keys_ptr+num_keys, result->data<bool>(), stream); // this synchronizes the stream
         return result;
     }
 
     std::size_t count(
         gamax::column_view const& probe_keys,
-        cudaStream_t stream = cudaStreamDefault) 
+        cudaStream_t stream)
     {
         auto keys_ptr = probe_keys.data<Key>();
         auto num_keys = probe_keys.size();
@@ -62,14 +67,15 @@ public:
     }
 
 private:
-    std::unique_ptr<ThrustAllocator<Key>> _cuco_allocator;
+    resource_handle _resource;
+    rmm_cuco_allocator<Key> _cuco_allocator;
     cuco::static_set<
         Key, 
         cuco::extent<std::size_t>, 
         cuda::thread_scope_device, 
         KeyEqual, 
         ProbingScheme, 
-        ThrustAllocator<Key>, 
+        rmm_cuco_allocator<Key>,
         cuco::storage<1>> _set;
 };
 } // namespace gamax::containers

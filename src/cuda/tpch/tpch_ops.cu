@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <memory>
 #include <cuda.h>
 #include <unordered_map>
@@ -50,7 +53,7 @@ namespace {
         // `algo_map` / fuse-vs-nofuse axis), since Predicate no
         // longer bakes them.
         auto mask = select_to_bitmask(
-            input, pred, params.select_options(op_name), params.stream);
+            input, pred, params.stream, params.select_options(op_name));
         std::vector<gamax::column_ptr> materialized_cols;
         gamax::column_ptr compact_tids {nullptr};
         std::vector<int> actual_output_cols = output_cols;
@@ -61,10 +64,11 @@ namespace {
         for (const auto& i : actual_output_cols) {
             if (input.get_column(i).type().id() == gamax::type_id::STRING) {
                 if(!compact_tids) {
-                    auto seqs = gamax::make_sequence<gamax::size_type>(input.num_rows(), 0, 1, params.stream);
+                    auto seqs = gamax::make_sequence<gamax::size_type>(
+                        input.num_rows(), params.stream, 0, 1);
                     compact_tids = gamax::util::device::compact(seqs->view(), mask->view(), params.stream);
                 }
-                gamax::string_column_view str_view(input.get_column(i), gamax::ARROW_STRING, params.stream);
+                gamax::string_column_view str_view(input.get_column(i), gamax::ARROW_STRING);
                 materialized_cols.push_back(gamax::gather_strings(str_view, compact_tids->view(), params.stream));
         } else {
                 materialized_cols.push_back(gamax::util::device::compact(input.get_column(i), mask->view(), params.stream));
@@ -94,7 +98,8 @@ namespace {
         std::vector<gamax::expression::ExprTree>& exprs)
     {
         query_context::scoped_op op(qc, op_name);
-        return gamax::project::project(input, exprs, params.project_options(op_name), params.stream);
+        return gamax::project::project(
+            input, exprs, params.stream, params.project_options(op_name));
     }
 
     std::unique_ptr<gamax::table> tpch_project(
@@ -105,7 +110,8 @@ namespace {
         std::vector<gamax::expression::ExprTree>& exprs)
     {
         query_context::scoped_op op(qc, op_name);
-        return gamax::project::project(std::move(input), exprs, params.project_options(op_name), params.stream);
+        return gamax::project::project(
+            std::move(input), exprs, params.stream, params.project_options(op_name));
     }
 
     std::unique_ptr<gamax::table> tpch_groupby(
@@ -141,7 +147,7 @@ namespace {
         std::vector<gamax::sort_order> const& orders)
     {
         query_context::scoped_op op(qc, op_name);
-        return gamax::sort::sort_table(input, keys, orders, params.sort_options(op_name), params.stream);
+        return gamax::sort::sort_table(input, keys, orders, params.stream, params.sort_options(op_name));
     }
 
     std::unique_ptr<gamax::table> tpch_inner_join(

@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <nvbench/nvbench.cuh>
 
 #include <string>
@@ -101,6 +104,7 @@ std::unique_ptr<gamax::table> generate_fused_key_table(
             1,                    // ncols
             1.0,                  // match_ratio
             42 + static_cast<int>(i),  // seed
+            stream,
             0                     // start: values in [0, 256)
         );
         columns.push_back(col_table->remove_column(0));
@@ -117,14 +121,15 @@ std::unique_ptr<gamax::table> generate_fused_key_table(
             params.num_rows,      // cardinality
             1,                    // ncols
             1.0,                  // match_ratio
-            100 + static_cast<int>(i)   // seed
+            100 + static_cast<int>(i),  // seed
+            stream
         );
         columns.push_back(col_table->remove_column(0));
     }
     
     // Add one payload column
     auto payload_table = gamax::datagen::device::pk_uniform_id(
-        key_type, params.num_rows, 1, 999);
+        key_type, params.num_rows, 1, 999, stream);
     columns.push_back(payload_table->remove_column(0));
     
     return gamax::make_table(std::move(columns));
@@ -137,7 +142,7 @@ std::unique_ptr<gamax::table> generate_fused_key_table(
 // =============================================================================
 template<typename KeyT>
 void bench_sort_table_fused_keys(nvbench::state& state, nvbench::type_list<KeyT>) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     fused_key_sort_params params(state);
 
@@ -166,7 +171,7 @@ void bench_sort_table_fused_keys(nvbench::state& state, nvbench::type_list<KeyT>
         state.exec(nvbench::exec_tag::sync,
             [&](nvbench::launch& launch) {
                 auto sorted = gamax::sort::sort_table(
-                    table->view(), key_col_indices, sort_orders, options, launch.get_stream());
+                    table->view(), key_col_indices, sort_orders, launch.get_stream(), options);
                 cudaStreamSynchronize(launch.get_stream());
             });
     } catch (const std::exception& e) {

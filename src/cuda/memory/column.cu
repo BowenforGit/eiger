@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "column.hpp"
 #include "types/type_dispatcher.hpp"
 #include "device_buffer.hpp"
@@ -11,18 +14,21 @@ namespace gamax {
 column::column(column&& other) noexcept
 : _type{other._type},
   _size{other._size},
-  _data{std::move(other._data)}
+  _data{std::move(other._data)},
+  _identity{std::exchange(other._identity, 0)}
 {
   other._size       = 0;
   other._type       = data_type{type_id::EMPTY};
 }
 
-std::unique_ptr<column> make_column(data_type type, size_type size, bool clear, cudaStream_t stream) {
-    return std::make_unique<column>(type, size, clear, stream);
+std::unique_ptr<column> make_column(
+    data_type type, size_type size, cudaStream_t stream, buffer_init init) {
+    return std::make_unique<column>(type, size, stream, init);
 }
 
-std::unique_ptr<column> make_idx_column(size_type size, bool clear, cudaStream_t stream) {
-    return make_column(data_type{size_type_id}, size, clear, stream);
+std::unique_ptr<column> make_idx_column(
+    size_type size, cudaStream_t stream, buffer_init init) {
+    return make_column(data_type{size_type_id}, size, stream, init);
 }
 
 void free_column(std::unique_ptr<column> col) {
@@ -38,7 +44,7 @@ struct make_sequence_impl {
         gamax::scalar step,
         cudaStream_t stream)
     {
-        auto col = make_column(data_type{type_to_id<T>()}, size);
+        auto col = make_column(data_type{type_to_id<T>()}, size, stream);
         gamax::utils::device::create_sequence(col->data<T>(), size, start.get<T>(), step.get<T>(), stream);
         return col;
     }
@@ -46,10 +52,10 @@ struct make_sequence_impl {
 } // namespace
 
 std::unique_ptr<column> make_sequence(
-    size_type size, 
+    size_type size,
+    cudaStream_t stream,
     gamax::scalar start, 
-    gamax::scalar step,
-    cudaStream_t stream)
+    gamax::scalar step)
 {
     return type_dispatcher(start.type(), make_sequence_impl{}, size, start, step, stream);
 }

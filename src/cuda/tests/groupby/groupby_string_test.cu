@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 // Inline sanity tests for STRING keys in hash-based groupby.
 // Ground truth is small enough to verify by hand; see comments below.
 //
@@ -51,7 +54,8 @@ gamax::column_ptr make_int64_col(const std::vector<int64_t>& vs)
 {
     return gamax::make_column_from_host(
         const_cast<int64_t*>(vs.data()),
-        static_cast<gamax::size_type>(vs.size()));
+        static_cast<gamax::size_type>(vs.size()),
+        cudaStreamDefault);
 }
 
 // Pull a STRING column's rows back to host as std::strings so tests can
@@ -59,7 +63,7 @@ gamax::column_ptr make_int64_col(const std::vector<int64_t>& vs)
 std::vector<std::string> read_strings_to_host(gamax::column_view col,
                                               cudaStream_t stream = cudaStreamDefault)
 {
-    gamax::string_column_view sv(col, gamax::ARROW_STRING, stream);
+    gamax::string_column_view sv(col, gamax::ARROW_STRING);
     const auto n = sv.size();
     std::vector<gamax::size_type> offsets(n + 1);
     cudaMemcpyAsync(offsets.data(), sv.meta(),
@@ -84,7 +88,7 @@ std::vector<std::string> read_strings_to_host(gamax::column_view col,
 
 std::vector<int64_t> read_int64_to_host(gamax::column_view col)
 {
-    auto h = gamax::copy_column_to_host<int64_t>(col);
+    auto h = gamax::copy_column_to_host<int64_t>(col, cudaStreamDefault);
     std::vector<int64_t> out(col.size());
     for (gamax::size_type i = 0; i < col.size(); ++i) out[i] = h[i];
     return out;
@@ -113,7 +117,7 @@ TEST(GROUPBY_STRING, SingleKeySumInt64) {
 
     gamax::groupby::groupby_hint hint;
     auto out = gamax::groupby::groupby(
-        key_tbl->view(), val_tbl->view(), requests, hint);
+        key_tbl->view(), val_tbl->view(), requests, hint, cudaStreamDefault);
 
     ASSERT_EQ(out->num_rows(), 2);
     ASSERT_EQ(out->num_columns(), 2);
@@ -146,7 +150,7 @@ TEST(GROUPBY_STRING, MixedStringAndIntKeySumInt64) {
 
     gamax::groupby::groupby_hint hint;
     auto out = gamax::groupby::groupby(
-        key_tbl->view(), val_tbl->view(), requests, hint);
+        key_tbl->view(), val_tbl->view(), requests, hint, cudaStreamDefault);
 
     ASSERT_EQ(out->num_rows(), 3);
     ASSERT_EQ(out->num_columns(), 3);
@@ -189,7 +193,7 @@ TEST(GROUPBY_STRING, PerGroupValueIdentity) {
 
     gamax::groupby::groupby_hint hint;
     auto out = gamax::groupby::groupby(
-        key_tbl->view(), val_tbl->view(), requests, hint);
+        key_tbl->view(), val_tbl->view(), requests, hint, cudaStreamDefault);
 
     ASSERT_EQ(out->num_rows(), 3);
     auto out_keys = read_strings_to_host(out->get_column(0).view());
@@ -221,7 +225,7 @@ TEST(GROUPBY_STRING, PrefixOverlapKeysAreDistinct) {
 
     gamax::groupby::groupby_hint hint;
     auto out = gamax::groupby::groupby(
-        key_tbl->view(), val_tbl->view(), requests, hint);
+        key_tbl->view(), val_tbl->view(), requests, hint, cudaStreamDefault);
 
     ASSERT_EQ(out->num_rows(), 3);
     auto k = read_strings_to_host(out->get_column(0).view());
@@ -256,7 +260,7 @@ TEST(GROUPBY_STRING, LongKeysBeyondPrefix) {
 
     gamax::groupby::groupby_hint hint;
     auto out = gamax::groupby::groupby(
-        key_tbl->view(), val_tbl->view(), requests, hint);
+        key_tbl->view(), val_tbl->view(), requests, hint, cudaStreamDefault);
 
     ASSERT_EQ(out->num_rows(), 3);
     auto k = read_strings_to_host(out->get_column(0).view());
@@ -291,7 +295,7 @@ TEST(GROUPBY_STRING, TwoStringKeys) {
 
     gamax::groupby::groupby_hint hint;
     auto out = gamax::groupby::groupby(
-        key_tbl->view(), val_tbl->view(), requests, hint);
+        key_tbl->view(), val_tbl->view(), requests, hint, cudaStreamDefault);
 
     ASSERT_EQ(out->num_rows(), 4);
     auto c0 = read_strings_to_host(out->get_column(0).view());
@@ -323,7 +327,7 @@ TEST(GROUPBY_STRING, EmptyStringKeys) {
 
     gamax::groupby::groupby_hint hint;
     auto out = gamax::groupby::groupby(
-        key_tbl->view(), val_tbl->view(), requests, hint);
+        key_tbl->view(), val_tbl->view(), requests, hint, cudaStreamDefault);
 
     ASSERT_EQ(out->num_rows(), 3);
     auto k = read_strings_to_host(out->get_column(0).view());
@@ -356,7 +360,7 @@ TEST(GROUPBY_STRING, MultipleAggregationsMinMaxSum) {
 
     gamax::groupby::groupby_hint hint;
     auto out = gamax::groupby::groupby(
-        key_tbl->view(), val_tbl->view(), requests, hint);
+        key_tbl->view(), val_tbl->view(), requests, hint, cudaStreamDefault);
 
     ASSERT_EQ(out->num_rows(), 3);
     ASSERT_EQ(out->num_columns(), 4);
@@ -411,7 +415,7 @@ TEST(GROUPBY_STRING, ManyGroupsLargerInput) {
 
     gamax::groupby::groupby_hint hint;
     auto out = gamax::groupby::groupby(
-        key_tbl->view(), val_tbl->view(), requests, hint);
+        key_tbl->view(), val_tbl->view(), requests, hint, cudaStreamDefault);
 
     ASSERT_EQ(static_cast<size_t>(out->num_rows()), cpu_sums.size());
 
@@ -463,7 +467,7 @@ TEST(GROUPBY_STRING, SkewedSingleDominantKey) {
 
     gamax::groupby::groupby_hint hint;
     auto out = gamax::groupby::groupby(
-        key_tbl->view(), val_tbl->view(), requests, hint);
+        key_tbl->view(), val_tbl->view(), requests, hint, cudaStreamDefault);
 
     ASSERT_EQ(out->num_rows(), 2);
     auto k = read_strings_to_host(out->get_column(0).view());

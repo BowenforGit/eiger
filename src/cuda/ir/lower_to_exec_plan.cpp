@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "ir/lower_to_exec_plan.hpp"
 
 #include <algorithm>
@@ -409,6 +412,19 @@ AggMaterialization materialize_keys_and_values(
     // result column from the internal "ones" column it builds for
     // AVG's denominator.
     Schema mat_schema;
+    // A scalar aggregate containing only COUNT_ALL/Count has no key or body
+    // columns. Preserve one borrowed input column solely as a row-count
+    // carrier; otherwise a zero-column table loses its cardinality and the
+    // physical COUNT_ALL path incorrectly observes zero rows.
+    const bool needs_row_carrier =
+        node.agg_keys.empty() && dedup.emit_for_item.empty();
+    if (needs_row_carrier) {
+        if (in_schema.empty()) {
+            throw std::runtime_error(
+                "COUNT_ALL requires an input column to preserve row cardinality");
+        }
+        mat_schema.append(in_schema[0]);
+    }
     for (auto kid : node.agg_keys) {
         auto ordinal = resolve_ordinal(in_schema, kid);
         mat_schema.append(in_schema[ordinal]);
@@ -432,6 +448,7 @@ AggMaterialization materialize_keys_and_values(
         // unique body (dedup-driven) plus one per key.
         std::vector<gamax::size_type> ordinals;
         ordinals.reserve(node.agg_keys.size() + dedup.emit_for_item.size());
+        if (needs_row_carrier) { ordinals.push_back(0); }
         for (auto kid : node.agg_keys) {
             ordinals.push_back(resolve_ordinal(in_schema, kid));
         }
@@ -448,6 +465,10 @@ AggMaterialization materialize_keys_and_values(
         // wrapped in the ProjectItem variant.
         std::vector<gamax::phys::ProjectItem> items;
         items.reserve(node.agg_keys.size() + dedup.emit_for_item.size());
+        if (needs_row_carrier) {
+            items.emplace_back(gamax::expression::ExprTree::column(
+                0, in_schema[0].type));
+        }
         for (auto kid : node.agg_keys) {
             auto ordinal = resolve_ordinal(in_schema, kid);
             items.emplace_back(gamax::expression::ExprTree::column(

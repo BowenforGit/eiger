@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "groupby.hpp"
 
 #include <algorithm>
@@ -20,10 +23,27 @@
 #include "stats/stats_compute.hpp"
 #include "compress/multikey_compress.hpp"
 #include "utils/transform.hpp"
+#include "utils/green_safe_elementwise.cuh"
 
 namespace gamax::groupby {
 
 namespace {
+
+// Elementwise SUM/count -> AVG. A hand kernel rather than thrust::transform:
+// the binary thrust::transform routes to cub::DeviceTransform, which returns
+// cudaErrorInvalidDevice on a CUDA green-context stream. A plain kernel launch
+// runs correctly on green streams (and everywhere else).
+template <typename SumT>
+__global__ void avg_divide_kernel(const SumT* __restrict__ sum,
+                                  const int64_t* __restrict__ count,
+                                  double* __restrict__ avg,
+                                  gamax::size_type n) {
+    gamax::size_type i =
+        static_cast<gamax::size_type>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i < n) {
+        avg[i] = static_cast<double>(sum[i]) / static_cast<double>(count[i]);
+    }
+}
 
 // Helper to compute AVG by dividing SUM by count
 struct compute_avg_helper {
@@ -38,15 +58,12 @@ struct compute_avg_helper {
         auto count_ptr = count_col.data<int64_t>();
         auto avg_ptr = avg_col.data<double>();
         auto n = sum_col.size();
-        
-        thrust::transform(
-            thrust::cuda::par.on(stream),
-            sum_ptr, sum_ptr + n,
-            count_ptr,
-            avg_ptr,
-            [] __device__ (SumT sum, int64_t count) -> double {
-                return static_cast<double>(sum) / static_cast<double>(count);
-            });
+        if (n == 0) return;
+
+        constexpr int block = 256;
+        const int grid = static_cast<int>((n + block - 1) / block);
+        avg_divide_kernel<SumT><<<grid, block, 0, stream>>>(
+            sum_ptr, count_ptr, avg_ptr, n);
     }
 };
 
@@ -216,11 +233,15 @@ std::unique_ptr<gamax::table> groupby_noskf(
         // stops materializing the lit(1) body), which would zero
         // out every count. Keys always carry the input row count.
         const gamax::size_type n_rows = key.num_rows();
-        ones = gamax::make_column<int64_t>(n_rows, false, stream);
+        ones = gamax::make_column<int64_t>(n_rows, stream);
         // Fill with 1s
         auto ones_ptr = ones->data<int64_t>();
-        thrust::fill(thrust::cuda::par.on(stream), ones_ptr,
-                     ones_ptr + n_rows, static_cast<int64_t>(1));
+        // Green-safe fill: thrust::fill dispatches to thrust::cuda_cub::fill_n
+        // (-> cub::DeviceTransform) for large n, which fails on green-context
+        // streams. Small-n fills happened to survive; large ones (Q4) did not.
+        gamax::util::device::device_fill(
+            ones_ptr, static_cast<int64_t>(n_rows),
+            static_cast<int64_t>(1), stream);
         extended_val_cols.push_back(ones->view());
         
         // Add count aggregation request (SUM of ones column)
@@ -357,7 +378,7 @@ std::unique_ptr<gamax::table> groupby_noskf(
         
         if (req.agg_kind == gamax::groupby::aggregation_id::AVG) {
             // Create AVG column (always double)
-            auto avg_col = gamax::make_column<double>(num_groups, false, stream);
+            auto avg_col = gamax::make_column<double>(num_groups, stream);
 
             // Get the SUM column for this AVG
             auto sum_col_view = internal_result->get_column(internal_col_idx).view();
@@ -408,7 +429,7 @@ std::unique_ptr<gamax::table> groupby(
     gamax::compress::multikey_compress_options compress_options;
     compress_options.out_total_bits = &compressed_bits;
 
-    auto compressed_key = gamax::compress::multikey_compress(key, compress_options, stream);
+    auto compressed_key = gamax::compress::multikey_compress(key, stream, compress_options);
     if(!compressed_key) {
         return groupby_noskf(key, val, agg_requests, hint, stream);
     }
@@ -419,7 +440,7 @@ std::unique_ptr<gamax::table> groupby(
     compressed_key_vec.push_back(std::move(compressed_key));
     auto combined_key_table = gamax::make_table(std::move(compressed_key_vec));
 
-    auto tids = gamax::make_sequence<gamax::size_type>(key.num_rows(), 0, 1, stream);
+    auto tids = gamax::make_sequence<gamax::size_type>(key.num_rows(), stream, 0, 1);
     // `table_view::add_column` requires the new column's size to match
     // `num_rows()`, but `num_rows()` returns 0 when val has 0 columns
     // (e.g. an Aggregate whose only request is COUNT_ALL — no body

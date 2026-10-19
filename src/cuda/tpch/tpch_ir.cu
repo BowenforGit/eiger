@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "tpch/tpch_ir.hpp"
 
 #include "ir/expr.hpp"
@@ -1603,21 +1606,20 @@ PlanPtr build_q20(const QueryBuilder& qb) {
 // and the main `failed` relation is whittled down via two
 // equi-semi-joins on l_orderkey. No non-equi anywhere in the plan.
 PlanPtr build_q21(const QueryBuilder& qb) {
-    auto l_all  = qb.scan("lineitem", {"l_orderkey", "l_suppkey"});
-    auto l_main = qb.scan("lineitem",
+    auto lineitem = qb.scan("lineitem",
         {"l_orderkey", "l_suppkey", "l_commitdate", "l_receiptdate"});
     auto s = qb.scan("supplier", {"s_suppkey", "s_name", "s_nationkey"});
     auto o = qb.scan("orders",   {"o_orderkey", "o_orderstatus"});
     auto n = qb.scan("nation",   {"n_nationkey", "n_name"});
 
     // Failed lineitems (l1_late in the spec).
-    auto failed = l_main.filter(
-        l_main.c("l_receiptdate") > l_main.c("l_commitdate"));
+    auto failed = lineitem.filter(
+        lineitem.c("l_receiptdate") > lineitem.c("l_commitdate"));
 
     // EXISTS rewrite: orders with > 1 distinct supplier.
-    auto supp_per_order = l_all.aggregate(
+    auto supp_per_order = lineitem.aggregate(
         {"l_orderkey"},
-        {{"n_supp", AggKind::CountDistinct, l_all.c("l_suppkey")}});
+        {{"n_supp", AggKind::CountDistinct, lineitem.c("l_suppkey")}});
     auto multi_supp = supp_per_order.filter(
         supp_per_order.c("n_supp") > lit(int64_t{1}));
 
