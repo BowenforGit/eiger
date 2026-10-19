@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "predicate.hpp"
 
 #include <stdexcept>
@@ -20,40 +23,40 @@ gamax::column_ptr evaluate_predicate(
     switch (pred.type()) {
         case PredicateNodeType::EXPR: {
             return gamax::select::select_to_bitmask(
-                table, pred.expr_tree(), options, stream);
+                table, pred.expr_tree(), stream, options);
         }
 
         case PredicateNodeType::STRING_EQUAL: {
             gamax::string_column_view str_col(
-                table.get_column(pred.string_cid()), pred.string_impl(), stream);
+                table.get_column(pred.string_cid()), pred.string_impl());
             return gamax::equal(
                 str_col, pred.string_value()->view(), stream, pred.string_options());
         }
 
         case PredicateNodeType::STRING_STARTSWITH: {
             gamax::string_column_view str_col(
-                table.get_column(pred.string_cid()), pred.string_impl(), stream);
+                table.get_column(pred.string_cid()), pred.string_impl());
             return gamax::startswith(
                 str_col, pred.string_value()->view(), stream, pred.string_options());
         }
 
         case PredicateNodeType::STRING_ENDSWITH: {
             gamax::string_column_view str_col(
-                table.get_column(pred.string_cid()), pred.string_impl(), stream);
+                table.get_column(pred.string_cid()), pred.string_impl());
             return gamax::endswith(
                 str_col, pred.string_value()->view(), stream, pred.string_options());
         }
 
         case PredicateNodeType::STRING_CONTAINS: {
             gamax::string_column_view str_col(
-                table.get_column(pred.string_cid()), pred.string_impl(), stream);
+                table.get_column(pred.string_cid()), pred.string_impl());
             return gamax::contains(
                 str_col, pred.string_value()->view(), stream, pred.string_options());
         }
 
         case PredicateNodeType::STRING_CONTAINS_MULTIPLE: {
             gamax::string_column_view str_col(
-                table.get_column(pred.string_cid()), pred.string_impl(), stream);
+                table.get_column(pred.string_cid()), pred.string_impl());
             std::vector<gamax::string_scalar_view> views;
             views.reserve(pred.string_values().size());
             for (const auto& s : pred.string_values()) {
@@ -65,7 +68,7 @@ gamax::column_ptr evaluate_predicate(
 
         case PredicateNodeType::STRING_IN: {
             gamax::string_column_view str_col(
-                table.get_column(pred.string_cid()), pred.string_impl(), stream);
+                table.get_column(pred.string_cid()), pred.string_impl());
             std::vector<gamax::string_scalar_view> views;
             views.reserve(pred.string_values().size());
             for (const auto& s : pred.string_values()) {
@@ -102,8 +105,8 @@ gamax::column_ptr evaluate_predicate(
 gamax::column_ptr select_to_bitmask(
     gamax::table_view table,
     Predicate& predicate,
-    select_options options,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    select_options options)
 {
     return evaluate_predicate(table, predicate, options, stream);
 }

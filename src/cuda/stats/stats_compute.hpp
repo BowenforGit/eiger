@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <cuda_runtime_api.h>
@@ -27,7 +30,7 @@ namespace gamax::stats {
 void compute_stats(
     gamax::column_view column,
     const StatsRequest& request,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 /**
  * @brief Compute and return the minimum value of a column.
@@ -38,7 +41,7 @@ void compute_stats(
  */
 gamax::scalar compute_min(
     gamax::column_view column,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 /**
  * @brief Compute and return the maximum value of a column.
@@ -49,7 +52,7 @@ gamax::scalar compute_min(
  */
 gamax::scalar compute_max(
     gamax::column_view column,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 /**
  * @brief Compute and return the average value of a column.
@@ -60,7 +63,7 @@ gamax::scalar compute_max(
  */
 gamax::scalar compute_avg(
     gamax::column_view column,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 /**
  * @brief Compute approximate NDV using HLL++.
@@ -71,7 +74,7 @@ gamax::scalar compute_avg(
  */
 gamax::scalar compute_ndv_approx(
     gamax::column_view column,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 /**
  * @brief Compute approximate inversion count.
@@ -82,7 +85,7 @@ gamax::scalar compute_ndv_approx(
  */
 gamax::scalar compute_inversion_count_approx(
     gamax::column_view column,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 /**
  * @brief Compute equi-width histogram.
@@ -95,7 +98,7 @@ gamax::scalar compute_inversion_count_approx(
 std::shared_ptr<Histogram> compute_equi_width_histogram(
     gamax::column_view column,
     gamax::size_type num_buckets,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 /**
  * @brief Compute equi-depth histogram.
@@ -108,7 +111,7 @@ std::shared_ptr<Histogram> compute_equi_width_histogram(
 std::shared_ptr<Histogram> compute_equi_depth_histogram(
     gamax::column_view column,
     gamax::size_type num_buckets,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 /**
  * @brief Helper to get or compute a scalar statistic.
@@ -123,7 +126,7 @@ std::shared_ptr<Histogram> compute_equi_depth_histogram(
 gamax::scalar get_or_compute_scalar_stat(
     gamax::column_view column,
     StatsType type,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 /**
  * @brief Helper to get or compute a histogram statistic.
@@ -139,7 +142,7 @@ gamax::scalar get_or_compute_scalar_stat(
 std::shared_ptr<Histogram> get_or_compute_histogram_stat(
     gamax::column_view column,
     StatsType type,
-    gamax::size_type num_buckets = 100,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream,
+    gamax::size_type num_buckets = 100);
 
 } // namespace gamax::stats

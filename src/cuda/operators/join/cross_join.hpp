@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
@@ -26,6 +29,6 @@ namespace gamax::join {
 std::unique_ptr<gamax::table> cross_join(
     gamax::table_view left,
     gamax::table_view right,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 } // namespace gamax::join

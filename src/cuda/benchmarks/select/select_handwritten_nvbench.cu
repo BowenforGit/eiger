@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <nvbench/nvbench.cuh>
 #include <thrust/transform.h>
 #include <thrust/iterator/counting_iterator.h>
@@ -50,7 +53,7 @@ struct SimpleGTHandwritten {
         
         nvtxRangePushA("SimpleGT_evaluate");
         thrust::transform(
-            thrust::cuda::par(*get_thrust_allocator()).on(stream),
+            gamax::rmm_exec_policy_handle{stream}.get(),
             first, 
             last,
             output_data,
@@ -93,7 +96,7 @@ struct RangeANDHandwritten {
         
         nvtxRangePushA("RangeAND_evaluate");
         thrust::transform(
-            thrust::cuda::par(*get_thrust_allocator()).on(stream),
+            gamax::rmm_exec_policy_handle{stream}.get(),
             first, 
             last,
             output_data,
@@ -137,7 +140,7 @@ struct TwoColSumHandwritten {
         
         nvtxRangePushA("TwoColSum_evaluate");
         thrust::transform(
-            thrust::cuda::par(*get_thrust_allocator()).on(stream),
+            gamax::rmm_exec_policy_handle{stream}.get(),
             first, 
             last,
             output_data,
@@ -177,7 +180,7 @@ struct FourColEqualHandwritten {
         
         nvtxRangePushA("FourColEqual_evaluate");
         thrust::transform(
-            thrust::cuda::par(*get_thrust_allocator()).on(stream),
+            gamax::rmm_exec_policy_handle{stream}.get(),
             first, 
             last,
             output_data,
@@ -340,7 +343,7 @@ bool check_skip(select_handwritten_params const& params) {
 
 template<typename KeyT>
 void bench_select_handwritten(nvbench::state& state, nvbench::type_list<KeyT>) {
-    release_all_mem(); // ensure clean state
+    gamax::prewarm_device_memory_resource(); // ensure clean state
 
     select_handwritten_params params(state);
 
@@ -357,11 +360,14 @@ void bench_select_handwritten(nvbench::state& state, nvbench::type_list<KeyT>) {
     
     // Generate table with uniform distribution
     auto key_type = gamax::data_type(gamax::type_to_id<KeyT>());
-    auto table = gamax::datagen::device::pk_uniform_id(key_type, num_items, ncols, 42);
+    auto table = gamax::datagen::device::pk_uniform_id(
+        key_type, num_items, ncols, 42, cudaStreamDefault);
     
     // Allocate output buffer using gamax::column
     auto bool_type = gamax::data_type(gamax::type_to_id<bool>());
-    auto output = gamax::make_column(bool_type, num_items, false);
+    auto output = gamax::make_column(
+        bool_type, num_items, cudaStreamDefault,
+        gamax::buffer_init::uninitialized);
     auto output_view = output->mutable_view();
     
     state.set_cuda_stream(nvbench::make_cuda_stream_view(0));

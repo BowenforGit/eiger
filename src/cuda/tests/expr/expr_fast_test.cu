@@ -1,5 +1,11 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
+#include <atomic>
+#include <chrono>
 #include <memory>
+#include <thread>
 #include <cuda.h>
 
 #include "expr/expr_fast.hpp"
@@ -11,10 +17,85 @@
 
 using namespace gamax::expression;
 
+namespace {
+__global__ void wait_on_host_flag(volatile int* flag)
+{
+    while (*flag == 0) { __nanosleep(1'000); }
+}
+} // namespace
+
+TEST(ExprFastTest, NoFuseIsAsyncAndIntermediateDestructionIsStreamOrdered) {
+    cudaStream_t stream{};
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+
+    int values[] = {1, 2, 3, 4};
+    auto col = gamax::make_column_from_host(values, 4, stream);
+    std::vector<std::unique_ptr<gamax::column>> columns;
+    columns.push_back(std::move(col));
+    auto table = gamax::make_table(std::move(columns));
+
+    auto type = gamax::data_type(gamax::type_id::INT32);
+    auto expr = ExprTree::subtract(
+        ExprTree::multiply(
+            ExprTree::add(
+                ExprTree::column(0, type), ExprTree::constant(gamax::scalar(2))),
+            ExprTree::constant(gamax::scalar(3))),
+        ExprTree::constant(gamax::scalar(1)));
+
+    // Load every kernel module and establish the allocator's per-stream arena
+    // before placing the non-completing gate on the stream. CUDA lazy module
+    // loading may itself wait for active work and is outside the expression
+    // lifetime contract this regression exercises.
+    auto warmup = gamax::expression::evaluate_expr_nofuse(table->view(), expr, stream);
+    ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+    warmup.reset();
+    ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+
+    int* host_flag{};
+    int* device_flag{};
+    ASSERT_EQ(cudaHostAlloc(&host_flag, sizeof(*host_flag), cudaHostAllocMapped), cudaSuccess);
+    *host_flag = 0;
+    ASSERT_EQ(cudaHostGetDevicePointer(&device_flag, host_flag, 0), cudaSuccess);
+    wait_on_host_flag<<<1, 1, 0, stream>>>(device_flag);
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    // A bounded fallback prevents a hidden synchronization from hanging the
+    // regression indefinitely; in the expected path the main thread releases
+    // the gate immediately after observing the pending stream.
+    std::atomic<bool> gate_released{false};
+    std::thread fallback([&] {
+        for (int attempt = 0; attempt < 2'000 && !gate_released.load(); ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        *host_flag = 1;
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+    });
+
+    auto result = gamax::expression::evaluate_expr_nofuse(table->view(), expr, stream);
+    EXPECT_EQ(cudaStreamQuery(stream), cudaErrorNotReady);
+    *host_flag = 1;
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    gate_released.store(true);
+    fallback.join();
+
+    int host[4]{};
+    ASSERT_EQ(cudaMemcpyAsync(
+        host, result->data<int>(), sizeof(host), cudaMemcpyDeviceToHost, stream),
+        cudaSuccess);
+    ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+    EXPECT_EQ(std::vector<int>(host, host + 4), (std::vector<int>{8, 11, 14, 17}));
+
+    result.reset();
+    table.reset();
+    ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+    ASSERT_EQ(cudaFreeHost(host_flag), cudaSuccess);
+    ASSERT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+}
+
 // Test: Constant expression
 TEST(ExprFastTest, ConstantExpr) {
     int val[] = {1, 2, 3, 4};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -23,10 +104,10 @@ TEST(ExprFastTest, ConstantExpr) {
     // Create expression tree: constant value 5
     auto expr = ExprTree::constant(gamax::scalar(5));
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     int expected[] = {5, 5, 5, 5};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -34,8 +115,8 @@ TEST(ExprFastTest, ConstantExpr) {
 TEST(ExprFastTest, FloatArithmetic) {
     float val1[] = {1.5f, 2.5f, 3.5f, 4.5f};
     float val2[] = {0.5f, 1.0f, 1.5f, 2.0f};
-    auto col1 = gamax::make_column_from_host(val1, 4);
-    auto col2 = gamax::make_column_from_host(val2, 4);
+    auto col1 = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto col2 = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -52,10 +133,10 @@ TEST(ExprFastTest, FloatArithmetic) {
         ExprTree::constant(gamax::scalar(1.0f))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     float expected[] = {1.5f * 0.5f + 1.0f, 2.5f * 1.0f + 1.0f, 3.5f * 1.5f + 1.0f, 4.5f * 2.0f + 1.0f};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -63,8 +144,8 @@ TEST(ExprFastTest, FloatArithmetic) {
 TEST(ExprFastTest, DoubleArithmetic) {
     double val1[] = {1.5, 2.5, 3.5, 4.5};
     double val2[] = {0.5, 1.0, 1.5, 2.0};
-    auto col1 = gamax::make_column_from_host(val1, 4);
-    auto col2 = gamax::make_column_from_host(val2, 4);
+    auto col1 = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto col2 = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -81,10 +162,10 @@ TEST(ExprFastTest, DoubleArithmetic) {
         ExprTree::constant(gamax::scalar(2.0))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     double expected[] = {(1.5 - 0.5) / 2.0, (2.5 - 1.0) / 2.0, (3.5 - 1.5) / 2.0, (4.5 - 2.0) / 2.0};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -92,8 +173,8 @@ TEST(ExprFastTest, DoubleArithmetic) {
 TEST(ExprFastTest, FloatComparison) {
     float val1[] = {1.5f, 2.5f, 3.5f, 4.5f};
     float val2[] = {2.0f, 2.5f, 3.0f, 5.0f};
-    auto col1 = gamax::make_column_from_host(val1, 4);
-    auto col2 = gamax::make_column_from_host(val2, 4);
+    auto col1 = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto col2 = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -107,10 +188,10 @@ TEST(ExprFastTest, FloatComparison) {
         ExprTree::column(1, float_type)
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     bool expected[] = {false, true, true, false};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -118,8 +199,8 @@ TEST(ExprFastTest, FloatComparison) {
 TEST(ExprFastTest, DoubleComparison) {
     double val1[] = {1.5, 2.5, 3.5, 4.5};
     double val2[] = {2.0, 2.5, 3.0, 5.0};
-    auto col1 = gamax::make_column_from_host(val1, 4);
-    auto col2 = gamax::make_column_from_host(val2, 4);
+    auto col1 = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto col2 = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -133,17 +214,17 @@ TEST(ExprFastTest, DoubleComparison) {
         ExprTree::column(1, double_type)
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     bool expected[] = {true, false, false, true};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
 // Test: Column access
 TEST(ExprFastTest, ColumnExpr) {
     int val[] = {1, 2, 3, 4};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -152,17 +233,17 @@ TEST(ExprFastTest, ColumnExpr) {
     // Create expression tree: column[0]
     auto expr = ExprTree::column(0, gamax::data_type(gamax::type_id::INT32));
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     int expected[] = {1, 2, 3, 4};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
 // Test: Unary expression (Negate)
 TEST(ExprFastTest, NegateExpr) {
     int val[] = {1, 2, 3, 4};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -173,17 +254,17 @@ TEST(ExprFastTest, NegateExpr) {
         ExprTree::column(0, gamax::data_type(gamax::type_id::INT32))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     int expected[] = {-1, -2, -3, -4};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
 // Test: Unary expression with chaining (Negate after LeftShift)
 TEST(ExprFastTest, UnaryChainExpr) {
     int val[] = {1, 2, 3, 4};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -197,17 +278,17 @@ TEST(ExprFastTest, UnaryChainExpr) {
         )
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     int expected[] = {-(1 << 2), -(2 << 2), -(3 << 2), -(4 << 2)};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
 // Test: Binary expression (Add)
 TEST(ExprFastTest, AddExpr) {
     int val[] = {1, 2, 3, 4};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -219,10 +300,10 @@ TEST(ExprFastTest, AddExpr) {
         ExprTree::constant(gamax::scalar(2))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     int expected[] = {3, 4, 5, 6};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -230,8 +311,8 @@ TEST(ExprFastTest, AddExpr) {
 TEST(ExprFastTest, ComplexExpr) {
     int val1[] = {1, 2, 3, 4};
     int val2[] = {5, 6, 7, 8};
-    auto col1 = gamax::make_column_from_host(val1, 4);
-    auto col2 = gamax::make_column_from_host(val2, 4);
+    auto col1 = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto col2 = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -247,10 +328,10 @@ TEST(ExprFastTest, ComplexExpr) {
         ExprTree::column(1, gamax::data_type(gamax::type_id::INT32))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     int expected[] = {0, -6, -14, -24};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -258,8 +339,8 @@ TEST(ExprFastTest, ComplexExpr) {
 TEST(ExprFastTest, EqualExpr) {
     int val1[] = {1, 2, 3, 4};
     int val2[] = {1, 3, 3, 5};
-    auto col1 = gamax::make_column_from_host(val1, 4);
-    auto col2 = gamax::make_column_from_host(val2, 4);
+    auto col1 = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto col2 = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -272,10 +353,10 @@ TEST(ExprFastTest, EqualExpr) {
         ExprTree::column(1, gamax::data_type(gamax::type_id::INT32))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     bool expected[] = {true, false, true, false};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -283,8 +364,8 @@ TEST(ExprFastTest, EqualExpr) {
 TEST(ExprFastTest, GreaterThanExpr) {
     int val1[] = {1, 3, 3, 5};
     int val2[] = {1, 2, 3, 4};
-    auto col1 = gamax::make_column_from_host(val1, 4);
-    auto col2 = gamax::make_column_from_host(val2, 4);
+    auto col1 = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto col2 = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -297,10 +378,10 @@ TEST(ExprFastTest, GreaterThanExpr) {
         ExprTree::column(1, gamax::data_type(gamax::type_id::INT32))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     bool expected[] = {false, true, false, true};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -308,8 +389,8 @@ TEST(ExprFastTest, GreaterThanExpr) {
 TEST(ExprFastTest, AndExpr) {
     bool val1[] = {true, true, false, false};
     bool val2[] = {true, false, true, false};
-    auto col1 = gamax::make_column_from_host(val1, 4);
-    auto col2 = gamax::make_column_from_host(val2, 4);
+    auto col1 = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto col2 = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -322,10 +403,10 @@ TEST(ExprFastTest, AndExpr) {
         ExprTree::column(1, gamax::data_type(gamax::type_id::BOOL8))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     bool expected[] = {true, false, false, false};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -333,8 +414,8 @@ TEST(ExprFastTest, AndExpr) {
 TEST(ExprFastTest, OrExpr) {
     bool val1[] = {true, true, false, false};
     bool val2[] = {true, false, true, false};
-    auto col1 = gamax::make_column_from_host(val1, 4);
-    auto col2 = gamax::make_column_from_host(val2, 4);
+    auto col1 = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto col2 = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -347,10 +428,10 @@ TEST(ExprFastTest, OrExpr) {
         ExprTree::column(1, gamax::data_type(gamax::type_id::BOOL8))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     bool expected[] = {true, true, true, false};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -358,8 +439,8 @@ TEST(ExprFastTest, OrExpr) {
 TEST(ExprFastTest, CombinedLogicalExpr) {
     int val1[] = {1, 2, 3, 4};
     int val2[] = {2, 2, 2, 2};
-    auto col1 = gamax::make_column_from_host(val1, 4);
-    auto col2 = gamax::make_column_from_host(val2, 4);
+    auto col1 = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto col2 = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -378,10 +459,10 @@ TEST(ExprFastTest, CombinedLogicalExpr) {
         )
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     bool expected[] = {false, true, true, true};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -390,9 +471,9 @@ TEST(ExprFastTest, MultiColumnArithmetic) {
     int val1[] = {10, 20, 30, 40};
     int val2[] = {5, 10, 15, 20};
     int val3[] = {2, 3, 4, 5};
-    auto col1 = gamax::make_column_from_host(val1, 4);
-    auto col2 = gamax::make_column_from_host(val2, 4);
-    auto col3 = gamax::make_column_from_host(val3, 4);
+    auto col1 = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto col2 = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
+    auto col3 = gamax::make_column_from_host(val3, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -409,17 +490,17 @@ TEST(ExprFastTest, MultiColumnArithmetic) {
         ExprTree::column(2, gamax::data_type(gamax::type_id::INT32))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     int expected[] = {30, 90, 180, 300};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
 // Test: Register pressure (deep expression tree)
 TEST(ExprFastTest, RegisterPressure) {
     int val[] = {1, 2, 3, 4};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -437,10 +518,10 @@ TEST(ExprFastTest, RegisterPressure) {
         ExprTree::constant(gamax::scalar(3))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     int expected[] = {7, 8, 9, 10};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -448,8 +529,8 @@ TEST(ExprFastTest, RegisterPressure) {
 TEST(ExprFastTest, OperatorOverloading) {
     int val1[] = {1, 2, 3, 4};
     int val2[] = {5, 6, 7, 8};
-    auto col1 = gamax::make_column_from_host(val1, 4);
-    auto col2 = gamax::make_column_from_host(val2, 4);
+    auto col1 = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto col2 = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -462,17 +543,17 @@ TEST(ExprFastTest, OperatorOverloading) {
     auto expr = (ExprTree::constant(gamax::scalar(1)) - ExprTree::column(0, int_type)) 
               * ExprTree::column(1, int_type);
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     int expected[] = {0, -6, -14, -24};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
 // Test: Operator overloading with unary minus and left shift
 TEST(ExprFastTest, OperatorOverloadingUnary) {
     int val[] = {1, 2, 3, 4};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -481,17 +562,17 @@ TEST(ExprFastTest, OperatorOverloadingUnary) {
     // Create expression using operator overloading: -(column[0] << 2)
     auto expr = -(ExprTree::column(0, gamax::data_type(gamax::type_id::INT32)) << 2);
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     int expected[] = {-(1 << 2), -(2 << 2), -(3 << 2), -(4 << 2)};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
 // Test: Right shift operator
 TEST(ExprFastTest, RightShiftExpr) {
     int val[] = {16, 32, 64, 128};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -503,17 +584,17 @@ TEST(ExprFastTest, RightShiftExpr) {
         2
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     int expected[] = {16 >> 2, 32 >> 2, 64 >> 2, 128 >> 2};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
 // Test: Right shift with operator overloading
 TEST(ExprFastTest, RightShiftOperatorOverloading) {
     int val[] = {16, 32, 64, 128};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -522,17 +603,17 @@ TEST(ExprFastTest, RightShiftOperatorOverloading) {
     // Create expression using operator overloading: column[0] >> 2
     auto expr = ExprTree::column(0, gamax::data_type(gamax::type_id::INT32)) >> 2;
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     int expected[] = {4, 8, 16, 32};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
 // Test: Square root function
 TEST(ExprFastTest, SqrtExpr) {
     double val[] = {4.0, 9.0, 16.0, 25.0};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -543,17 +624,17 @@ TEST(ExprFastTest, SqrtExpr) {
         ExprTree::column(0, gamax::data_type(gamax::type_id::FLOAT64))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     double expected[] = {2.0, 3.0, 4.0, 5.0};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
 // Test: Natural logarithm function
 TEST(ExprFastTest, LogExpr) {
     double val[] = {1.0, 2.718281828459045, 7.389056098930650, 20.085536923187668};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -564,18 +645,18 @@ TEST(ExprFastTest, LogExpr) {
         ExprTree::column(0, gamax::data_type(gamax::type_id::FLOAT64))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     // log(1) = 0, log(e) = 1, log(e^2) = 2, log(e^3) = 3
     double expected[] = {0.0, 1.0, 2.0, 3.0};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
 // Test: Exponential function
 TEST(ExprFastTest, ExpExpr) {
     double val[] = {0.0, 1.0, 2.0, 3.0};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -586,18 +667,18 @@ TEST(ExprFastTest, ExpExpr) {
         ExprTree::column(0, gamax::data_type(gamax::type_id::FLOAT64))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     // exp(0) = 1, exp(1) = e, exp(2) = e^2, exp(3) = e^3
     double expected[] = {1.0, 2.718281828459045, 7.389056098930650, 20.085536923187668};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
 // Test: Float square root
 TEST(ExprFastTest, SqrtFloatExpr) {
     float val[] = {1.0f, 4.0f, 9.0f, 16.0f};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -608,17 +689,17 @@ TEST(ExprFastTest, SqrtFloatExpr) {
         ExprTree::column(0, gamax::data_type(gamax::type_id::FLOAT32))
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     float expected[] = {1.0f, 2.0f, 3.0f, 4.0f};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
 // Test: Complex expression with sqrt, log, and exp
 TEST(ExprFastTest, ComplexMathExpr) {
     double val[] = {4.0, 9.0, 16.0, 25.0};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -633,11 +714,11 @@ TEST(ExprFastTest, ComplexMathExpr) {
         )
     );
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     double expected[] = {2.0, 3.0, 4.0, 5.0};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
-    auto res_host = gamax::copy_column_to_host<double>(res->view());
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
+    auto res_host = gamax::copy_column_to_host<double>(res->view(), cudaStreamDefault);
     for(size_t i = 0; i < 4; ++i) {
         ASSERT_NEAR(res_host[i], expected[i], 1e-6);
     }
@@ -647,8 +728,8 @@ TEST(ExprFastTest, ComplexMathExpr) {
 TEST(ExprFastTest, OperatorOverloadingComparison) {
     int val1[] = {1, 2, 3, 4};
     int val2[] = {2, 2, 2, 2};
-    auto col1 = gamax::make_column_from_host(val1, 4);
-    auto col2 = gamax::make_column_from_host(val2, 4);
+    auto col1 = gamax::make_column_from_host(val1, 4, cudaStreamDefault);
+    auto col2 = gamax::make_column_from_host(val2, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -661,10 +742,10 @@ TEST(ExprFastTest, OperatorOverloadingComparison) {
     auto expr = (ExprTree::column(0, int_type) > ExprTree::constant(gamax::scalar(1)))
              && (ExprTree::column(1, int_type) == ExprTree::constant(gamax::scalar(2)));
     
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
     
     bool expected[] = {false, true, true, true};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -674,7 +755,7 @@ TEST(ExprFastTest, OperatorOverloadingComparison) {
 // different year, so the output is just the year component.
 TEST(ExprFastTest, YearOfExpr) {
     int32_t val[] = {19950101, 19951231, 19970615, 19981201};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
 
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -683,10 +764,10 @@ TEST(ExprFastTest, YearOfExpr) {
     auto expr = ExprTree::year_of(
         ExprTree::column(0, gamax::data_type(gamax::type_id::INT32)));
 
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
 
     int32_t expected[] = {1995, 1995, 1997, 1998};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 
@@ -695,7 +776,7 @@ TEST(ExprFastTest, YearOfExpr) {
 // through a downstream comparison kernel.
 TEST(ExprFastTest, YearOfInComparison) {
     int32_t val[] = {19920101, 19930101, 19940101, 19950101};
-    auto col1 = gamax::make_column_from_host(val, 4);
+    auto col1 = gamax::make_column_from_host(val, 4, cudaStreamDefault);
 
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1));
@@ -706,10 +787,10 @@ TEST(ExprFastTest, YearOfInComparison) {
         ExprTree::year_of(ExprTree::column(0, gamax::data_type(gamax::type_id::INT32)))
             >= ExprTree::constant(gamax::scalar(int32_t{1994}));
 
-    auto res = gamax::expression::evaluate_expr(table->view(), expr);
+    auto res = gamax::expression::evaluate_expr(table->view(), expr, cudaStreamDefault);
 
     bool expected[] = {false, false, true, true};
-    auto expected_col = gamax::make_column_from_host(expected, 4);
+    auto expected_col = gamax::make_column_from_host(expected, 4, cudaStreamDefault);
     ASSERT_TRUE(gamax::test::check_cols_eq(res->view(), expected_col->view()));
 }
 

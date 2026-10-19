@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #define CUB_STDERR
@@ -15,64 +18,64 @@ std::pair<std::unique_ptr<gamax::column>, std::unique_ptr<gamax::column>>
 sort_column_pair(
     gamax::column& key_col, 
     gamax::column& val_col, 
+    cudaStream_t stream,
     int begin_bit = 0,
     int end_bit = -1,
     gamax::sort_order order = gamax::sort_order::ASCENDING, 
     void* d_temp_storage = nullptr, 
-    size_t temp_storage_bytes = 0, 
-    cudaStream_t stream = 0);
+    size_t temp_storage_bytes = 0);
 
 std::pair<std::unique_ptr<gamax::column>, std::unique_ptr<gamax::column>> 
 sort_column_pair(
     gamax::column_view key_col, 
     gamax::column_view val_col, 
+    cudaStream_t stream,
     int begin_bit = 0,
     int end_bit = -1,
     gamax::sort_order order = gamax::sort_order::ASCENDING, 
     void* d_temp_storage = nullptr, 
-    size_t temp_storage_bytes = 0, 
-    cudaStream_t stream = 0);
+    size_t temp_storage_bytes = 0);
 
 std::unique_ptr<gamax::column>
 sort_column(
     gamax::column& col,
+    cudaStream_t stream,
     int begin_bit = 0,
     int end_bit = -1,
     gamax::sort_order order = gamax::sort_order::ASCENDING,
     void* d_temp_storage = nullptr,
-    size_t temp_storage_bytes = 0,
-    cudaStream_t stream = 0);
+    size_t temp_storage_bytes = 0);
 
 std::unique_ptr<gamax::column>
 sort_column(
     gamax::column_view col,
+    cudaStream_t stream,
     int begin_bit = 0,
     int end_bit = -1,
     gamax::sort_order order = gamax::sort_order::ASCENDING,
     void* d_temp_storage = nullptr,
-    size_t temp_storage_bytes = 0,
-    cudaStream_t stream = 0);
+    size_t temp_storage_bytes = 0);
 
 
 std::pair<std::unique_ptr<gamax::column>, std::unique_ptr<gamax::column>> 
 argsort(
     gamax::column& col,
+    cudaStream_t stream,
     int begin_bit = 0,
     int end_bit = -1,
     gamax::sort_order order = gamax::sort_order::ASCENDING,
     void* d_temp_storage = nullptr,
-    size_t temp_storage_bytes = 0,
-    cudaStream_t stream = 0);
+    size_t temp_storage_bytes = 0);
 
 std::pair<std::unique_ptr<gamax::column>, std::unique_ptr<gamax::column>> 
 argsort(
     gamax::column_view col,
+    cudaStream_t stream,
     int begin_bit = 0,
     int end_bit = -1,
     gamax::sort_order order = gamax::sort_order::ASCENDING,
     void* d_temp_storage = nullptr,
-    size_t temp_storage_bytes = 0,
-    cudaStream_t stream = 0);
+    size_t temp_storage_bytes = 0);
 
 
 struct sort_table_options {
@@ -84,22 +87,22 @@ sort_table(
     gamax::table_view const& table,
     std::vector<int> const& sort_keys,
     std::vector<gamax::sort_order> const& sort_orders,
-    cudaStream_t stream = 0);
+    cudaStream_t stream);
 
 std::unique_ptr<gamax::table>
 sort_table(
     gamax::table_view const& table,
     std::vector<int> const& sort_keys,
     std::vector<gamax::sort_order> const& sort_orders,
-    sort_table_options const& options,
-    cudaStream_t stream = 0);
+    cudaStream_t stream,
+    sort_table_options const& options);
 
 std::unique_ptr<gamax::table>
 sort_table(
     gamax::table_view const& table,
     int sort_key_index,
     gamax::sort_order sort_order,
-    cudaStream_t stream = 0);
+    cudaStream_t stream);
 
 std::unique_ptr<gamax::table>
 topk_table(
@@ -108,6 +111,6 @@ topk_table(
     std::vector<gamax::sort_order> const& sort_orders,
     gamax::size_type k,
     bool result_in_sorted_order,
-    cudaStream_t stream = 0);
+    cudaStream_t stream);
 } // namespace sort
 } // namespace gamax

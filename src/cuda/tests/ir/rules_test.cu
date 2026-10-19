@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
 
 #include "exec/executor.hpp"
@@ -84,7 +87,9 @@ TEST(RulesCountToSum, RewritesCountAllWhenEnabled) {
         {"o_custkey"},
         {{"n", gir::AggKind::CountAll, gir::lit(int64_t{0})}}).plan();
 
-    auto rewritten = gir::apply_rules(plan);
+    gir::RuleConfig cfg;
+    cfg.rewrite_count_to_sum = true;
+    auto rewritten = gir::apply_rules(plan, cfg);
     ASSERT_EQ(rewritten->kind, gir::NodeKind::Aggregate);
     ASSERT_EQ(rewritten->agg_items.size(), 1u);
     EXPECT_EQ(rewritten->agg_items[0].agg, gir::AggKind::Sum);
@@ -101,7 +106,9 @@ TEST(RulesCountToSum, RewritesCountWhenEnabled) {
         {"o_custkey"},
         {{"n", gir::AggKind::Count, o.c("o_orderkey")}}).plan();
 
-    auto rewritten = gir::apply_rules(plan);
+    gir::RuleConfig cfg;
+    cfg.rewrite_count_to_sum = true;
+    auto rewritten = gir::apply_rules(plan, cfg);
     ASSERT_EQ(rewritten->agg_items.size(), 1u);
     EXPECT_EQ(rewritten->agg_items[0].agg, gir::AggKind::Sum);
     EXPECT_EQ(rewritten->agg_items[0].body.kind, gir::ExprKind::Literal);
@@ -164,7 +171,9 @@ TEST(RulesCountToSum, PreservesSumItems) {
             {"count", gir::AggKind::CountAll,  gir::lit(int64_t{0})},
         }).plan();
 
-    auto rewritten = gir::apply_rules(plan);
+    gir::RuleConfig cfg;
+    cfg.rewrite_count_to_sum = true;
+    auto rewritten = gir::apply_rules(plan, cfg);
     // Sum is preserved by identity; CountAll is rewritten.
     EXPECT_EQ(rewritten->agg_items[0].agg, gir::AggKind::Sum);
     EXPECT_EQ(rewritten->agg_items[0].body.kind, gir::ExprKind::ColRef);
@@ -186,23 +195,22 @@ TEST(RulesCountToSum, EndToEndCountsOrders) {
     std::vector<int64_t> ck   = {10, 10, 20, 20};
     std::vector<int32_t> date = {9000, 9100, 9200, 9300};
     std::vector<gamax::column_ptr> cols;
-    cols.push_back(gamax::make_column_from_host(
-        ok.data(), static_cast<gamax::size_type>(ok.size())));
-    cols.push_back(gamax::make_column_from_host(
-        ck.data(), static_cast<gamax::size_type>(ck.size())));
-    cols.push_back(gamax::make_column_from_host(
-        date.data(), static_cast<gamax::size_type>(date.size())));
+    cols.push_back(gamax::make_column_from_host(ok.data(), static_cast<gamax::size_type>(ok.size()), cudaStreamDefault));
+    cols.push_back(gamax::make_column_from_host(ck.data(), static_cast<gamax::size_type>(ck.size()), cudaStreamDefault));
+    cols.push_back(gamax::make_column_from_host(date.data(), static_cast<gamax::size_type>(date.size()), cudaStreamDefault));
     auto tbl = gamax::make_table(std::move(cols));
     auto view = tbl->view();
 
-    auto rewritten = gir::apply_rules(plan);
+    gir::RuleConfig cfg;
+    cfg.rewrite_count_to_sum = true;
+    auto rewritten = gir::apply_rules(plan, cfg);
     auto ep = gir::lower_to_exec_plan(rewritten, cat);
     gamax::phys::Context ctx{cudaStreamDefault};
     auto resolver = make_resolver(cat, "orders", view);
     auto out = gex::execute(ep, resolver, ctx);
     ASSERT_EQ(out->num_rows(), 1);
     ASSERT_EQ(out->num_columns(), 1);
-    auto h = gamax::copy_column_to_host<int64_t>(out->view()[0]);
+    auto h = gamax::copy_column_to_host<int64_t>(out->view()[0], cudaStreamDefault);
     EXPECT_EQ(h[0], 4);
 }
 
@@ -315,12 +323,9 @@ TEST(RulesSplitNonEquiJoin, EndToEndMatchesHandFiltered) {
     std::vector<int64_t> o_ck   = {10, 10, 20, 20};
     std::vector<int32_t> o_date = {9000, 9100, 9200, 9300};
     std::vector<gamax::column_ptr> oc;
-    oc.push_back(gamax::make_column_from_host(
-        o_ok.data(), static_cast<gamax::size_type>(o_ok.size())));
-    oc.push_back(gamax::make_column_from_host(
-        o_ck.data(), static_cast<gamax::size_type>(o_ck.size())));
-    oc.push_back(gamax::make_column_from_host(
-        o_date.data(), static_cast<gamax::size_type>(o_date.size())));
+    oc.push_back(gamax::make_column_from_host(o_ok.data(), static_cast<gamax::size_type>(o_ok.size()), cudaStreamDefault));
+    oc.push_back(gamax::make_column_from_host(o_ck.data(), static_cast<gamax::size_type>(o_ck.size()), cudaStreamDefault));
+    oc.push_back(gamax::make_column_from_host(o_date.data(), static_cast<gamax::size_type>(o_date.size()), cudaStreamDefault));
     auto orders = gamax::make_table(std::move(oc));
 
     // Lineitem: 4 rows keyed 1..4.
@@ -328,12 +333,9 @@ TEST(RulesSplitNonEquiJoin, EndToEndMatchesHandFiltered) {
     std::vector<int64_t> l_sk = {100, 200, 300, 400};
     std::vector<double>  l_q  = {1.0, 2.0, 3.0, 4.0};
     std::vector<gamax::column_ptr> lc;
-    lc.push_back(gamax::make_column_from_host(
-        l_ok.data(), static_cast<gamax::size_type>(l_ok.size())));
-    lc.push_back(gamax::make_column_from_host(
-        l_sk.data(), static_cast<gamax::size_type>(l_sk.size())));
-    lc.push_back(gamax::make_column_from_host(
-        l_q.data(),  static_cast<gamax::size_type>(l_q.size())));
+    lc.push_back(gamax::make_column_from_host(l_ok.data(), static_cast<gamax::size_type>(l_ok.size()), cudaStreamDefault));
+    lc.push_back(gamax::make_column_from_host(l_sk.data(), static_cast<gamax::size_type>(l_sk.size()), cudaStreamDefault));
+    lc.push_back(gamax::make_column_from_host(l_q.data(), static_cast<gamax::size_type>(l_q.size()), cudaStreamDefault));
     auto lineitem = gamax::make_table(std::move(lc));
 
     auto o_view = orders->view();
@@ -504,20 +506,16 @@ TEST(RulesSplitMultiKeyEqui, EndToEndTwoKeyInnerJoin) {
     std::vector<int64_t> o_ok = {1, 2, 3, 4};
     std::vector<int64_t> o_ck = {10, 20, 30, 40};
     std::vector<gamax::column_ptr> oc;
-    oc.push_back(gamax::make_column_from_host(
-        o_ok.data(), static_cast<gamax::size_type>(o_ok.size())));
-    oc.push_back(gamax::make_column_from_host(
-        o_ck.data(), static_cast<gamax::size_type>(o_ck.size())));
+    oc.push_back(gamax::make_column_from_host(o_ok.data(), static_cast<gamax::size_type>(o_ok.size()), cudaStreamDefault));
+    oc.push_back(gamax::make_column_from_host(o_ck.data(), static_cast<gamax::size_type>(o_ck.size()), cudaStreamDefault));
     auto orders = gamax::make_table(std::move(oc));
 
     // Lineitem with matching orderkeys but only one matching suppkey.
     std::vector<int64_t> l_ok = {1, 2, 3, 4};
     std::vector<int64_t> l_sk = {99, 20, 88, 77};   // row 2 matches both
     std::vector<gamax::column_ptr> lc;
-    lc.push_back(gamax::make_column_from_host(
-        l_ok.data(), static_cast<gamax::size_type>(l_ok.size())));
-    lc.push_back(gamax::make_column_from_host(
-        l_sk.data(), static_cast<gamax::size_type>(l_sk.size())));
+    lc.push_back(gamax::make_column_from_host(l_ok.data(), static_cast<gamax::size_type>(l_ok.size()), cudaStreamDefault));
+    lc.push_back(gamax::make_column_from_host(l_sk.data(), static_cast<gamax::size_type>(l_sk.size()), cudaStreamDefault));
     auto lineitem = gamax::make_table(std::move(lc));
 
     auto o_view = orders->view();
@@ -698,12 +696,9 @@ TEST(RulesScanPushdown, EndToEndProducesCorrectResult) {
     std::vector<int64_t> ck  = {10, 20, 30, 40};
     std::vector<int32_t> dt  = {9000, 9100, 9200, 9300};
     std::vector<gamax::column_ptr> cols;
-    cols.push_back(gamax::make_column_from_host(
-        ok.data(), static_cast<gamax::size_type>(ok.size())));
-    cols.push_back(gamax::make_column_from_host(
-        ck.data(), static_cast<gamax::size_type>(ck.size())));
-    cols.push_back(gamax::make_column_from_host(
-        dt.data(), static_cast<gamax::size_type>(dt.size())));
+    cols.push_back(gamax::make_column_from_host(ok.data(), static_cast<gamax::size_type>(ok.size()), cudaStreamDefault));
+    cols.push_back(gamax::make_column_from_host(ck.data(), static_cast<gamax::size_type>(ck.size()), cudaStreamDefault));
+    cols.push_back(gamax::make_column_from_host(dt.data(), static_cast<gamax::size_type>(dt.size()), cudaStreamDefault));
     auto tbl = gamax::make_table(std::move(cols));
     auto view = tbl->view();
 
@@ -715,7 +710,7 @@ TEST(RulesScanPushdown, EndToEndProducesCorrectResult) {
     // o_orderdate > 9100 → rows 3, 4 → o_orderkey = 3, 4.
     ASSERT_EQ(out->num_rows(), 2);
     ASSERT_EQ(out->num_columns(), 1);
-    auto h = gamax::copy_column_to_host<int64_t>(out->view()[0]);
+    auto h = gamax::copy_column_to_host<int64_t>(out->view()[0], cudaStreamDefault);
     EXPECT_EQ(h[0], 3);
     EXPECT_EQ(h[1], 4);
 }
@@ -796,12 +791,9 @@ TEST(LowerOptions, BothKnobsOffStillProducesCorrectResult) {
     std::vector<int64_t> ck  = {10, 20, 30, 40};
     std::vector<int32_t> dt  = {9000, 9100, 9200, 9300};
     std::vector<gamax::column_ptr> cols;
-    cols.push_back(gamax::make_column_from_host(
-        ok.data(), static_cast<gamax::size_type>(ok.size())));
-    cols.push_back(gamax::make_column_from_host(
-        ck.data(), static_cast<gamax::size_type>(ck.size())));
-    cols.push_back(gamax::make_column_from_host(
-        dt.data(), static_cast<gamax::size_type>(dt.size())));
+    cols.push_back(gamax::make_column_from_host(ok.data(), static_cast<gamax::size_type>(ok.size()), cudaStreamDefault));
+    cols.push_back(gamax::make_column_from_host(ck.data(), static_cast<gamax::size_type>(ck.size()), cudaStreamDefault));
+    cols.push_back(gamax::make_column_from_host(dt.data(), static_cast<gamax::size_type>(dt.size()), cudaStreamDefault));
     auto tbl = gamax::make_table(std::move(cols));
     auto view = tbl->view();
 
@@ -820,7 +812,7 @@ TEST(LowerOptions, BothKnobsOffStillProducesCorrectResult) {
     auto resolver = make_resolver(cat, "orders", view);
     auto out = gex::execute(ep, resolver, ctx);
     ASSERT_EQ(out->num_rows(), 2);
-    auto h = gamax::copy_column_to_host<int64_t>(out->view()[0]);
+    auto h = gamax::copy_column_to_host<int64_t>(out->view()[0], cudaStreamDefault);
     EXPECT_EQ(h[0], 3);
     EXPECT_EQ(h[1], 4);
 }
@@ -882,7 +874,9 @@ TEST(RulesCountDistinct, ComposesWithG4aInSinglePass) {
         {"o_custkey"},
         {{"n", gir::AggKind::CountDistinct, o.c("o_orderkey")}}).plan();
 
-    auto rewritten = gir::apply_rules(plan);
+    gir::RuleConfig cfg;
+    cfg.rewrite_count_to_sum = true;
+    auto rewritten = gir::apply_rules(plan, cfg);
     ASSERT_EQ(rewritten->kind, gir::NodeKind::Aggregate);
     ASSERT_EQ(rewritten->agg_items.size(), 1u);
     // G4a must have turned the emitted CountAll into Sum(lit(1)).

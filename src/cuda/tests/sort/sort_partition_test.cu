@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <iostream>
 #include <gtest/gtest.h>
 #include <vector>
@@ -20,7 +23,8 @@ void test_partition(
     gamax::size_type end_bit)
 {
     auto type = gamax::data_type(gamax::type_to_id<T>());
-    auto tin = gamax::datagen::device::fk_uniform_id(type, nrows, 2*nrows, 4, 1.0, 42);  
+    auto tin = gamax::datagen::device::fk_uniform_id(
+        type, nrows, 2*nrows, 4, 1.0, 42, cudaStreamDefault);
 
     auto vtin = tin->view();
 
@@ -28,7 +32,7 @@ void test_partition(
     for (gamax::size_type i = 1; i < vtin.num_columns(); i++)
     {
         auto cols = gamax::partition::partition_column_pair(
-            vtin[0], vtin[i], 0, 5);
+            vtin[0], vtin[i], 0, 5, cudaStreamDefault);
 
         partitioned_cols[i] = std::move(std::get<1>(cols));
         if (i == 1)

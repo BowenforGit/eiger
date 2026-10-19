@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
@@ -27,9 +30,9 @@ namespace gamax::compress {
     // All columns in the table are treated as keys.
     // Returns nullptr if compression is not possible.
     column_ptr multikey_compress(
-        table_view table, 
-        multikey_compress_options const& options = {},
-        cudaStream_t stream = cudaStreamDefault);
+        table_view table,
+        cudaStream_t stream,
+        multikey_compress_options const& options = {});
     
     // Sort-aware multi-key compression (order-preserving).
     // Uses order-preserving dictionary encoding and respects sort orders
@@ -38,6 +41,6 @@ namespace gamax::compress {
     column_ptr multikey_compress(
         table_view table, 
         std::vector<gamax::sort_order> const& sort_orders,
-        multikey_compress_options const& options = {},
-        cudaStream_t stream = cudaStreamDefault);
+        cudaStream_t stream,
+        multikey_compress_options const& options = {});
 };

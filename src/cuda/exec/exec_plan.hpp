@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <optional>
@@ -33,6 +36,25 @@ namespace gamax::exec {
 using ValueId = gamax::size_type;
 inline constexpr ValueId kUnsetValueId {-1};
 
+enum class DistributionKind {
+    Unknown,
+    LocalShard,
+    HashPartitioned,
+    RangePartitioned,
+    Replicated,
+    RootOnly,
+};
+
+// Physical row placement. Key ordinals are positional in this Value's schema.
+// Range partitioning additionally records the global ordering used to define
+// rank boundaries. RootOnly identifies the sole rank containing rows.
+struct Distribution {
+    DistributionKind kind {DistributionKind::Unknown};
+    std::vector<gamax::size_type> key_ordinals;
+    std::vector<gamax::phys::SortSpec> ordering;
+    int root {0};
+};
+
 // A Value is an intermediate or final result in the plan. Its
 // `schema` is positional (ColumnIds were retired at the IR→exec
 // boundary); `last_used_step` is filled in by the lowering pass and
@@ -41,6 +63,7 @@ struct Value {
     ValueId id {kUnsetValueId};
     gamax::ir::Schema schema;
     gamax::size_type last_used_step {-1};  // index into ExecPlan::steps
+    Distribution distribution;
 };
 
 // ── Per-kind step payloads ────────────────────────────────────────
@@ -149,6 +172,93 @@ struct TopKPayload {
     gamax::sort::sort_table_options hint {};
 };
 
+enum class PartitionStrategy {
+    Hash,
+    Range,
+};
+
+// PartitionRows is local-only: it reorders rows into destination-rank runs and
+// produces an executor-private partition descriptor. ExchangePartitions is the
+// separate collective that consumes that descriptor and establishes the
+// declared output distribution. Keeping these steps distinct permits range
+// partitioning to reuse the exchange implementation used by hash shuffles.
+struct PartitionRowsPayload {
+    PartitionStrategy strategy {PartitionStrategy::Hash};
+    std::vector<gamax::size_type> key_ordinals;
+    std::vector<gamax::phys::SortSpec> ordering;
+};
+struct ExchangePartitionsPayload {};
+struct ReplicatePayload {};
+struct GatherToRootPayload {
+    int root {0};
+};
+
+struct DistributedScalarAggPayload {
+    std::vector<gamax::phys::AggSpec> specs;
+};
+struct DistributedGroupByPayload {
+    gamax::size_type n_keys;
+    std::vector<gamax::phys::AggSpec> specs;
+    gamax::groupby::groupby_hint hint {};
+};
+struct DistributedDistinctPayload {
+    std::vector<gamax::size_type> key_ordinals;
+    gamax::groupby::groupby_hint hint {};
+};
+struct DistributedTopKPayload {
+    std::vector<gamax::phys::SortSpec> keys;
+    gamax::size_type k;
+    gamax::sort::sort_table_options hint {};
+    int root {0};
+};
+struct DistributedSortPayload {
+    std::vector<gamax::phys::SortSpec> keys;
+    gamax::sort::sort_table_options hint {};
+    int root {0};
+};
+
+enum class JoinDistributionStrategy {
+    Shuffle,
+    BroadcastLeft,
+    BroadcastRight,
+};
+
+struct DistributedEqJoinPayload {
+    std::vector<gamax::size_type> lkeys;
+    std::vector<gamax::size_type> rkeys;
+    JoinDistributionStrategy strategy {JoinDistributionStrategy::Shuffle};
+    bool partition_left {true};
+    bool partition_right {true};
+    bool replicate_left {false};
+    bool replicate_right {false};
+    gamax::join::join_hint hint {};
+};
+struct DistributedSemiJoinPayload {
+    std::vector<gamax::size_type> lkeys;
+    std::vector<gamax::size_type> rkeys;
+    JoinDistributionStrategy strategy {JoinDistributionStrategy::Shuffle};
+    bool partition_left {true};
+    bool partition_right {true};
+    bool replicate_left {false};
+    bool replicate_right {false};
+    gamax::join::join_hint hint {};
+};
+struct DistributedAntiJoinPayload {
+    std::vector<gamax::size_type> lkeys;
+    std::vector<gamax::size_type> rkeys;
+    JoinDistributionStrategy strategy {JoinDistributionStrategy::Shuffle};
+    bool partition_left {true};
+    bool partition_right {true};
+    bool replicate_left {false};
+    bool replicate_right {false};
+    gamax::join::join_hint hint {};
+};
+struct DistributedCrossJoinPayload {
+    JoinDistributionStrategy strategy {JoinDistributionStrategy::BroadcastRight};
+    bool replicate_left {false};
+    bool replicate_right {true};
+};
+
 using StepPayload = std::variant<
     SourceTablePayload,
     ReorderPayload,
@@ -163,7 +273,20 @@ using StepPayload = std::variant<
     DistinctPayload,
     ConcatPayload,
     SortPayload,
-    TopKPayload>;
+    TopKPayload,
+    PartitionRowsPayload,
+    ExchangePartitionsPayload,
+    ReplicatePayload,
+    GatherToRootPayload,
+    DistributedScalarAggPayload,
+    DistributedGroupByPayload,
+    DistributedDistinctPayload,
+    DistributedTopKPayload,
+    DistributedSortPayload,
+    DistributedEqJoinPayload,
+    DistributedSemiJoinPayload,
+    DistributedAntiJoinPayload,
+    DistributedCrossJoinPayload>;
 
 // Duplicated across the variant as a kind tag for dispatch-by-switch
 // and for printing, without needing std::visit everywhere.
@@ -172,6 +295,11 @@ enum class StepKind {
     EqJoin, SemiJoin, AntiJoin, CrossJoin,
     ScalarAgg, GroupBy, Distinct, Concat,
     Sort, TopK,
+    PartitionRows, ExchangePartitions, Replicate, GatherToRoot,
+    DistributedScalarAgg, DistributedGroupBy, DistributedDistinct,
+    DistributedTopK, DistributedSort,
+    DistributedEqJoin, DistributedSemiJoin, DistributedAntiJoin,
+    DistributedCrossJoin,
 };
 
 struct Step {

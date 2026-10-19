@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <memory>
 #include <utility>
 #include <vector>
@@ -272,7 +275,7 @@ column_ptr multikey_compress_impl(
             if (sort_orders) {
                 // Sort-aware: use order-preserving dictionary encoding
                 auto [encoded_col, dict_size] = gamax::compress::dictionary_encode_with_order(
-                    col, gamax::data_type{gamax::type_id::INT32}, ndv, 0.25, stream);
+                    col, stream, gamax::data_type{gamax::type_id::INT32}, ndv, 0.25);
                 
                 data_ptr = encoded_col->data<void>();
                 data_type = encoded_col->type().id();
@@ -284,7 +287,7 @@ column_ptr multikey_compress_impl(
             } else {
                 // Generic: use non-order-preserving dictionary encoding
                 auto [encoded_col, dict_size] = gamax::compress::dictionary_encode(
-                    col, gamax::data_type{gamax::type_id::INT32}, ndv, 0.25, stream);
+                    col, stream, gamax::data_type{gamax::type_id::INT32}, ndv, 0.25);
                 
                 data_ptr = encoded_col->data<void>();
                 data_type = encoded_col->type().id();
@@ -343,9 +346,9 @@ column_ptr multikey_compress_impl(
 #endif
     
     // Step 3: Copy KeyFusionInfo array to device
-    KeyFusionInfo* d_key_infos = nullptr;
-    allocate_mem(reinterpret_cast<void**>(&d_key_infos), false, 
-                num_cols * sizeof(KeyFusionInfo), stream);
+    gamax::device_buffer key_info_buffer{
+        num_cols * sizeof(KeyFusionInfo), stream};
+    auto* d_key_infos = static_cast<KeyFusionInfo*>(key_info_buffer.data());
     cudaMemcpyAsync(d_key_infos, host_key_infos.data(), 
                    num_cols * sizeof(KeyFusionInfo),
                    cudaMemcpyHostToDevice, stream);
@@ -364,8 +367,6 @@ column_ptr multikey_compress_impl(
         fused_keys->data<uint64_t>()
     );
     
-    release_mem(d_key_infos);
-    
     return fused_keys;
 }
 
@@ -376,9 +377,9 @@ column_ptr multikey_compress_impl(
 // =========================================================================
 
 column_ptr multikey_compress(
-    table_view table, 
-    multikey_compress_options const& options,
-    cudaStream_t stream)
+    table_view table,
+    cudaStream_t stream,
+    multikey_compress_options const& options)
 {
     return multikey_compress_impl(table, nullptr, options, stream);
 }
@@ -390,8 +391,8 @@ column_ptr multikey_compress(
 column_ptr multikey_compress(
     table_view table, 
     std::vector<gamax::sort_order> const& sort_orders,
-    multikey_compress_options const& options,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    multikey_compress_options const& options)
 {
     return multikey_compress_impl(table, &sort_orders, options, stream);
 }

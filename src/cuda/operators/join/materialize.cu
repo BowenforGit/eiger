@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "materialize.hpp"
 
 #include <memory>
@@ -24,7 +27,7 @@ namespace detail {
         // sort_merge_join, cross_join, groupby's leader-tid gather)
         // transparently handles both numeric and STRING columns.
         if (col.type().id() == gamax::type_id::STRING) {
-            gamax::string_column_view sv(col, gamax::ARROW_STRING, stream);
+            gamax::string_column_view sv(col, gamax::ARROW_STRING);
             auto gathered = gamax::gather_strings(sv, map, stream);
             return std::unique_ptr<gamax::column>(std::move(gathered));
         }

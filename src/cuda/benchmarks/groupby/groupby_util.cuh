@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <iostream>
@@ -99,16 +102,19 @@ void generate_zipf_keys_host(KeyT* h_keys, const groupby_params& params) {
 
 template<typename Key>
 void generate_groupby_keys(gamax::table& key_table, const groupby_params& params) {
+    constexpr cudaStream_t stream = cudaStreamDefault;
     std::vector<std::unique_ptr<gamax::column>> key_vec;
     if(params.zipf_factor == 0.0) {
-        auto keys = gamax::make_sequence<Key>(params.num_items, 0, 1);
+        auto keys = gamax::make_sequence<Key>(params.num_items, stream, 0, 1);
         auto raw_key_ptr = keys->template data<Key>();
-        thrust::for_each_n(thrust::device, raw_key_ptr, params.num_items, [=] __device__ (Key& key) { key = key % params.num_groups; });
+        auto policy = gamax::rmm_exec_policy_handle{stream};
+        thrust::for_each_n(policy.get(), raw_key_ptr, params.num_items, [=] __device__ (Key& key) { key = key % params.num_groups; });
         thrust::default_random_engine g;
-        thrust::shuffle(thrust::cuda::par(*get_thrust_allocator()), raw_key_ptr, raw_key_ptr + params.num_items, g);
+        thrust::shuffle(policy.get(), raw_key_ptr, raw_key_ptr + params.num_items, g);
         key_vec.push_back(std::move(keys));
     } else {
-        auto d_keys = gamax::datagen::device::generate_zipf<Key>(params.num_items, params.zipf_factor, params.num_groups);
+        auto d_keys = gamax::datagen::device::generate_zipf<Key>(
+            params.num_items, params.zipf_factor, params.num_groups, stream);
         key_vec.push_back(std::move(d_keys));
     }
     gamax::table kt{std::move(key_vec)};
@@ -119,9 +125,10 @@ void generate_groupby_keys(gamax::table& key_table, const groupby_params& params
 
 template<typename Value>
 void generate_groupby_vals_seq(gamax::table& val_table, const groupby_params& params) {
+    constexpr cudaStream_t stream = cudaStreamDefault;
     std::vector<std::unique_ptr<gamax::column>> vals_vec;
     for(gamax::size_type i = 0; i < params.num_aggs; i++) {
-        auto vals = gamax::make_sequence<Value>(params.num_items, 0, 1);
+        auto vals = gamax::make_sequence<Value>(params.num_items, stream, 0, 1);
         vals_vec.push_back(std::move(vals));
     }
     gamax::table vt{std::move(vals_vec)};
@@ -132,10 +139,12 @@ void generate_groupby_vals_seq(gamax::table& val_table, const groupby_params& pa
 
 template<typename Value>
 void generate_groupby_vals_all_ones(gamax::table& val_table, const groupby_params& params) {
+    constexpr cudaStream_t stream = cudaStreamDefault;
     std::vector<std::unique_ptr<gamax::column>> vals_vec;
     for(gamax::size_type i = 0; i < params.num_aggs; i++) {
-        auto vals = gamax::make_column<Value>(params.num_items);
-        thrust::fill_n(thrust::device, reinterpret_cast<Value*>(vals->data()), params.num_items, static_cast<Value>(1));
+        auto vals = gamax::make_column<Value>(params.num_items, stream);
+        auto policy = gamax::rmm_exec_policy_handle{stream};
+        thrust::fill_n(policy.get(), reinterpret_cast<Value*>(vals->data()), params.num_items, static_cast<Value>(1));
         vals_vec.push_back(std::move(vals));
     }
     gamax::table vt{std::move(vals_vec)};
@@ -146,9 +155,10 @@ void generate_groupby_vals_all_ones(gamax::table& val_table, const groupby_param
 
 template<typename Key, typename Value, std::enable_if_t<std::is_same_v<Key, Value>, void>* = nullptr>
 void generate_groupby_vals_from_keys(gamax::column& key, gamax::table& val_table, const groupby_params& params) {
+    constexpr cudaStream_t stream = cudaStreamDefault;
     std::vector<std::unique_ptr<gamax::column>> vals_vec;
     for(gamax::size_type i = 0; i < params.num_aggs; i++) {
-        auto vals = key.deep_copy();
+        auto vals = key.deep_copy(stream);
         vals_vec.push_back(std::move(vals));
     }
     gamax::table vt{std::move(vals_vec)};

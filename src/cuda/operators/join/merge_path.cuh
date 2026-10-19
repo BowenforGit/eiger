@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 #define CUB_STDERR
 
@@ -18,6 +21,7 @@
 #include "atomics/atomics.cuh"
 #include "utils/warp_utils.cuh"
 #include "utils/device_info.hpp"
+#include "memory/device_buffer.hpp"
 
 template<typename idx_t, typename cnt_t>
 struct merge_range {
@@ -273,37 +277,44 @@ template<typename KeyIt,
          typename SOutIt, 
          int NT = 512, 
          int VT = 4>
-void merge_path(KeyIt r_sorted_keys, KeyIt s_sorted_keys, 
-                RValIt r_sorted_vals, SValIt s_sorted_vals, 
-                const gamax::size_type nr, const gamax::size_type ns, 
-                KeyIt keys_out, ROutIt r_out, SOutIt s_out, 
-                gamax::size_type& n_matches, gamax::size_type circular_buffer_size) {
+void merge_path(KeyIt r_sorted_keys, KeyIt s_sorted_keys,
+                RValIt r_sorted_vals, SValIt s_sorted_vals,
+                const gamax::size_type nr, const gamax::size_type ns,
+                KeyIt keys_out, ROutIt r_out, SOutIt s_out,
+                gamax::size_type& n_matches, gamax::size_type circular_buffer_size,
+                cudaStream_t stream) {
     gamax::size_type n = (nr + ns + NT*VT-1)/(NT*VT) + 1;
-    gamax::size_type* partitions, *g_counter;
-    allocate_mem(&partitions, false, sizeof(gamax::size_type)*n);
-    allocate_mem(&g_counter, true);
+    // All work MUST run on `stream`: the input keys are produced by the caller's
+    // sort on `stream`, and g_counter is zero-initialised here. Launching on the
+    // default stream (as this used to) races the sort on a non-blocking / green
+    // stream -> illegal access. (Blocking streams happened to serialise with 0.)
+    gamax::device_buffer partitions_buffer{
+        sizeof(gamax::size_type) * n, stream};
+    gamax::device_buffer counter_buffer{
+        sizeof(gamax::size_type), stream, gamax::buffer_init::zero};
+    auto* partitions = static_cast<gamax::size_type*>(partitions_buffer.data());
+    auto* g_counter = static_cast<gamax::size_type*>(counter_buffer.data());
 
-    merge_path_partition<<<num_tb(n, 128), 128>>>(s_sorted_keys, ns,
+    merge_path_partition<<<num_tb(n, 128), 128, 0, stream>>>(s_sorted_keys, ns,
                                                     r_sorted_keys, nr,
                                                     NT*VT,
                                                     partitions, n);
-    
+
     CHECK_LAST_CUDA_ERROR();
     std::size_t smem_bytes = sizeof(*r_sorted_keys) * (NT*VT+1); // keys array
     auto fn = merge_keys_mp_improv<NT, VT, typename std::remove_pointer<KeyIt>::type, RValIt, SValIt, ROutIt, SOutIt>;
     CHECK_CUDA_ERROR(cudaFuncSetAttribute(fn, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_bytes));
-    merge_keys_mp_improv<NT, VT><<<num_tb(nr+ns, NT, VT), NT, smem_bytes>>>(r_sorted_keys, s_sorted_keys, 
+    merge_keys_mp_improv<NT, VT><<<num_tb(nr+ns, NT, VT), NT, smem_bytes, stream>>>(r_sorted_keys, s_sorted_keys,
                                                             r_sorted_vals, s_sorted_vals,
                                                             nr, ns,
-                                                            partitions, keys_out, 
-                                                            r_out, s_out, 
+                                                            partitions, keys_out,
+                                                            r_out, s_out,
                                                             g_counter, circular_buffer_size);
     CHECK_LAST_CUDA_ERROR();
 
     gamax::size_type temp;
-    cudaMemcpy(&temp, g_counter, sizeof(gamax::size_type), cudaMemcpyDefault);
+    cudaMemcpyAsync(&temp, g_counter, sizeof(gamax::size_type), cudaMemcpyDefault, stream);
+    cudaStreamSynchronize(stream);
     n_matches = temp;
 
-    release_mem(partitions);
-    release_mem(g_counter);
 }

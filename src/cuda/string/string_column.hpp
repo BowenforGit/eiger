@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <vector>
@@ -24,13 +27,13 @@ public:
     string_column_view_base() = default;
     ~string_column_view_base() = default;
 
-    __host__ __device__ string_column_view_base(
+    __host__ string_column_view_base(
         const device_buffer& data, 
         const device_buffer& meta, 
         size_type size, 
         string_impl_id impl) 
-        : Base(data.data(), size, gamax::data_type{gamax::type_id::STRING}, 0)
-        , _meta(meta.data())
+        : Base(const_cast<void*>(data.data()), size, gamax::data_type{gamax::type_id::STRING}, 0)
+        , _meta(const_cast<void*>(meta.data()))
         , _impl(impl)
         , _bytes(data.size()) {}
 
@@ -43,37 +46,16 @@ public:
      * @param col A column_view from a string column (must be type_id::STRING)
      * @param impl The string implementation ID
      */
-    __host__ string_column_view_base(
-        column_view const& col,
-        string_impl_id impl,
-        cudaStream_t stream = cudaStreamDefault) 
-        : Base(nullptr, col.size(), gamax::data_type{gamax::type_id::STRING}, 0)
+    __host__ __device__ string_column_view_base(
+        Base const& col,
+        string_impl_id impl)
+        : Base(col)
+        , _meta(col.auxiliary_data())
         , _impl(impl)
+        , _bytes(col.auxiliary_bytes())
     {
-        void* host_ptrs[2];
-        cudaMemcpyAsync(host_ptrs, col.data<void>(), 2 * sizeof(void*), cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);
-        this->_data = host_ptrs[0];
-        _meta = host_ptrs[1];
-        // Note: _bytes is not set here as we don't have that info from just the column_view
     }
     
-    /**
-     * @brief Device constructor from a column_view of a string column.
-     * 
-     * On device, the column_view's data pointer points to the helper buffer
-     * containing [data_ptr, meta_ptr].
-     */
-    __device__ string_column_view_base(
-        column_view& col,
-        string_impl_id impl) 
-        : Base(reinterpret_cast<void**>(const_cast<void*>(col.data<void>()))[0], col.size(), gamax::data_type{gamax::type_id::STRING}, 0)
-        , _meta(reinterpret_cast<void**>(const_cast<void*>(col.data<void>()))[1])
-        , _impl(impl) {
-            // the last element of the offsets array is the total bytes
-            _bytes = reinterpret_cast<gamax::size_type*>(_meta)[col.size()];
-        }
-
     __host__ __device__ constexpr string_impl_id impl() const noexcept {
         return _impl;
     }
@@ -98,17 +80,16 @@ using mutable_string_column_view = string_column_view_base<mutable_column_view>;
 
 class string_column : public column {
 public:
-    // Default constructor for empty string column
-    string_column() : column(gamax::data_type{gamax::type_id::STRING}, 0) {};
     ~string_column() = default;
 
     string_column(
         gamax::size_type data_bytes,
         gamax::size_type meta_bytes, 
         size_type size, // number of strings
+        cudaStream_t stream,
         string_impl_id impl)
-        : column(device_buffer(data_bytes, false), size, gamax::data_type{gamax::type_id::STRING})
-        , _meta(device_buffer(meta_bytes, false))
+        : column(device_buffer(data_bytes, stream), size, gamax::data_type{gamax::type_id::STRING})
+        , _meta(device_buffer(meta_bytes, stream))
         , _impl(impl) {}
 
     string_column(
@@ -135,50 +116,30 @@ public:
     
     // the "_s" suffix indicates string column view
     string_column_view view_s() const {
-        return string_column_view(buffer(), _meta, this->size(), _impl);
+        return string_column_view(this->view(), _impl);
     }
 
     mutable_string_column_view mutable_view_s() {
-        return mutable_string_column_view(buffer(), _meta, this->size(), _impl);
+        return mutable_string_column_view(this->mutable_view(), _impl);
     }
 
-    // Since the string_column has an additional metadata buffer, 
-    // the column_view needs to be created differently. 
-    // We create a dedicated _view_helper_buffer to hold the pointer of 
-    // the meta buffer and the data buffer. This create another layer of indirection,
-    // but it allows us to reuse the existing column_view structure.
-    virtual column_view view(const size_type offset = 0, cudaStream_t stream = cudaStreamDefault) const override {
-        if(_view_helper_buffer) {
-            return column_view(_view_helper_buffer->data(), this->size(), this->type(), offset);
-        }
-        
-        create_view_helper_buffer(stream);
-        return column_view(_view_helper_buffer->data(), this->size(), this->type(), offset);
+    column_view view(const size_type offset = 0) const override {
+        return column_view(
+            this->buffer().data(), this->size(), this->type(), offset,
+            _meta.data(), this->buffer().size(), static_cast<int32_t>(_impl),
+            this->identity());
     }
 
-    virtual mutable_column_view mutable_view(const size_type offset = 0, cudaStream_t stream = cudaStreamDefault) override {
-        if(_view_helper_buffer) {
-            return mutable_column_view(_view_helper_buffer->data(), this->size(), this->type(), offset);
-        }
-        
-        create_view_helper_buffer(stream);
-        return mutable_column_view(_view_helper_buffer->data(), this->size(), this->type(), offset);
+    mutable_column_view mutable_view(const size_type offset = 0) override {
+        return mutable_column_view(
+            this->buffer().data(), this->size(), this->type(), offset,
+            _meta.data(), this->buffer().size(), static_cast<int32_t>(_impl),
+            this->identity());
     }
 
 private:
     gamax::device_buffer _meta;
-    mutable std::unique_ptr<device_buffer> _view_helper_buffer {nullptr};
     string_impl_id _impl {DEFAULT_STRING_IMPL};
-
-    void create_view_helper_buffer(cudaStream_t stream = cudaStreamDefault) const {
-        if(_view_helper_buffer) return;
-        _view_helper_buffer = std::make_unique<device_buffer>(2 * sizeof(void*), false);
-        void** host_ptrs = new void*[2];
-        host_ptrs[0] = this->buffer().data();
-        host_ptrs[1] = _meta.data();
-        cudaMemcpyAsync(_view_helper_buffer->data(), host_ptrs, 2 * sizeof(void*), cudaMemcpyHostToDevice, cudaStreamDefault);
-        delete[] host_ptrs;
-    }
 };
 
 using string_column_ptr = std::unique_ptr<string_column>;
@@ -214,8 +175,8 @@ public:
     string_scalar() = default;
     ~string_scalar() = default;
 
-    string_scalar(std::string_view str, cudaStream_t stream = cudaStreamDefault) 
-        : _size(str.size()), _data(str.size(), false, stream) {
+    string_scalar(std::string_view str, cudaStream_t stream)
+        : _size(str.size()), _data(str.size(), stream) {
         cudaMemcpyAsync(_data.data(), str.data(), _size, cudaMemcpyHostToDevice, stream);
         cudaStreamSynchronize(stream);
     }
@@ -238,19 +199,19 @@ inline string_scalar_view string_scalar::view() const {
 
 std::unique_ptr<string_scalar> make_string_scalar(
     std::string_view str, 
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 
 string_column_ptr make_string_column(
     const char* flat_data,
     const int32_t* lengths,
     size_type num_strings,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_impl_id impl = DEFAULT_STRING_IMPL);
 
 string_column_ptr make_string_column(
     device_buffer flat_data,
     device_buffer offsets,
     size_type num_strings,
-    cudaStream_t stream = cudaStreamDefault,
+    cudaStream_t stream,
     string_impl_id impl = DEFAULT_STRING_IMPL);
 } // namespace gamax

@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
@@ -27,8 +30,8 @@ namespace gamax::tpch {
 // Each unique (table, columns) request is loaded lazily. Re-requests
 // of the same key hit an in-resolver cache; requests for overlapping
 // but not-identical subsets benefit from `TpchTableReader`'s per-column
-// pinned cache, which avoids a second parquet read and a second H2D
-// for already-seen columns.
+// pinned cache, which avoids a second parquet read. Each distinct request
+// still materializes its own GPU columns.
 class IrSourceResolver {
 public:
     IrSourceResolver(TpchTableReader& reader, const ir::Catalog& catalog)

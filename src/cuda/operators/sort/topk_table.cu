@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <memory>
 #include <utility>
 #include <vector>
@@ -44,12 +47,12 @@ namespace {
             
             if (col_view.type().id() == gamax::type_id::STRING) {
                 // For string columns, use gather with indices 0 to k-1
-                auto indices = gamax::make_sequence<gamax::size_type>(actual_k, 0, 1, stream);
-                gamax::string_column_view str_view(col_view, gamax::ARROW_STRING, stream);
+                auto indices = gamax::make_sequence<gamax::size_type>(actual_k, stream, 0, 1);
+                gamax::string_column_view str_view(col_view, gamax::ARROW_STRING);
                 result_columns.push_back(gamax::gather_strings(str_view, indices->view(), stream));
             } else {
                 // For numeric columns, copy first k elements
-                auto result_col = gamax::make_column(col_view.type(), actual_k, false, stream);
+                auto result_col = gamax::make_column(col_view.type(), actual_k, stream);
                 cudaMemcpyAsync(
                     result_col->template data(),
                     col_view.data(),
@@ -81,7 +84,7 @@ namespace {
             auto col_view = table.get_column(i);
             
             if (col_view.type().id() == gamax::type_id::STRING) {
-                gamax::string_column_view str_view(col_view, gamax::ARROW_STRING, stream);
+                gamax::string_column_view str_view(col_view, gamax::ARROW_STRING);
                 result_columns.push_back(gamax::gather_strings(str_view, indices, stream));
             } else {
                 result_columns.push_back(gamax::util::device::gather(indices, col_view, stream));
@@ -134,9 +137,11 @@ namespace {
                 std::vector<std::unique_ptr<gamax::column>> empty_columns;
                 for (gamax::size_type i = 0; i < table.num_columns(); ++i) {
                     if (table.get_column(i).type().id() == gamax::type_id::STRING) {
-                        empty_columns.push_back(std::make_unique<gamax::string_column>());
+                        empty_columns.push_back(std::make_unique<gamax::string_column>(
+                            gamax::device_buffer{0, stream}, gamax::device_buffer{0, stream},
+                            0, gamax::ARROW_STRING));
                     } else {
-                        empty_columns.push_back(gamax::make_column(table.get_column(i).type(), 0, false, stream));
+                        empty_columns.push_back(gamax::make_column(table.get_column(i).type(), 0, stream));
                     }
                 }
                 return gamax::make_table(std::move(empty_columns));
@@ -146,11 +151,11 @@ namespace {
             const KeyT* d_keys_in = sort_key_col.data<KeyT>();
             
             // Create output key column and indices (values)
-            auto keys_out = gamax::make_column<KeyT>(actual_k, false, stream);
-            auto indices_out = gamax::make_column<gamax::size_type>(actual_k, false, stream);
+            auto keys_out = gamax::make_column<KeyT>(actual_k, stream);
+            auto indices_out = gamax::make_column<gamax::size_type>(actual_k, stream);
             
             // Create input indices (0 to N-1)
-            auto indices_in = gamax::make_sequence<gamax::size_type>(num_rows, 0, 1, stream);
+            auto indices_in = gamax::make_sequence<gamax::size_type>(num_rows, stream, 0, 1);
             
             // Create execution environment
             cuda::stream_ref stream_ref{stream};
@@ -163,6 +168,7 @@ namespace {
             if (order == gamax::sort_order::DESCENDING) {
                 // Use MaxPairs for descending (largest K)
                 CALL_CUB_FUNC(
+                    stream,
                     cub::DeviceTopK::MaxPairs,
                     d_keys_in,
                     keys_out->template data<KeyT>(),
@@ -174,6 +180,7 @@ namespace {
             } else {
                 // Use MinPairs for ascending (smallest K)
                 CALL_CUB_FUNC(
+                    stream,
                     cub::DeviceTopK::MinPairs,
                     d_keys_in,
                     keys_out->template data<KeyT>(),
@@ -191,10 +198,10 @@ namespace {
                 auto [sorted_keys, sorted_indices] = sort_column_pair(
                     keys_out->view(),
                     indices_out->view(),
+                    stream,
                     0, -1,
                     order,
-                    nullptr, 0,
-                    stream);
+                    nullptr, 0);
                 
                 // Gather all columns using sorted indices
                 return gather_table_by_indices(table, sorted_indices->view(), stream);

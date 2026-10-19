@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
 
 #include <string>
@@ -45,7 +48,8 @@ template <typename T>
 gamax::column_ptr mk_col(const std::vector<T>& v) {
     return gamax::make_column_from_host(
         const_cast<T*>(v.data()),
-        static_cast<gamax::size_type>(v.size()));
+        static_cast<gamax::size_type>(v.size()),
+        cudaStreamDefault);
 }
 
 gamax::column_ptr mk_str(const std::vector<std::string>& ss) {

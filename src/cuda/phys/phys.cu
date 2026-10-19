@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "phys/phys.hpp"
 
 #include <algorithm>
@@ -49,7 +52,8 @@ gamax::column_ptr make_zero_row_column(
             empty_data, empty_len, 0, stream, gamax::ARROW_STRING);
         return std::unique_ptr<gamax::column>(std::move(ptr));
     }
-    return gamax::make_column(type, 0, /*clear=*/false, stream);
+    return gamax::make_column(
+        type, 0, stream, gamax::buffer_init::uninitialized);
 }
 
 // Build a 1-row zero-initialized column. Used by scalar_aggregate on
@@ -64,7 +68,7 @@ gamax::column_ptr make_one_row_zero_column(
             empty_data, empty_len, 1, stream, gamax::ARROW_STRING);
         return std::unique_ptr<gamax::column>(std::move(ptr));
     }
-    return gamax::make_column(type, 1, /*clear=*/true, stream);
+    return gamax::make_column(type, 1, stream, gamax::buffer_init::zero);
 }
 
 // Deep-copy a single column regardless of its type. For numeric columns
@@ -80,8 +84,8 @@ gamax::column_ptr copy_any_column(
 {
     if (col.type().id() == gamax::type_id::STRING) {
         auto ids = gamax::make_sequence<gamax::size_type>(
-            col.size(), 0, 1, stream);
-        gamax::string_column_view sv(col, gamax::ARROW_STRING, stream);
+            col.size(), stream, 0, 1);
+        gamax::string_column_view sv(col, gamax::ARROW_STRING);
         auto gathered = gamax::gather_strings(sv, ids->view(), stream);
         return std::unique_ptr<gamax::column>(std::move(gathered));
     }
@@ -134,7 +138,7 @@ gamax::phys::table_ptr apply_bitmask(
     auto ensure_tids = [&]() {
         if (!compact_tids) {
             auto seq = gamax::make_sequence<gamax::size_type>(
-                in.num_rows(), 0, 1, stream);
+                in.num_rows(), stream, 0, 1);
             compact_tids = gamax::util::device::compact(
                 seq->view(), mask, stream);
         }
@@ -143,7 +147,7 @@ gamax::phys::table_ptr apply_bitmask(
         auto col = in.get_column(col_at(i));
         if (col.type().id() == gamax::type_id::STRING) {
             ensure_tids();
-            gamax::string_column_view sv(col, gamax::ARROW_STRING, stream);
+            gamax::string_column_view sv(col, gamax::ARROW_STRING);
             auto gathered = gamax::gather_strings(
                 sv, compact_tids->view(), stream);
             out.push_back(std::unique_ptr<gamax::column>(std::move(gathered)));
@@ -243,7 +247,7 @@ table_ptr project(gamax::table_view in,
     std::unique_ptr<gamax::table> computed_tbl;
     if (!computed.empty()) {
         computed_tbl = gamax::project::project(
-            in, computed, hint, ctx.stream);
+            in, computed, ctx.stream, hint);
     }
 
     // Stitch per-item results in positional order.
@@ -259,7 +263,7 @@ table_ptr project(gamax::table_view in,
                 // path; per-Predicate-item options aren't a separate
                 // bench axis today.
                 auto bm = gamax::select::select_to_bitmask(
-                    in, pred, gamax::select::select_options{}, ctx.stream);
+                    in, pred, ctx.stream, gamax::select::select_options{});
                 out.push_back(std::move(bm));
                 break;
             }
@@ -280,8 +284,7 @@ table_ptr project(gamax::table_view in,
                 auto& si = std::get<SubstringItem>(items[i]);
                 gamax::string_column_view src_view(
                     in.get_column(si.src_col),
-                    gamax::ARROW_STRING,
-                    ctx.stream);
+                    gamax::ARROW_STRING);
                 auto r = gamax::substring(
                     src_view, si.sql_offset, si.length, ctx.stream);
                 out.push_back(std::unique_ptr<gamax::column>(std::move(r)));
@@ -335,7 +338,7 @@ table_ptr filter(gamax::table_view in,
     // The Predicate may reference ANY ordinal of `in`, not just the
     // ones in `output_ordinals`. select_to_bitmask runs over the full
     // view; only the materialization is selective.
-    auto mask = gamax::select::select_to_bitmask(in, pred, hint, ctx.stream);
+    auto mask = gamax::select::select_to_bitmask(in, pred, ctx.stream, hint);
     return apply_bitmask(in, mask->view(), output_ordinals, ctx.stream);
 }
 
@@ -450,12 +453,12 @@ table_ptr eq_join(gamax::table_view L, std::vector<gamax::size_type> lkeys,
     std::unique_ptr<gamax::column> r_sentinel;
     if (L_view.num_columns() == 1) {
         l_sentinel = gamax::make_sequence<gamax::size_type>(
-            L.num_rows(), 0, 1, ctx.stream);
+            L.num_rows(), ctx.stream, 0, 1);
         L_view.add_column(l_sentinel->view());
     }
     if (R_view.num_columns() == 1) {
         r_sentinel = gamax::make_sequence<gamax::size_type>(
-            R.num_rows(), 0, 1, ctx.stream);
+            R.num_rows(), ctx.stream, 0, 1);
         R_view.add_column(r_sentinel->view());
     }
 
@@ -678,7 +681,8 @@ struct concat_numeric_impl {
     {
         gamax::size_type total = 0;
         for (const auto& c : cols) total += c.size();
-        auto out = gamax::make_column<T>(total, false, stream);
+        auto out = gamax::make_column<T>(
+            total, stream, gamax::buffer_init::uninitialized);
         gamax::size_type offset = 0;
         for (const auto& c : cols) {
             if (c.size() > 0) {
@@ -730,7 +734,7 @@ gamax::column_ptr concat_strings_impl(
     gamax::size_type total_rows = 0;
     gamax::size_type total_bytes = 0;
     for (size_t k = 0; k < cols.size(); ++k) {
-        svs.emplace_back(cols[k], gamax::ARROW_STRING, stream);
+        svs.emplace_back(cols[k], gamax::ARROW_STRING);
         const auto n = cols[k].size();
         total_rows += n;
         if (n > 0) {
@@ -750,10 +754,10 @@ gamax::column_ptr concat_strings_impl(
     // Output buffers: data (total_bytes), meta ((total_rows + 1) *
     // sizeof int64).
     gamax::device_buffer out_data(
-        static_cast<size_t>(total_bytes), false, stream);
+        static_cast<size_t>(total_bytes), stream);
     gamax::device_buffer out_meta(
         static_cast<size_t>(total_rows + 1) * sizeof(gamax::size_type),
-        false, stream);
+        stream);
     auto* out_off_ptr = static_cast<gamax::size_type*>(out_meta.data());
 
     // First output offset is always zero.
@@ -871,7 +875,7 @@ table_ptr sort(gamax::table_view in,
         k.push_back(static_cast<int>(s.column));
         o.push_back(s.order);
     }
-    return gamax::sort::sort_table(in, k, o, hint, ctx.stream);
+    return gamax::sort::sort_table(in, k, o, ctx.stream, hint);
 }
 
 table_ptr top_k(gamax::table_view in,

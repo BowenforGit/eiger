@@ -1,11 +1,21 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 // Small end-to-end runner for the IR → ExecPlan → execute pipeline
 // against live TPC-H Parquet data.
 //
 // Usage:
 //   run_tpch_ir <query-id> [--scale N] [--print-plan] [--verify]
+//                          [--green-sms N]
 //
 // Example:
 //   TPCH_DATA_PATH=/scratch/wubo ./run_tpch_ir 6 --scale 1 --verify
+//
+// --green-sms N runs the whole query on a CUDA green-context partition of
+// ~N SMs (rounded up to the device alignment; 0 = native full device). Pair
+// with --verify to confirm the query is CORRECT under a green stream — the
+// gate that surfaces latent stream-0 leaks (ops that launch on the default
+// stream instead of ctx.stream) before the query-level SM-scaling sweep.
 //
 // --verify loads the Parquet golden at
 //   $TPCH_DATA_PATH/sf<N>/golden/q<NN>.parquet
@@ -45,6 +55,13 @@
 #include "tpch/tpch_ir.hpp"
 #include "tpch/verify.hpp"
 
+// Green-context SM-partition helper (green_setup / green_teardown). Reused from
+// the NVBench green-ctx mechanism; the NVBench glue in that header is skipped
+// here (no <nvbench/nvbench.cuh> on this target's include path). Lets --verify
+// run the query on an N-SM partition and confirm correctness under a green
+// (non-default-context) stream — the gate for the query-level SM-scaling sweep.
+#include "benchmarks/green-ctx/green_ctx.hpp"
+
 namespace {
 
 struct Args {
@@ -53,7 +70,8 @@ struct Args {
     bool print_plan {false};
     bool verify {false};
     bool no_fuse_project {false};
-    bool use_cuda_mm {false};
+    std::string rmm_resource;
+    int green_sms {0};         // >0 = run on an N-SM green-context partition
     std::string eq_join_algo;  // empty = default
     std::string profile_csv;   // empty = disabled
 };
@@ -72,16 +90,15 @@ Args parse_args(int argc, char** argv) {
             a.profile_csv = argv[++i];
         } else if (std::strcmp(argv[i], "--no-fuse-project") == 0) {
             a.no_fuse_project = true;
-        } else if (std::strcmp(argv[i], "--use-cuda-mm") == 0) {
-            // Switches the global memory manager from UserSpaceMM
-            // (88 GiB pre-alloc'd slab) to CudaMM (per-allocation
-            // cudaMallocAsync). Useful under compute-sanitizer:
-            // each CUDA allocation is a separately-tracked range, so
-            // an OOB write inside what UserSpaceMM would consider
-            // "the slab" is now caught by the sanitizer.
-            a.use_cuda_mm = true;
+        } else if (std::strcmp(argv[i], "--rmm-resource") == 0 && i + 1 < argc) {
+            a.rmm_resource = argv[++i];
+            if (a.rmm_resource != "arena" && a.rmm_resource != "cuda") {
+                throw std::runtime_error("--rmm-resource must be arena or cuda");
+            }
         } else if (std::strcmp(argv[i], "--eq-join-algo") == 0 && i + 1 < argc) {
             a.eq_join_algo = argv[++i];
+        } else if (std::strcmp(argv[i], "--green-sms") == 0 && i + 1 < argc) {
+            a.green_sms = std::atoi(argv[++i]);
         } else {
             throw std::runtime_error("Unknown arg: " + std::string(argv[i]));
         }
@@ -165,43 +182,34 @@ void print_result(const gamax::table_view& v, gamax::size_type max_rows) {
         col_cells.reserve(n);
         switch (id) {
             case type_id::INT32: {
-                auto h = copy_column_to_host<int32_t>(col);
+                auto h = copy_column_to_host<int32_t>(col, cudaStreamDefault);
                 for (gamax::size_type i = 0; i < n; ++i)
                     col_cells.push_back(std::to_string(h[i]));
                 break;
             }
             case type_id::INT64: {
-                auto h = copy_column_to_host<int64_t>(col);
+                auto h = copy_column_to_host<int64_t>(col, cudaStreamDefault);
                 for (gamax::size_type i = 0; i < n; ++i)
                     col_cells.push_back(std::to_string(h[i]));
                 break;
             }
             case type_id::FLOAT64: {
-                auto h = copy_column_to_host<double>(col);
+                auto h = copy_column_to_host<double>(col, cudaStreamDefault);
                 for (gamax::size_type i = 0; i < n; ++i)
                     col_cells.push_back(std::to_string(h[i]));
                 break;
             }
             case type_id::STRING: {
-                // Arrow string columns carry a 2-entry helper buffer
-                // of [data_ptr, meta_ptr]. Reading both via one D2H
-                // copy keeps the path simple and side-steps the NVCC
-                // void*-arithmetic warning in `string_column_view`'s
-                // host ctor (harmless in isolation, but grep hits it
-                // every time this TU recompiles). Offsets in
-                // meta_buffer are INT64 (see get_arrow_string_offsets).
-                void* host_ptrs[2] = {nullptr, nullptr};
-                cudaMemcpy(host_ptrs, col.data<void>(),
-                           2 * sizeof(void*), cudaMemcpyDeviceToHost);
+                // Arrow string offsets travel as non-owning view metadata.
                 auto num = col.size();
                 std::vector<gamax::size_type> offsets(num + 1);
-                cudaMemcpy(offsets.data(), host_ptrs[1],
+                cudaMemcpy(offsets.data(), col.auxiliary_data(),
                            (num + 1) * sizeof(gamax::size_type),
                            cudaMemcpyDeviceToHost);
                 gamax::size_type total = offsets.back();
                 std::string bytes(total, '\0');
                 if (total > 0) {
-                    cudaMemcpy(bytes.data(), host_ptrs[0],
+                    cudaMemcpy(bytes.data(), col.data<void>(),
                                total, cudaMemcpyDeviceToHost);
                 }
                 for (gamax::size_type i = 0; i < n; ++i) {
@@ -259,12 +267,10 @@ std::optional<gamax::join::join_hint> parse_eq_join_algo(const std::string& v) {
 int main(int argc, char** argv) try {
     auto args = parse_args(argc, argv);
 
-    // `use_cuda_mm()` must run before any get_mm() — wire it up here
-    // before any TPC-H reader / executor work touches device memory.
-    if (args.use_cuda_mm) {
-        use_cuda_mm();
-        std::cout << "Memory manager: CudaMM (cudaMallocAsync per allocation)\n";
+    if (!args.rmm_resource.empty()) {
+        setenv("GAMAX_RMM_RESOURCE", args.rmm_resource.c_str(), 1);
     }
+    gamax::prewarm_device_memory_resource();
 
     std::cout << "== TPC-H Q" << args.query_id
               << " (SF=" << args.scale_factor << ") via IR pipeline ==\n";
@@ -320,7 +326,27 @@ int main(int argc, char** argv) try {
     gamax::tpch::IrSourceResolver resolver(reader, catalog);
 
     // ── 4. Execute ───────────────────────────────────────────────
-    gamax::phys::Context ctx{params.stream};
+    // Optionally route the whole query onto a CUDA green-context SM
+    // partition. green_setup creates a green ctx spanning ~green_sms SMs
+    // (rounded up to the device alignment) and a non-blocking stream on
+    // it; every op the executor launches on that stream runs on exactly
+    // that partition. Because the green stream lives in a SEPARATE
+    // context from the runtime primary context, it does NOT serialize
+    // with the default stream — so any operator that leaks work onto
+    // stream 0 (instead of ctx.stream) races here and produces a wrong
+    // result. Running --verify under --green-sms is exactly the gate
+    // that catches those latent stream-0 leaks before the SM sweep.
+    GreenCtx green;
+    cudaStream_t exec_stream = params.stream;
+    if (args.green_sms > 0) {
+        int dev = 0;
+        cudaGetDevice(&dev);
+        unsigned actual = green_setup(dev, args.green_sms, green);
+        exec_stream = reinterpret_cast<cudaStream_t>(green.gstream);
+        std::cout << "Green ctx: requested " << args.green_sms
+                  << " SMs, got " << actual << " (partition stream).\n";
+    }
+    gamax::phys::Context ctx{exec_stream};
 
     // Opt-in per-step GPU timing. The sink is attached to `ctx` so the
     // executor's step walker can record cudaEvent pairs around each
@@ -346,7 +372,7 @@ int main(int argc, char** argv) try {
         };
     auto t0 = std::chrono::steady_clock::now();
     auto result = gamax::exec::execute(ep, source_fn, ctx);
-    cudaStreamSynchronize(params.stream);
+    cudaStreamSynchronize(exec_stream);
     auto t1 = std::chrono::steady_clock::now();
     nvtxRangePop();
     auto elapsed_ms =
@@ -357,7 +383,7 @@ int main(int argc, char** argv) try {
     // Header is only written when the file is new or empty, so a sweep
     // over 22 queries produces one well-formed CSV.
     if (profile_sink) {
-        profile_sink->finalize(params.stream);
+        profile_sink->finalize(exec_stream);
         bool write_header = true;
         {
             std::ifstream probe(args.profile_csv);
@@ -387,9 +413,11 @@ int main(int argc, char** argv) try {
             std::cout << "VERIFY: OK\n";
         } else {
             std::cout << "VERIFY: MISMATCH\n" << vr.diagnostic;
+            green_teardown(green);
             return 1;
         }
     }
+    green_teardown(green);  // no-op on the native path (green.active == false)
     return 0;
 }
 catch (const std::exception& e) {

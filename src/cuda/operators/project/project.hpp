@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
@@ -16,18 +19,18 @@ namespace gamax::project {
     std::unique_ptr<gamax::table> project(
         gamax::table_view table,
         std::vector<gamax::expression::ExprTree>& expr,
-        project_options options = {},
-        cudaStream_t stream = cudaStreamDefault);
+        cudaStream_t stream,
+        project_options options = {});
     
     std::unique_ptr<gamax::table> project_fuse(
         gamax::table_view table,
         std::vector<gamax::expression::ExprTree>& expr,
-        cudaStream_t stream = cudaStreamDefault);
+        cudaStream_t stream);
     
     std::unique_ptr<gamax::table> project_nofuse(
         gamax::table_view table,
         std::vector<gamax::expression::ExprTree>& expr,
-        cudaStream_t stream = cudaStreamDefault);
+        cudaStream_t stream);
     
     /**
      * @brief Project with ownership transfer optimization.
@@ -48,6 +51,6 @@ namespace gamax::project {
     std::unique_ptr<gamax::table> project(
         std::unique_ptr<gamax::table> input_table,
         std::vector<gamax::expression::ExprTree>& expr,
-        project_options options = {},
-        cudaStream_t stream = cudaStreamDefault);
+        cudaStream_t stream,
+        project_options options = {});
 } // namespace gamax::project

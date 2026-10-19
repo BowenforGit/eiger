@@ -1,6 +1,10 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "inner_join.hpp"
 
 #include <memory>
+#include <limits>
 #include <cuda.h>
 #include <cuda/atomic>
 #include <type_traits>
@@ -14,25 +18,32 @@
 #include "types/sentinel.hpp"
 
 namespace gamax::join {
-namespace detail {
-
 namespace {
     using tid_type = gamax::size_type;
 
-    struct hash_join_impl {
+    struct hash_join_indices_impl {
         template<typename Key, std::enable_if_t<sizeof(Key) == sizeof(cuda::atomic<Key>) && cuco::is_bitwise_comparable_v<Key>, int> = 0>
-        std::unique_ptr<gamax::table> operator()(
-            gamax::table_view left,
-            gamax::table_view right,
+        gamax::join::EqJoinMatches operator()(
+            gamax::column_view left_key,
+            gamax::column_view right_key,
             gamax::join::join_hint const& hint,
-            cudaStream_t stream)
+            cudaStream_t stream,
+            const BeforeProbeHook& before_probe)
         {
+            if (left_key.size() == 0 || right_key.size() == 0) {
+                if (before_probe) before_probe(stream);
+                return EqJoinMatches{
+                    gamax::make_column<tid_type>(0, stream),
+                    gamax::make_column<tid_type>(0, stream)};
+            }
+
             // Build multiset with left (build) side keys
+            rmm_allocator_handle<tid_type> allocator{stream};
             auto set = gamax::containers::multiset<Key, tid_type>(
-                left[0],
+                left_key,
                 0.25, // use a default load factor of 0.25
                 gamax::sentinel<tid_type>(),
-                *get_thrust_allocator<char>(stream),
+                allocator.get(),
                 stream);
 
             set.insert_with_tids(stream);
@@ -81,43 +92,39 @@ namespace {
             // `benchmarks/join/ieq_join_nvbench.cu` without also
             // lifting the count-then-probe protection**, or
             // benchmark numbers will silently regress by ~2×.
-            auto max_output_size = get_ieq_join_output_alloc_size(left, right, hint);
+            constexpr gamax::size_type kUnbounded =
+                std::numeric_limits<gamax::size_type>::max();
+            const gamax::size_type bound_l =
+                hint.unique_left ? right_key.size() : kUnbounded;
+            const gamax::size_type bound_r =
+                hint.unique_right ? left_key.size() : kUnbounded;
+            const gamax::size_type bound = std::min(bound_l, bound_r);
+            auto max_output_size = hint.max_out != 0
+                ? hint.max_out
+                : (bound == kUnbounded ? gamax::join::MAX_JOIN_OUTPUT_SIZE : bound);
             const bool have_tight_bound =
                 hint.max_out != 0 || hint.unique_left || hint.unique_right;
             if (!have_tight_bound) {
                 max_output_size = static_cast<gamax::size_type>(
-                    set.count(right[0], stream));
+                    set.count(right_key, stream));
             }
+
+            if (before_probe) before_probe(stream);
 
             // Probe with right (probe) side keys, returns (build_tids, probe_tids) = (left_tids, right_tids)
-            auto [res_left_tids, res_right_tids] = set.probe(right[0], max_output_size, stream);
-
-            // materialize
-            auto res_table = std::make_unique<gamax::table>();
-            
-            // Materialize join key from left side using left_tids
-            res_table->add_column(simple_materialize(left[0], res_left_tids->view(), stream));
-            
-            for(auto i = 1; i < left.num_columns(); i++) {
-                res_table->add_column(simple_materialize(left[i], res_left_tids->view(), stream));
-            }
-            res_left_tids.reset(nullptr);
-            
-            for(auto i = 1; i < right.num_columns(); i++) {
-                res_table->add_column(simple_materialize(right[i], res_right_tids->view(), stream));
-            }
-            
-            cudaStreamSynchronize(stream);
-            
-            return res_table;
+            auto [res_left_tids, res_right_tids] =
+                set.probe(right_key, max_output_size, stream);
+            return EqJoinMatches{
+                std::move(res_left_tids), std::move(res_right_tids)};
         }   
 
         template<typename Key, std::enable_if_t<sizeof(Key) != sizeof(cuda::atomic<Key>) || !cuco::is_bitwise_comparable_v<Key>, int> = 0>
-        std::unique_ptr<gamax::table> operator()(
-            gamax::table_view left, 
-            gamax::table_view right,
+        gamax::join::EqJoinMatches operator()(
+            gamax::column_view left_key,
+            gamax::column_view right_key,
             gamax::join::join_hint const& hint,
-            cudaStream_t stream)
+            cudaStream_t stream,
+            const BeforeProbeHook&)
         {
             if constexpr (sizeof(Key) != sizeof(cuda::atomic<Key>)) {
                 throw std::runtime_error("Hash join only supports atomic types");
@@ -128,19 +135,65 @@ namespace {
     };
 } // namespace
 
+EqJoinMatches eq_join_indices(
+    gamax::column_view left_key,
+    gamax::column_view right_key,
+    gamax::join::join_hint const& hint,
+    cudaStream_t stream)
+{
+    return eq_join_indices(left_key, right_key, hint, stream, {});
+}
+
+EqJoinMatches eq_join_indices(
+    gamax::column_view left_key,
+    gamax::column_view right_key,
+    gamax::join::join_hint const& hint,
+    cudaStream_t stream,
+    const BeforeProbeHook& before_probe)
+{
+    if (hint.join_algo != gamax::join::HASH) {
+        throw std::invalid_argument(
+            "eq_join_indices only supports the HASH join algorithm");
+    }
+    if (left_key.type() != right_key.type()) {
+        throw std::invalid_argument(
+            "eq_join_indices requires identical key types");
+    }
+    return gamax::type_dispatcher(
+        left_key.type(), hash_join_indices_impl{},
+        left_key, right_key, hint, stream, before_probe);
+}
+
+namespace detail {
+
 std::unique_ptr<gamax::table> ieq_hash_join(
     gamax::table_view left, 
     gamax::table_view right,
     gamax::join::join_hint const& hint,
     cudaStream_t stream)
 {
-    return gamax::type_dispatcher(
-        left[0].type(), 
-        hash_join_impl{}, 
-        left, 
-        right, 
-        hint, 
-        stream);
+    auto matches = gamax::join::eq_join_indices(
+        left[0], right[0], hint, stream);
+
+    auto result = std::make_unique<gamax::table>();
+    result->add_column(simple_materialize(
+        left[0], matches.left_indices->view(), stream));
+    for (auto column = 1; column < left.num_columns(); ++column) {
+        result->add_column(simple_materialize(
+            left[column], matches.left_indices->view(), stream));
+    }
+    // Every use of the left match indices has now been enqueued on `stream`.
+    // Release the potentially multi-gigabyte buffer before allocating the
+    // right-side outputs so a stream-ordered resource can reuse it once those
+    // left gathers complete. This preserves the pre-eq_join_indices peak-memory
+    // behavior of the legacy HASH join.
+    matches.left_indices.reset();
+    for (auto column = 1; column < right.num_columns(); ++column) {
+        result->add_column(simple_materialize(
+            right[column], matches.right_indices->view(), stream));
+    }
+    cudaStreamSynchronize(stream);
+    return result;
 }
 } // namespace detail
 } // namespace gamax::join

@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "select.hpp"
 
 #include <memory>
@@ -13,18 +16,18 @@ namespace gamax::select {
 std::unique_ptr<gamax::table> select(
         gamax::table_view table,
         gamax::expression::ExprTree& expr,
-        select_options options,
-        cudaStream_t stream)
+        cudaStream_t stream,
+        select_options options)
 {
-    auto [result_table, _] = select_and_return_bitmask(table, expr, options, stream);
+    auto [result_table, _] = select_and_return_bitmask(table, expr, stream, options);
     return std::move(result_table);
 }
 
 std::pair<std::unique_ptr<gamax::table>, gamax::column_ptr> select_and_return_bitmask(
         gamax::table_view table,
         gamax::expression::ExprTree& expr,
-        select_options options,
-        cudaStream_t stream)
+        cudaStream_t stream,
+        select_options options)
 {
     if (options.fuse_operations) {
         return select_fuse(table, expr, stream);
@@ -36,8 +39,8 @@ std::pair<std::unique_ptr<gamax::table>, gamax::column_ptr> select_and_return_bi
 gamax::column_ptr select_to_bitmask(
     gamax::table_view table,
     gamax::expression::ExprTree& expr,
-    select_options options,
-    cudaStream_t stream) 
+    cudaStream_t stream,
+    select_options options)
 {
     if (options.fuse_operations) {
         return gamax::expression::evaluate_expr(table, expr, stream);;

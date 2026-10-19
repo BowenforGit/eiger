@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
@@ -24,9 +27,11 @@ make_empty_table_like(gamax::table_view const& table, cudaStream_t stream)
     const auto num_cols = table.num_columns();
     for (gamax::size_type i = 0; i < num_cols; ++i) {
         if (table.get_column(i).type().id() == gamax::type_id::STRING) {
-            empty_columns.push_back(std::make_unique<gamax::string_column>());
+            empty_columns.push_back(std::make_unique<gamax::string_column>(
+                gamax::device_buffer{0, stream}, gamax::device_buffer{0, stream},
+                0, gamax::ARROW_STRING));
         } else {
-            empty_columns.push_back(gamax::make_column(table.get_column(i).type(), 0, false, stream));
+            empty_columns.push_back(gamax::make_column(table.get_column(i).type(), 0, stream));
         }
     }
     return gamax::make_table(std::move(empty_columns));
@@ -47,7 +52,7 @@ inline void gather_columns_by_indices(
         auto col = table.get_column(i);
         
         if (col.type().id() == gamax::type_id::STRING) {
-            gamax::string_column_view str_view(col, gamax::ARROW_STRING, stream);
+            gamax::string_column_view str_view(col, gamax::ARROW_STRING);
             sorted_columns[i] = gamax::gather_strings(str_view, sorted_indices, stream);
         } else {
             sorted_columns[i] = gamax::util::device::gather(sorted_indices, col, stream);

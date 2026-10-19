@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "inner_join.hpp"
 
 #include <memory>
@@ -22,7 +25,9 @@ namespace {
 
     std::pair<std::unique_ptr<gamax::column>, std::unique_ptr<gamax::column>>
     sort_transform(gamax::column_view key, gamax::column_view val, cudaStream_t stream) {
-        return gamax::sort::sort_column_pair(key, val, 0, -1, gamax::sort_order::ASCENDING, nullptr, 0, stream);
+        return gamax::sort::sort_column_pair(
+            key, val, stream, 0, -1,
+            gamax::sort_order::ASCENDING, nullptr, 0);
     }
 
     bool narrow_join(const gamax::table_view& left, const gamax::table_view& right) {
@@ -50,7 +55,6 @@ namespace {
             thrust::counting_iterator<tid_type> left_itr(0);
             thrust::counting_iterator<tid_type> right_itr(0);
 
-            // TODO - make stream work
             // TODO - make merge_path more "modern"
             merge_path(
                 const_cast<T*>(left_key.data<T>()),
@@ -63,7 +67,8 @@ namespace {
                 left_tid.data<tid_type>(),
                 right_tid.data<tid_type>(),
                 n_matches,
-                res_key.size() // used as the circular buffer size
+                res_key.size(), // used as the circular buffer size
+                stream
             );
 
             cudaStreamSynchronize(stream);
@@ -81,7 +86,6 @@ namespace {
             gamax::size_type& n_matches,
             cudaStream_t stream) 
         {   
-            // TODO - make stream work
             // TODO - make n_matches gamax::size_type
             merge_path(
                 const_cast<T*>(left_key.data<T>()),
@@ -94,7 +98,8 @@ namespace {
                 res_left.data<U>(),
                 res_right.data<U>(),
                 n_matches,
-                res_key.size() // used as the circular buffer size
+                res_key.size(), // used as the circular buffer size
+                stream
             );
 
             cudaStreamSynchronize(stream);
@@ -119,9 +124,9 @@ namespace {
         auto key_type = sorted_left_key.type();
         auto val_type = sorted_left_val.type();
 
-        auto res_key = std::make_unique<gamax::column>(key_type, alloc_out_size);
-        auto res_left = gamax::make_column(val_type, alloc_out_size);
-        auto res_right = gamax::make_column(val_type, alloc_out_size);
+        auto res_key = std::make_unique<gamax::column>(key_type, alloc_out_size, stream);
+        auto res_left = gamax::make_column(val_type, alloc_out_size, stream);
+        auto res_right = gamax::make_column(val_type, alloc_out_size, stream);
 
         gamax::size_type n_matches = 0;
 
@@ -155,9 +160,9 @@ namespace {
     ) {
         auto key_type = sorted_left_key.type();
 
-        auto res_key = std::make_unique<gamax::column>(key_type, alloc_out_size);
-        auto left_tid = gamax::make_idx_column(alloc_out_size);
-        auto right_tid = gamax::make_idx_column(alloc_out_size);
+        auto res_key = std::make_unique<gamax::column>(key_type, alloc_out_size, stream);
+        auto left_tid = gamax::make_idx_column(alloc_out_size, stream);
+        auto right_tid = gamax::make_idx_column(alloc_out_size, stream);
 
         gamax::size_type n_matches = 0;
 
@@ -257,11 +262,11 @@ namespace {
         }
 
         // transformation
-        auto left_idx_seq = gamax::make_sequence(left.num_rows());
+        auto left_idx_seq = gamax::make_sequence(left.num_rows(), stream);
         auto [sorted_left_key, sorted_left_idx_seq] = sort_transform(left[0], left_idx_seq->view(), stream);
         left_idx_seq.reset(nullptr);
 
-        auto right_idx_seq = gamax::make_sequence(right.num_rows());
+        auto right_idx_seq = gamax::make_sequence(right.num_rows(), stream);
         auto [sorted_right_key, sorted_right_idx_seq] = sort_transform(right[0], right_idx_seq->view(), stream);
         right_idx_seq.reset(nullptr);
 

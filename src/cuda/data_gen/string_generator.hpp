@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <cuda_runtime_api.h>
@@ -46,7 +49,7 @@ namespace gamax::datagen::device {
         gamax::size_type num_strings,
         std::string_view pattern,
         const string_generation_options& options,
-        cudaStream_t stream = cudaStreamDefault);
+        cudaStream_t stream);
 
     /**
      * @brief Generate a column of random strings for sorting benchmarks.
@@ -65,7 +68,7 @@ namespace gamax::datagen::device {
     string_column_ptr generate_random_strings(
         gamax::size_type num_strings,
         gamax::size_type string_length,
+        cudaStream_t stream,
         gamax::string_impl_id impl = DEFAULT_STRING_IMPL,
-        int seed = 42,
-        cudaStream_t stream = cudaStreamDefault);
+        int seed = 42);
 } // namespace gamax::datagen::device

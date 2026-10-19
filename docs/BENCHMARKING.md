@@ -1,3 +1,8 @@
+<!--
+Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+-->
+
 # Reproducing the GaMax TPC-H benchmarks on a new platform
 
 End-to-end recipe for someone porting the TPC-H bench (correctness +
@@ -29,23 +34,34 @@ build is portable across architectures, just retarget
 ## 1. Prerequisites
 
 ### Hardware
-- NVIDIA GPU, sm_70+ (Volta/Turing/Ampere/Hopper). Memory: ≥24 GiB
-  is comfortable for SF=10; SF=30 needs ~90 GiB free for the
-  UserSpaceMM slab. CudaMM (`use_cuda_mm()`) works on smaller
-  cards but loses the slab-warmup amortization between cells.
+- NVIDIA GPU, sm_70+ (Volta/Turing/Ampere/Hopper/Blackwell). Memory: ≥24 GiB
+  is comfortable for SF=10. The default RMM arena uses 75% of free
+  memory; use `GAMAX_MEM_RESERVE_BYTES` when communication or a large
+  external workspace needs a different reserve.
+- Also exercised on **GB200 (Grace-Blackwell, sm_100, aarch64)** with
+  CUDA 13.0 and `-DCMAKE_CUDA_ARCHITECTURES=100`. SF=100 fits in the
+  ~186 GiB GPU; **SF=300 is the single-GPU ceiling** — 20/22 queries
+  fit, but Q1 (~14 GiB project column over 1.8 B lineitem rows) and
+  Q21 (~21 GiB) OOM at every config. See `docs/TPCH_JOURNEY.md`
+  §"SF=300 readiness".
 
 ### Software
 - CUDA Toolkit 12.x, including `nvcc` and `nsys`.
-- CMake ≥ 3.23.1, Ninja (the build defaults to the `Ninja`
+- CMake ≥ 3.30.4, Ninja (the build examples use the `Ninja`
   generator).
 - GCC/Clang with C++20 support (the toolchain on the dev box is GCC
   11; anything ≥10 should be fine).
-- Apache Arrow + Parquet (C++ libs). On the dev box these come from
-  `miniforge3`. Anything ≥17.0 known to work; the bench depends only
-  on the `parquet::arrow::FileReader` projected-read API.
+- Apache Arrow + Parquet (C++ libs). On the H100 dev box these come
+  from `miniforge3`; on the GB200 box they're `libarrow`/`libparquet`
+  **24.0** in the conda env `dev` (`conda install -n dev
+  --override-channels -c conda-forge libarrow libparquet`), discovered
+  via `-DCMAKE_PREFIX_PATH=$CONDA_PREFIX`. Anything ≥17.0 known to
+  work; the bench depends only on the `parquet::arrow::FileReader`
+  projected-read API.
 - Python 3.9+ with `pandas`, `matplotlib`, `numpy`, `pyarrow`,
   `duckdb` (only `duckdb` is needed for golden regen; the rest for
-  plotting).
+  plotting). On a fresh box `pip install duckdb` — the TPC-H extension
+  auto-downloads on first `INSTALL tpch`.
 
 ### Dataset
 TPC-H Parquet tables, scale-factor named subdirectories under one
@@ -66,7 +82,30 @@ $TPCH_DATA_PATH/
       q01.parquet … q22.parquet      # produced by script/gen_tpch_golden.py
   sf10/ …
   sf30/ …
+  sf100/ …
+  sf300/ …
 ```
+
+Large datasets may instead use the strict manifest-controlled multi-file
+layout:
+
+```text
+$TPCH_DATA_PATH/sf1000/
+  manifest.json
+  _SUCCESS
+  region.parquet
+  nation.parquet
+  lineitem/lineitem.1.parquet ... lineitem.144.parquet
+  orders/orders.1.parquet ... orders.144.parquet
+  ... one 144-part directory for every other sharded table
+```
+
+The distributed runners accept
+`--file-shard-strategy round_robin|contiguous_range` and
+`--parquet-decode-threads N`. Multi-file directories without a valid manifest
+and completion marker are rejected by default. Generation, validation,
+publication, and assignment details are in
+`docs/TPCH_MULTIFILE_DATASET.md`.
 
 If you don't have Parquet, generate from `dbgen` and convert with
 DuckDB or `pyarrow.parquet`. The Arrow schema must match TPC-H
@@ -104,12 +143,15 @@ spec-compliant and fast:
 
 ```bash
 TPCH_DATA_PATH=/scratch/<you>
-python3 script/gen_tpch_golden.py --sf 1  --out $TPCH_DATA_PATH
-python3 script/gen_tpch_golden.py --sf 10 --out $TPCH_DATA_PATH
-python3 script/gen_tpch_golden.py --sf 30 --out $TPCH_DATA_PATH
+for sf in 1 10 30 100 300; do
+  python3 script/gen_tpch_golden.py --sf $sf --out $TPCH_DATA_PATH
+done
 ```
 
-Each writes `$TPCH_DATA_PATH/sfN/golden/q01.parquet … q22.parquet`.
+DuckDB is CPU-only and fast even at scale (on the GB200 box: SF1 ~2 s,
+SF10 ~33 s, SF100/SF300 a few minutes each; all 5 scales ≈ 9 min
+total, run sequentially to avoid RAM oversubscription on the big
+ones). Each writes `$TPCH_DATA_PATH/sfN/golden/q01.parquet … q22.parquet`.
 The script registers the existing Parquet tables as DuckDB views, so
 there's no data duplication. The DECIMAL→DOUBLE and DATE→INT32
 coercions match what GaMax produces (see `tpch_reader.cpp`'s
@@ -137,10 +179,9 @@ Useful flags on `run_tpch_ir`:
 - `--print-plan` — dump the lowered ExecPlan before running.
 - `--no-fuse-project`, `--eq-join-algo <name>` — exercise specific
   hint values matching the bench axes.
-- `--use-cuda-mm` — run under CudaMM
-  (`cudaMallocAsync`/`cudaFreeAsync`) instead of the UserSpaceMM
-  slab. Useful for `compute-sanitizer`-style debugging where each
-  allocation needs its own range.
+- `--rmm-resource cuda` — use direct RMM `cudaMalloc`/`cudaFree`
+  with tracking (the diagnostic/Compute Sanitizer mode). Performance
+  runs should use the default arena.
 
 ## 5. Multi-scale correctness sweep (axis probe)
 
@@ -196,16 +237,13 @@ axis applicable) now synthesize a `Reorder` instead, so those
 project-axis variants are reclassified as `n/a` rather than
 running. Same coverage, just labelled differently.
 
-**Every SF=100 failure is a host-side C++ exception**
-(`std::bad_alloc`, `std::runtime_error` from a guard) — the bench
+**Every expected SF=100 capacity failure is a host-side C++ exception**
+(`rmm::out_of_memory`, or `std::runtime_error` from a guard) — the bench
 fixture's pre-flight `try/catch` catches each one as
 `state.skip(...)` and the run continues. No cell observed at
-SF=100 produces a CUDA-level error in the default
-(`UserSpaceMM`) allocator path, so failures don't cascade. The
-one CUDA-level error worth knowing about — `cudaErrorInvalidDevice:
-invalid device ordinal` from `fill_n` inside CUB — is reachable
-via `--use-cuda-mm` at SF=100; don't use that flag at this scale
-(see §11).
+SF=100 should produce a CUDA-level error in the default arena path.
+Confirmed RMM OOM is drained and recovered at the cell boundary;
+generic or fatal CUDA errors are not treated as recoverable.
 
 ## 6. End-to-end + per-step benchmark (NVBench)
 
@@ -465,8 +503,8 @@ For a perf comparison or a paper figure, the canonical artefacts are:
 
 ## 11. Common gotchas
 
-- **`Initializing memory pool fails.`** Cold-CUDA-context bug in
-  `get_mm()`. Already fixed; if you see it on master after a clean
+- **Allocator initialization fails on a cold CUDA context.** Already fixed;
+  if you see it on master after a clean
   build, your `cmake --build` didn't relink — `cmake --build build
   --target benchmark_tpch_ir tpch_ir_axis_probe -j`.
 - **`offset overflow while concatenating arrays`** at SF=30 on Q13/
@@ -479,11 +517,9 @@ For a perf comparison or a paper figure, the canonical artefacts are:
   The bench's Phase-1 (parquet decode + H2D) is included in the
   trace; the actual query GPU work is the second region. Use the
   NVTX track in Nsight UI to filter to the steps' ranges.
-- **`Memory pool has initial size 0 bytes.`** `cudaMemGetInfo`
-  returned 0 because the CUDA context wasn't initialized when
-  `get_mm()` ran. Should be fixed on master; if it recurs, set
-  `--use-cuda-mm` on `run_tpch_ir` to switch to the per-allocation
-  manager.
+- **The computed RMM arena is zero or too large.** Check the strict
+  `GAMAX_MEM_RESERVE_BYTES` rules in `docs/MEMORY_ALLOCATOR.md` and
+  make sure no other process has consumed device memory before prewarm.
 - **Pre-flight catches a config that should work.** The bench's
   pre-flight runs the plan once on `cudaStreamDefault` before
   `state.exec`. If a cell throws during pre-flight, NVBench skips
@@ -496,23 +532,52 @@ For a perf comparison or a paper figure, the canonical artefacts are:
   `GAMAX_BENCH_SKIP_PREFLIGHT=1` to disable pre-flight under
   `nsys profile`. If you invoke `nsys` manually, set this env var.
   The §9 plotter normalizes by `NVTX Inst` so it works either way.
-- **At SF=100, Q1 (all 13 cells) and a handful of partition_hash
-  variants fail with `std::bad_alloc`.** Expected — host-side
-  throw from `UserSpaceMM`'s slab allocator when fragmentation
-  prevents a contiguous ≥4.5 GiB allocation. Caught by the bench
-  fixture's pre-flight `try/catch`, doesn't cascade, doesn't
-  corrupt the run. See `docs/TPCH_JOURNEY.md` §"SF=100 readiness"
-  for root cause + the residual AVG-ones-column blocker. **Do
-  NOT use `--use-cuda-mm` to "work around" this** — that path
-  has its own `cudaErrorInvalidDevice: invalid device ordinal`
-  bug from `fill_n` inside CUB at SF=100, and unlike the
-  default-allocator throws, a sticky CUDA error WILL cascade
-  across subsequent cells.
+- **At SF=100 some cells exhaust the arena.** Only
+  `rmm::out_of_memory` is eligible for cell recovery. A sticky CUDA
+  execution error is fatal and must not be hidden by allocator reset.
 - **All SF=100 axis-probe failures are host-side C++
   exceptions.** No CUDA-level errors with the default allocator.
   This means a partial run is recoverable (re-run with a fresh
   `--tag`) and SLURM can interrupt without leaving the GPU in
-  an unusable state.
+  an unusable state. **This property does NOT hold at SF=300** — see
+  the next gotcha.
+- **At SF=300 the single-process NVBench sweep dies early with
+  `cudaErrorIllegalAddress`.** `partition_hash` join faults at
+  `>2^30` rows (SF=300 lineitem ≈ 1.8 B crosses 2^30 = 1.07 B; SF=100
+  at 600 M stayed under it). Unlike the SF=100 `bad_alloc` throws,
+  this is a **sticky CUDA error that poisons the whole process** —
+  every later cell's `cudaMemGetInfo`/`cudaMalloc` then returns 0
+  (`Memory pool has initial size 0 bytes` cascade) and the run exits 1
+  after only a handful of valid cells. Two fixes, used together:
+    1. **Exclude the partition variants** so the faulting cell never
+       runs (`default`=hash and the `sort_*` alternatives stay):
+       `-a "eq_join=[sort_merge_gfur,sort_merge_gftr,default,n/a]"
+       -a "group_by=[sort_gftr,sort_gftr_opt,sort_gfur,default,n/a]"`.
+       (`-a "axis=[v1,v2,...]"` restricts a string axis to that subset;
+       `-a scale=300` likewise overrides the scale axis.)
+    2. **Run per-query** (`-a query=N` in a separate process each),
+       distributed across nodes, so any residual crash is contained to
+       one query. Merge the per-query e2e CSVs afterward — but a query
+       with **0 measured cells** (all-OOM, e.g. Q1/Q21 at SF=300) gets
+       a 12-column nvbench e2e header (no timing columns) vs 17 for
+       measured queries; drop those files when merging or pandas chokes.
+  Partition-based group_by (`partition_*`) is the same risk and is
+  excluded for the same reason. phj also has a *separate, scale-
+  independent* limit: a build-side **bucket overflow** on skewed FKs
+  (`max_build_bucket_size=4096`), a clean refuse-to-run throw seen for
+  Q8/Q10/Q12/Q18/Q20 even at SF=100 — HASH/SORT are correct there.
+
+## Distributed TPC-H
+
+This file covers the single-GPU NVBench and operator-axis workflow. For the
+current distributed campaign runner, dependencies, build, datasets, local and
+multi-node launch, resume/retry behavior, profiling, and output layout, use
+[`DISTRIBUTED_TPCH_BENCHMARK_GUIDE.md`](DISTRIBUTED_TPCH_BENCHMARK_GUIDE.md).
+
+Distributed timing and phase semantics are maintained in
+[`DISTRIBUTED_TPCH_ARCHITECTURE.md`](DISTRIBUTED_TPCH_ARCHITECTURE.md), while
+Nsight metric and overlap interpretation is in
+[`DISTRIBUTED_TPCH_PROFILING.md`](DISTRIBUTED_TPCH_PROFILING.md).
 
 ## Reference pointers
 

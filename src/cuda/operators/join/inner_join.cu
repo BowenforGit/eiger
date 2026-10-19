@@ -1,6 +1,11 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "inner_join.hpp"
 
 #include <cuda.h>
+#include <algorithm>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -101,7 +106,7 @@ skinny_side make_skinny(gamax::table_view t, cudaStream_t stream) {
             ++s.n_numeric_payloads;
         }
     }
-    s.row_id = gamax::make_sequence<gamax::size_type>(t.num_rows(), 0, 1, stream);
+    s.row_id = gamax::make_sequence<gamax::size_type>(t.num_rows(), stream, 0, 1);
     cols.push_back(s.row_id->view());
     s.view = gamax::table_view(cols);
     return s;
@@ -112,7 +117,7 @@ std::unique_ptr<gamax::column> gather_string_column(
     gamax::column_view tids,
     cudaStream_t stream)
 {
-    gamax::string_column_view sv(src, gamax::ARROW_STRING, stream);
+    gamax::string_column_view sv(src, gamax::ARROW_STRING);
     auto g = gamax::gather_strings(sv, tids, stream);
     return std::unique_ptr<gamax::column>(std::move(g));
 }
@@ -197,9 +202,17 @@ namespace detail {
         gamax::join::join_hint const& hint) {
 
         if(hint.max_out != 0) return hint.max_out;
-        return std::min(
-            hint.unique_left ? right.num_rows() : gamax::join::MAX_JOIN_OUTPUT_SIZE,
-            hint.unique_right ? left.num_rows() : gamax::join::MAX_JOIN_OUTPUT_SIZE);
+        // A unique side bounds the output by the OTHER side's row count (each row
+        // of the non-unique side matches at most one row of the unique side). Only
+        // when NEITHER side is unique is the output unbounded by cardinality —
+        // then fall back to the MAX_JOIN_OUTPUT_SIZE heuristic. Do NOT cap the
+        // unique-side bound at MAX: that under-allocates and corrupts memory once
+        // the bound exceeds 2^30 (e.g. a PK/FK join with > 2^30 FK rows).
+        constexpr gamax::size_type kUnbounded = std::numeric_limits<gamax::size_type>::max();
+        const gamax::size_type bound_l = hint.unique_left  ? right.num_rows() : kUnbounded;
+        const gamax::size_type bound_r = hint.unique_right ? left.num_rows()  : kUnbounded;
+        const gamax::size_type bound   = std::min(bound_l, bound_r);
+        return (bound == kUnbounded) ? gamax::join::MAX_JOIN_OUTPUT_SIZE : bound;
     }
 } // namespace detail
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 """Plot benchmark_tpch_ir results.
 
 Inputs are derived from --machine, --date, --tag, --scale by
@@ -69,6 +72,7 @@ DEFAULT = "default"
 MACHINE_NAMES = {
     "h100":  "H100 NVL",
     "gh200": "Grace Hopper GH200",
+    "gb200": "Grace Blackwell GB200",
 }
 
 # Muted, paper-friendly palette per StepKind.
@@ -771,7 +775,9 @@ def plot_top_steps(df: pd.DataFrame, out_path: Path, scale: int,
 
     def cfg_label(r):
         axis = r["axis"]
-        if axis is None:
+        # Non-axis step kinds carry axis=None; pandas may surface that as
+        # NaN after the DataFrame round-trip, so guard with pd.isna.
+        if axis is None or pd.isna(axis):
             return "baseline"
         bv = r["best_value"]
         if bv == PLOT_BASELINE.get(axis):

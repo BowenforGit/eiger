@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "inner_join.hpp"
 
 #include <memory>
@@ -110,7 +113,8 @@ namespace {
         int end_bit,
         cudaStream_t stream)
     {
-        auto partitioned = gamax::partition::partition_column_pair(key, val, begin_bit, end_bit, nullptr, 0, stream);
+        auto partitioned = gamax::partition::partition_column_pair(
+            key, val, begin_bit, end_bit, stream, nullptr, 0);
         auto offset = gamax::partition::compute_partition_offsets(partitioned.first->view(), begin_bit, end_bit, stream);
         return std::make_tuple(std::move(partitioned.first), std::move(partitioned.second), std::move(offset));
     } 
@@ -164,10 +168,12 @@ namespace {
     {
         auto n_partitions = params.n_partitions;
 
-        auto left_work = gamax::make_column<uint64_t>(n_partitions*2);
-        auto right_work = gamax::make_column<uint64_t>(n_partitions*2);
-        auto total_work = gamax::make_column<gamax::size_type>(1, true);
-        auto max_r_len  = gamax::make_column<gamax::size_type>(1, true);
+        auto left_work = gamax::make_column<uint64_t>(n_partitions * 2, stream);
+        auto right_work = gamax::make_column<uint64_t>(n_partitions * 2, stream);
+        auto total_work = gamax::make_column<gamax::size_type>(
+            1, stream, gamax::buffer_init::zero);
+        auto max_r_len = gamax::make_column<gamax::size_type>(
+            1, stream, gamax::buffer_init::zero);
 
         generate_work_units<<<num_tb(n_partitions,512),512, 0, stream>>>(
             left_offs.data<gamax::size_type>(),
@@ -430,7 +436,8 @@ namespace {
         {
             auto [left_work, right_work, total_work] = create_work_units(left_offs, right_offs, params, stream);
 
-            auto d_n_matches = gamax::make_column<gamax::size_type>(1, true);
+            auto d_n_matches = gamax::make_column<gamax::size_type>(
+                1, stream, gamax::buffer_init::zero);
 
             auto join_fn = join_copartitions_arr<KeyT, ValT, const ValT*>;
             CHECK_CUDA_ERROR(cudaFuncSetAttribute(join_fn, cudaFuncAttributeMaxDynamicSharedMemorySize, params.join_kernel_smem_bytes));
@@ -482,7 +489,8 @@ namespace {
             cudaStream_t stream)
         {
             auto [left_work, right_work, total_work] = create_work_units(left_offs, right_offs, params, stream);
-            auto d_n_matches = gamax::make_column<gamax::size_type>(1, true);
+            auto d_n_matches = gamax::make_column<gamax::size_type>(
+                1, stream, gamax::buffer_init::zero);
 
             thrust::counting_iterator<tid_type> left_itr(0);
             thrust::counting_iterator<tid_type> right_itr(0);
@@ -518,9 +526,9 @@ namespace {
         auto key_type = left_key.type();
         auto val_type = left_val.type();
 
-        auto res_key = gamax::make_column(key_type, params.max_output_size);
-        auto res_left = gamax::make_column(val_type, params.max_output_size);
-        auto res_right = gamax::make_column(val_type, params.max_output_size);
+        auto res_key = gamax::make_column(key_type, params.max_output_size, stream);
+        auto res_left = gamax::make_column(val_type, params.max_output_size, stream);
+        auto res_right = gamax::make_column(val_type, params.max_output_size, stream);
 
         gamax::size_type n_matches = 0;
 
@@ -552,9 +560,9 @@ namespace {
     {
         auto key_type = left_key.type();
 
-        auto res_key = gamax::make_column(key_type, params.max_output_size);
-        auto res_left = gamax::make_idx_column(params.max_output_size);
-        auto res_right = gamax::make_idx_column(params.max_output_size);
+        auto res_key = gamax::make_column(key_type, params.max_output_size, stream);
+        auto res_left = gamax::make_idx_column(params.max_output_size, stream);
+        auto res_right = gamax::make_idx_column(params.max_output_size, stream);
 
         gamax::size_type n_matches = 0;
 
@@ -630,14 +638,18 @@ namespace {
         res_table->add_column(simple_materialize(par_left_val->view(), left_tid->view(), stream));
         par_left_val.reset(nullptr);
         for(auto i = 2; i < left.num_columns(); i++) {
-            std::tie(par_left_key, par_left_val) = gamax::partition::partition_column_pair(left[0], left[i], params.begin_bit, params.end_bit, nullptr, 0, stream);
+            std::tie(par_left_key, par_left_val) = gamax::partition::partition_column_pair(
+                left[0], left[i], params.begin_bit, params.end_bit,
+                stream, nullptr, 0);
             res_table->add_column(simple_materialize(par_left_val->view(), left_tid->view(), stream));
         }
         left_tid.reset(nullptr);
         
         res_table->add_column(simple_materialize(par_right_val->view(), right_tid->view(), stream));
         for(auto i = 2; i < right.num_columns(); i++) {
-            std::tie(par_right_key, par_right_val) = gamax::partition::partition_column_pair(right[0], right[i], params.begin_bit, params.end_bit, nullptr, 0, stream);
+            std::tie(par_right_key, par_right_val) = gamax::partition::partition_column_pair(
+                right[0], right[i], params.begin_bit, params.end_bit,
+                stream, nullptr, 0);
             res_table->add_column(simple_materialize(par_right_val->view(), right_tid->view(), stream));
         }
         
@@ -657,11 +669,11 @@ namespace {
         }
 
         // transformation
-        auto left_idx_seq = gamax::make_sequence(left.num_rows());
+        auto left_idx_seq = gamax::make_sequence(left.num_rows(), stream);
         auto [par_left_key, par_left_idx_seq, par_left_offs] = partition_transform(left[0], left_idx_seq->view(), params.begin_bit, params.end_bit, stream);
         left_idx_seq.reset(nullptr);
 
-        auto right_idx_seq = gamax::make_sequence(right.num_rows());
+        auto right_idx_seq = gamax::make_sequence(right.num_rows(), stream);
         auto [par_right_key, par_right_idx_seq, par_right_offs] = partition_transform(right[0], right_idx_seq->view(), params.begin_bit, params.end_bit, stream);
         right_idx_seq.reset(nullptr);
 
@@ -694,4 +706,3 @@ namespace {
     }
 } // namespace detail
 } // namespace gamax::join
-

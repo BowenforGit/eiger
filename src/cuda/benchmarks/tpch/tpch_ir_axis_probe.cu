@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 // IR-driven TPC-H "axis probe" — cheaper alternative to the NVBench
 // sweep when the question is "which (query × axis-config) cells fail
 // at all", not "what's the GPU time of cells that succeed".
@@ -14,19 +17,16 @@
 //
 // Tradeoffs vs benchmark_tpch_ir:
 //   * No timing — the goal is failure detection, not perf.
-//   * No `release_all_mem` between cells — the pool grows monotonically
-//     across the run. SF=1 cells touch a few MB of intermediates each;
-//     even 10k cells fit comfortably in the 88 GiB pool. If you want
-//     to probe SF=10 or larger, set GAMAX_PROBE_RESET_POOL=1.
+//   * Successful cells reuse one persistent RMM arena. Only a confirmed
+//     rmm::out_of_memory drains owners and hard-resets the generation.
 //
 // Output CSV columns:
 //   query,scale,filter,project,sort,group_by,distinct,eq_join,
 //   status,verify,peak_mem_bytes,error
 // `status` is `pass` or `fail`. `verify` is `ok`/`mismatch` (when
 // --verify is set), `skip` otherwise, and empty for failing cells.
-// `peak_mem_bytes` is the GPU memory high-water mark observed during
-// the cell — bracketed from `MemoryManager::reset_peak_mem_used()` to
-// `get_peak_mem_used()` and read after `cudaStreamSynchronize`.
+// `peak_mem_bytes` is the GPU memory high-water mark observed by an
+// opt-in RMM scoped statistics counter after `cudaStreamSynchronize`.
 // Empty for failing cells (peak is unreliable when the cell threw
 // mid-allocation). `error` is the runtime_error::what() of the throw
 // (or the verify diagnostic on mismatch), with commas+newlines
@@ -53,6 +53,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include <rmm/error.hpp>
 
 #include "exec/executor.hpp"
 #include "ir/lower_to_exec_plan.hpp"
@@ -283,7 +285,7 @@ struct Args {
     int query_min {1};
     int query_max {22};
     bool quiet {false};
-    bool use_cuda_mm {false};
+    std::string rmm_resource;
     bool verify {false};
 };
 
@@ -316,8 +318,11 @@ Args parse_args(int argc, char** argv) {
             a.query_max = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--quiet") == 0) {
             a.quiet = true;
-        } else if (std::strcmp(argv[i], "--use-cuda-mm") == 0) {
-            a.use_cuda_mm = true;
+        } else if (std::strcmp(argv[i], "--rmm-resource") == 0 && i + 1 < argc) {
+            a.rmm_resource = argv[++i];
+            if (a.rmm_resource != "arena" && a.rmm_resource != "cuda") {
+                throw std::runtime_error("--rmm-resource must be arena or cuda");
+            }
         } else if (std::strcmp(argv[i], "--verify") == 0) {
             a.verify = true;
         } else {
@@ -353,14 +358,11 @@ const std::vector<std::string> kEqJoinVals  = {
 int main(int argc, char** argv) try {
     auto args = parse_args(argc, argv);
 
-    // CudaMM does per-allocation cudaMallocAsync/cudaFreeAsync so the
-    // device pool naturally drains between cells. Default UserSpaceMM
-    // pre-allocates a single slab; the per-query pool reset below
-    // releases its cached source columns + intermediates between
-    // queries to keep the slab from filling at SF=30.
-    if (args.use_cuda_mm) {
-        use_cuda_mm();
+    if (!args.rmm_resource.empty()) {
+        setenv("GAMAX_RMM_RESOURCE", args.rmm_resource.c_str(), 1);
     }
+    setenv("GAMAX_RMM_STATISTICS", "on", 1);
+    gamax::prewarm_device_memory_resource();
 
     std::ofstream out(args.out_path);
     if (!out) {
@@ -383,9 +385,8 @@ int main(int argc, char** argv) try {
     for (int qid = args.query_min; qid <= args.query_max; ++qid) {
         // Per-query scope: resolver + IR + per-cell loop are nested
         // here so the resolver is destructed (releasing its cached
-        // device columns) BEFORE release_all_mem touches the slab.
-        // Without this ordering, the resolver's pointers would dangle
-        // into a freed slab.
+        // device columns) before any OOM-triggered hard reset.
+      bool query_oom = false;
       {
         gamax::tpch::IrSourceResolver resolver(reader, catalog);
         gamax::exec::SourceResolver src_fn =
@@ -461,37 +462,50 @@ int main(int argc, char** argv) try {
             std::string status = "pass";
             std::string verify = args.verify ? std::string{} : std::string{"skip"};
             std::string err;
-            // Bracket the cell's GPU memory: snapshot the peak at
-            // `mem_used` before, run the cell (sync the stream so all
-            // async allocations have completed before we read), then
-            // grab the high-water mark. Empty string in the CSV for
-            // failing cells because the value is unreliable when the
-            // cell threw mid-allocation.
-            get_mm()->reset_peak_mem_used();
             std::string peak_mem;
             try {
+                gamax::scoped_memory_statistics memory_probe;
                 auto ep = gamax::ir::lower_to_exec_plan(plan, catalog, opts);
                 gamax::tpch::tpch_params params(args.scale_factor);
                 gamax::phys::Context ctx{params.stream};
-                auto result = gamax::exec::execute(ep, src_fn, ctx);
-                cudaStreamSynchronize(params.stream);
-                peak_mem = std::to_string(get_mm()->get_peak_mem_used());
-                ++pass_n;
-                if (args.verify) {
-                    auto vr = gamax::tpch::verify_result(
-                        result->view(),
-                        golden_path_for(qid, args.scale_factor));
-                    if (vr.ok) {
-                        verify = "ok";
-                        ++verify_ok_n;
-                    } else {
-                        verify = "mismatch";
-                        // Squash diagnostic onto a single CSV-safe
-                        // line (verify.diagnostic is multi-line).
-                        err = csv_safe(vr.diagnostic);
-                        ++verify_mismatch_n;
+                std::unique_ptr<gamax::table> result;
+                try {
+                    result = gamax::exec::execute(ep, src_fn, ctx);
+                    cudaStreamSynchronize(params.stream);
+                    peak_mem = std::to_string(memory_probe.finish().bytes.peak);
+                    ++pass_n;
+                    if (args.verify) {
+                        auto vr = gamax::tpch::verify_result(
+                            result->view(),
+                            golden_path_for(qid, args.scale_factor));
+                        if (vr.ok) {
+                            verify = "ok";
+                            ++verify_ok_n;
+                        } else {
+                            verify = "mismatch";
+                            // Squash diagnostic onto a single CSV-safe
+                            // line (verify.diagnostic is multi-line).
+                            err = csv_safe(vr.diagnostic);
+                            ++verify_mismatch_n;
+                        }
                     }
+                } catch (const rmm::out_of_memory&) {
+                    // Drain submitted work while the plan, context, result, and
+                    // statistics owner are still alive. The outer catch records
+                    // the cell only after these owners unwind.
+                    auto const sync = cudaDeviceSynchronize();
+                    if (sync != cudaSuccess) {
+                        throw std::runtime_error(
+                            std::string("fatal CUDA error while draining OOM: ") +
+                            cudaGetErrorString(sync));
+                    }
+                    throw;
                 }
+            } catch (const rmm::out_of_memory& e) {
+                status = "fail";
+                err = csv_safe(e.what());
+                query_oom = true;
+                ++fail_n;
             } catch (const std::exception& e) {
                 status = "fail";
                 err = csv_safe(e.what());
@@ -509,13 +523,24 @@ int main(int argc, char** argv) try {
                           << " fail=" << fail_n
                           << " skip=" << skip_n << ")\n";
             }
+            if (query_oom) { goto end_query_cells; }
         }
-      }  // resolver destructs here, before release_all_mem
-        // Drop the slab between queries. Required at SF=30 — without
-        // it, accumulated source tables from earlier queries fill the
-        // slab. Harmless under CudaMM (no-op since the alloc map is
-        // empty at this point).
-        release_all_mem();
+end_query_cells:
+        ;
+      }  // resolver and all cached device columns destruct here
+        if (query_oom) {
+            auto const sync = cudaDeviceSynchronize();
+            if (sync != cudaSuccess) {
+                throw std::runtime_error(
+                    std::string("fatal CUDA error after OOM unwind: ") +
+                    cudaGetErrorString(sync));
+            }
+            int device = -1;
+            if (cudaGetDevice(&device) != cudaSuccess) {
+                throw std::runtime_error("cudaGetDevice failed during OOM recovery");
+            }
+            gamax::reset_device_memory_resource(device);
+        }
     }
 
     auto t_end = std::chrono::steady_clock::now();

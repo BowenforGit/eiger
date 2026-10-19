@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <memory>
 #include <cuda.h>
 
@@ -10,7 +13,7 @@ namespace gamax {
         column_view const& view,
         cudaStream_t stream)
     {
-        auto col = make_column(view.type(), view.size(), false, stream);
+        auto col = make_column(view.type(), view.size(), stream);
         cudaMemcpyAsync(
             col->data(), 
             view.data(), 

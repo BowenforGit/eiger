@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <nvbench/nvbench.cuh>
 
 #include <string>
@@ -41,7 +44,7 @@ template<typename KeyT, typename ValueT = int32_t>
 void bench_groupby_max(nvbench::state& state, nvbench::type_list<KeyT>) {
     using namespace gamax::groupby;
 
-    release_all_mem(); // make sure if a test fails, the following test will not be affected
+    gamax::prewarm_device_memory_resource(); // make sure if a test fails, the following test will not be affected
 
     struct groupby_params params;
     params.num_items = state.get_int64("num_items");

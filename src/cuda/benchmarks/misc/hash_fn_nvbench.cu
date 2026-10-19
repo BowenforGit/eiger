@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 /**
  * @file hash_fn_nvbench.cu
  * @brief NVBench benchmark for GPU hash functions from cuco library.
@@ -205,7 +208,7 @@ __global__ void hash_kernel_reduce_noread(
 
 template<typename KeyT, typename HashTag>
 void bench_hash_throughput(nvbench::state& state, nvbench::type_list<KeyT, HashTag>) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
     
     using Factory = hash_factory<KeyT, HashTag>;
     
@@ -229,7 +232,8 @@ void bench_hash_throughput(nvbench::state& state, nvbench::type_list<KeyT, HashT
         const KeyT* d_input = nullptr;
         if (read_input) {
             auto key_type = gamax::data_type(gamax::type_to_id<KeyT>());
-            input_table = gamax::datagen::device::pk_uniform_id(key_type, num_items, 1, 42);
+            input_table = gamax::datagen::device::pk_uniform_id(
+                key_type, num_items, 1, 42, cudaStreamDefault);
             d_input = input_table->get_column(0).view().template data<KeyT>();
         }
         KeyT start_value = static_cast<KeyT>(0);  // For counting iterator mode
@@ -241,9 +245,11 @@ void bench_hash_throughput(nvbench::state& state, nvbench::type_list<KeyT, HashT
         gamax::column_ptr output_col;
         if (use_reduce) {
             // Single element for atomic accumulation
-            output_col = gamax::make_column<OutputT>(1, true);
+            output_col = gamax::make_column<OutputT>(
+                1, cudaStreamDefault, gamax::buffer_init::zero);
         } else {
-            output_col = gamax::make_column<OutputT>(num_items);
+            output_col = gamax::make_column<OutputT>(
+                num_items, cudaStreamDefault);
         }
         OutputT* d_output = output_col->data<OutputT>();
         

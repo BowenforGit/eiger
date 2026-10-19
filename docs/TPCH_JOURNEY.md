@@ -1,3 +1,8 @@
+<!--
+Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+-->
+
 # GaMax TPC-H — the whole journey
 
 **End state (2026-04-25):** all 22 TPC-H queries execute on the GaMax
@@ -26,7 +31,7 @@ future maintainer is most likely to step on.
 | Metric | Start | End |
 |---|---|---|
 | Queries that run end-to-end | 1 (Q6) | 22 / 22 |
-| Queries verified against a canonical oracle | 1 (Q6 vs pyarrow, manual) | 22 / 22 (DuckDB golden, automated `--verify`) at SF1, SF10, SF30 |
+| Queries verified against a canonical oracle | 1 (Q6 vs pyarrow, manual) | 22 / 22 (DuckDB golden, automated `--verify`) at SF1/10/30/100; 20 / 22 at SF300 (Q1/Q21 OOM). 108/110 default-config OK across all 5 scales, 0 mismatch |
 | IR rules | 0 | 5 (G4a, G7, G1-rule, scan-pushdown, CountDistinct rewrite) |
 | Phys ops | reorder/filter/project/eq/semi/cross/scalaragg/groupby/sort/topk | + anti, distinct, concat, substring, year_of, in_multiple, and more |
 | Operator-hint sweeping | none | per-kind axes via `LowerOptions` + NVBench fixture; one-hot break-down + `bench_defaults` baseline |
@@ -1091,71 +1096,122 @@ The speedup grows with scale because the avoided full-lineitem group-by
 is the part that scales with SF. Verified bit-identical to the q20
 golden at SF=1 / 10 / 100.
 
-## What's next (if you're picking up the work)
+## SF=300 readiness — single-GPU ceiling + the phj >2³⁰ crash (2026-06-22, GB200)
 
-Nothing is "required" for TPC-H. The engine is complete for that
-workload at SF=10 and SF=30; SF=100 is one algorithm-level fix
-away (the AVG-without-explicit-ones-column path). Strong next
-directions, in rough priority:
+Five-scale single-GPU benchmark on **GB200 (Grace-Blackwell, sm_100,
+aarch64, CUDA 13.0, ~186 GiB)**: SF1/10/30/100 run all 22 queries;
+**SF=300 is the single-GPU ceiling at 20/22.** Built with
+`-DBUILD_TPCH=ON -DBUILD_ALPS=ON -DCMAKE_CUDA_ARCHITECTURES=100`,
+Arrow/Parquet 24.0 from the conda `dev` env (see `docs/BENCHMARKING.md`
+§1–2). No engine code changed — this arc is a scaling + correctness
+campaign, and it surfaced one real bug.
 
-1. **Partition-kernel bug fixes.** `partition_hash_join`'s shared-
-   memory OOB is currently host-side-guarded; the kernel itself
-   still has the bug. `partition::groupby` is single-key-only.
-   See `docs/PARTITION_KERNEL_BUGS.md` for the kernel sketches
-   (bounds-check + spill-to-global; multikey_compress inside the
-   partition path). Until those land, the IR-bench probe at SF=1
-   reports clean unsupported-shape rejections instead of crashes,
-   which is acceptable but limits what the operator-axis sweep
-   can compare.
+### The phj `>2³⁰`-row illegal-access crash
 
-2. **AVG-without-explicit-ones for SF=100 readiness.** The hash /
-   sort / partition groupby implementations build a full-cardinality
-   `ones` column to feed AVG's denominator (now also COUNT_ALL,
-   shared between them). For Q1 SF=100 that's 4.5 GiB —
-   the single remaining contiguous allocation that the slab
-   can't satisfy. Per-group counts are already implicit in the
-   group structure (cuco bucket counters / sort-group boundaries
-   / partition counts); exposing them as a side output would
-   eliminate the ones column. Once that's in, Q1 SF=100 fits.
-   Beyond that, host-memory spilling is the cleanest way to get
-   to scales the slab can't accommodate even with no waste.
+The SF=300 NVBench single-sweep died after only ~35 valid cells with
+`cudaErrorIllegalAddress`. Root cause: **`partition_hash` join faults
+at `>2³⁰` rows** — SF=300 lineitem ≈ 1.8 B crosses 2³⁰ = 1.07 B, where
+SF=100 (600 M) stayed under. This is the same class as the earlier
+"join: fix output under-allocation (OOB) for unique-side joins above
+2³⁰ rows" fix — that closed one site; `partition_hash` still faults.
+Unlike SF=100's `bad_alloc` throws (host-side, recoverable), an illegal
+access is a **sticky CUDA error that poisons the whole process**: every
+subsequent cell's `cudaMemGetInfo`/`cudaMalloc` returns 0
+(`Memory pool has initial size 0 bytes` cascade) → exit 1. So the
+"all SF=100 failures are recoverable" property (BENCHMARKING §11) does
+**not** hold at SF=300.
 
-3. **Non-equi residual rule for semi/anti joins (the general
-   case).** Q21's rewrite covers a specific algebraic shape. A
-   true rule pass that detects non-equi residual + pushes it INTO
-   the match predicate would unblock frontend queries with
-   arbitrary correlated-subquery shapes.
+**Fix (no code change): exclude the partition variants** from the sweep
+so the faulting cell never runs — `default` (hash) + `sort_*`
+alternatives stay:
+`-a "eq_join=[sort_merge_gfur,sort_merge_gftr,default,n/a]"
+-a "group_by=[sort_gftr,sort_gftr_opt,sort_gfur,default,n/a]"`. Run
+**per-query** (`-a query=N`, one process each) distributed across the
+reserved nodes for crash isolation, then merge the per-query CSVs.
+Merge trap: an all-OOM query (Q1/Q21) emits a 12-column nvbench e2e
+header (no timing cols) vs 17 for measured queries — drop those when
+merging or pandas chokes. (Also: `pkill -x benchmark_tpch_ir` silently
+no-ops — the name is 17 chars, past `pgrep`'s 15-char comm limit; kill
+by PID or `pkill -f` a unique substring.)
 
-4. **Real `phys::left_outer_join`.** Paired with a NULL scheme
-   (either native nullability or a matched-mask column). Would
-   let the builder-side decomposition retire, and would unblock
-   outer joins whose ON clause genuinely references both sides.
+phj has a **second, scale-independent** limit too: a build-side
+**bucket overflow** on skewed FKs (`max_build_bucket_size=4096`), a
+clean refuse-to-run throw — seen for Q8/Q10/Q12/Q18/Q20 even at SF=100
+(largest partition ~9k–18k rows). Not a wrong answer; HASH/SORT are
+correct there.
 
-5. **Verification gtest for operator-hint configurations.** The
-   bench harness exercises every (q × hint) cell, but doesn't
-   verify against goldens — only checks that the cell doesn't
-   throw. A parameterized gtest that runs each non-`n/a` cell
-   end-to-end with `--verify` would catch silent wrong results
-   from hint paths that "succeed" but mis-compute. Tactical guards
-   currently mask this; once the partition kernel bugs are fixed
-   and more cells run, we'll need a verify gate.
+### The single-GPU memory ceiling (Q1, Q21)
 
-6. **CodeGen (Phase 3 in the original plan).** The ExecPlan was
-   designed to feed either the Executor or a CodeGenerator. Only
-   the Executor is in place.
+Both OOM at **every** config at SF=300 — not a phj issue, a genuine
+working-set-exceeds-186-GiB wall. **Q1**: the project materializes a
+~14 GiB full-cardinality `double` column over 1.8 B lineitem rows; it
+fails (with fragmentation) at ~161 GiB used. This is the *same*
+AVG-ones / full-cardinality-column shape that blocked Q1 at SF=100 in
+the previous arc — now the inputs are 3× larger, so even the hash path
+that fit at SF=100 doesn't fit at SF=300. **Q21**: ~21 GiB allocation
+at ~171 GiB used. Sort-based group_by doesn't rescue them (the pressure
+is the project / join output, not the group structure), so they're
+shown "no data" at SF=300.
 
-7. **Multi-GPU / multi-node.** The long-term scope. Single-stream
-   single-GPU is a steady floor to build on; scale-out is a from-
-   scratch layer above the phys op set.
+### Correctness (DuckDB goldens, `run_tpch_ir --verify`)
+
+- **Default config** (hash join / hash groupby — the production path),
+  all 5 scales: **108/110 OK**, the only 2 non-OK being Q1/Q21 @ SF=300
+  (OOM, not wrong). **0 mismatches.**
+- **Alternative eq-join algos** (`hash_gftr`, `sort_merge_{gfur,gftr}`,
+  `partition_hash_{gfur,gftr}`; phj excluded @ SF=300) at SF=100+SF=300:
+  **128 OK, 10 phj-bucket-overflow, 6 OOM, 0 mismatch.** Every algo that
+  runs is correct.
+- Coverage gap: `run_tpch_ir` can only override `--eq-join-algo` and
+  `--no-fuse-project`; it has no flag for group_by/sort/distinct algos,
+  so those alternatives are timed-but-unverified. Verifying them needs
+  a small runner extension (mirror the bench's `LowerOptions` axes,
+  then `--verify`).
+
+## Current limitations and maintainer guidance
+
+The chronology above records the machine and allocator conditions under which
+each result was observed. In particular, statements about an SF100 or SF300
+"ceiling" are not portable capacity claims: later GB200 and distributed runs
+have much more memory and a different execution shape.
+
+The remaining durable limitations are:
+
+1. **Partition kernels.** `partition_hash_join` still has guarded bucket and
+   very-large-input failure modes, and partition group-by supports fewer key
+   shapes than the default HASH implementation. Keep unsupported combinations
+   as explicit rejections until the kernel designs in
+   `docs/PARTITION_KERNEL_BUGS.md` are fixed and validated.
+2. **Full-cardinality aggregate workspace.** Some single-GPU group-by paths
+   build an explicit ones column for AVG/COUNT state. It can create a large
+   contiguous allocation and fragmentation pressure even when the logical
+   group count is small. Distributed partial aggregation changes the scale at
+   which this appears but does not make the local algorithmic cost disappear.
+3. **General non-equi semi/anti joins.** Q21's group-by rewrite handles its
+   particular EXISTS/NOT EXISTS shape. Arbitrary correlated residuals still
+   need a semantics-preserving match-predicate implementation.
+4. **True outer joins and NULLs.** Q13's inner-plus-anti-plus-concat rewrite is
+   sufficient for TPC-H but is not a general left-outer-join implementation.
+5. **Verification of non-total orderings.** Some TPC-H ORDER BY clauses permit
+   ties. A row-position comparison can reject two semantically valid outputs;
+   distributed Q18 has exposed this. Verification should compare equivalence
+   classes under the declared ordering.
+6. **Alternative-algorithm verification.** Performance sweeps exercise
+   configurations that the ordinary runner does not always expose. Any newly
+   enabled hint path should receive golden verification, not merely a
+   successful benchmark cell.
+7. **Code generation.** ExecPlan still feeds the executor; a separate compiled
+   CodeGenerator remains future architecture work.
+
+Multi-GPU and multi-node execution are now implemented. Its current placement,
+exchange, failure, and benchmark contracts are documented in
+`docs/DISTRIBUTED_TPCH_ARCHITECTURE.md` rather than in this single-GPU history.
 
 ## Reference pointers
 
 - `docs/IR_ARCHITECTURE.md` — architectural reference for the whole
   IR → ExecPlan → phys stack. Read for the layer map and invariants;
   read this doc for the story of how they got there.
-- `docs/TPCH_GAPS.md` — the live gap tracker. Every closed gap
-  has a dated entry; every remaining gap (if any) has a status +
-  fix sketch. Authoritative for "what's the current state."
 - `docs/TPCH_DISCREPANCIES.md` — per-query divergences between
   GaMax's builders, Maximus, and the TPC-H spec.
 - `docs/GROUPBY_STRING_KEYS.md` — deep dive on the STRING-groupby
@@ -1169,3 +1225,7 @@ directions, in rough priority:
   probe; full SF=1 sweep finishes in ~60 s.
 - `benchmarks/tpch/tpch_ir_nvbench.cu` — IR-driven NVBench harness
   with operator-hint axes.
+- `docs/DISTRIBUTED_TPCH_ARCHITECTURE.md` — current distributed
+  placement, exchange, operator, failure, and timing contracts.
+- `docs/DISTRIBUTED_TPCH_BENCHMARK_GUIDE.md` — current distributed
+  setup and campaign workflow.

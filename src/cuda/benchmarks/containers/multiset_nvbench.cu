@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <nvbench/nvbench.cuh>
 
 #include <string>
@@ -65,7 +68,7 @@ bool check_skip(multiset_params const& params) {
 template<typename KeyT, nvbench::int32_t CGSize>
 void bench_multiset_insert(nvbench::state& state,
                            nvbench::type_list<KeyT, nvbench::enum_type<CGSize>>) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     multiset_params params(state);
 
@@ -76,7 +79,8 @@ void bench_multiset_insert(nvbench::state& state,
     constexpr int ncols = 1;
     auto key_type = gamax::data_type(gamax::type_to_id<KeyT>());
     auto build = gamax::datagen::device::fk_uniform_id(
-        key_type, params.unique_keys, params.build_num_keys, ncols, 1.0, 42);
+        key_type, params.unique_keys, params.build_num_keys, ncols, 1.0, 42,
+        cudaStreamDefault);
 
     cudaStream_t stream = 0;
     state.set_cuda_stream(nvbench::make_cuda_stream_view(stream));
@@ -94,11 +98,14 @@ void bench_multiset_insert(nvbench::state& state,
             [&](nvbench::launch& launch) {
                 cudaStream_t stream = launch.get_stream();
                 // Construct a fresh multiset each iteration (insert is one-shot)
-                auto set = gamax::containers::multiset<KeyT, gamax::size_type, ThrustAllocator<char>, CGSize>(
+                gamax::rmm_allocator_handle<gamax::size_type> allocator{stream};
+                auto set = gamax::containers::multiset<
+                    KeyT, gamax::size_type,
+                    gamax::rmm_cuco_allocator<gamax::size_type>, CGSize>(
                     build->get_column(0).view(),
                     params.load_factor,
                     gamax::sentinel<gamax::size_type>(),
-                    *get_thrust_allocator<char>(stream),
+                    allocator.get(),
                     stream);
                 set.insert_with_tids(stream);
         });
@@ -118,7 +125,7 @@ void bench_multiset_insert(nvbench::state& state,
 template<typename KeyT, nvbench::int32_t CGSize>
 void bench_multiset_count(nvbench::state& state,
                           nvbench::type_list<KeyT, nvbench::enum_type<CGSize>>) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     multiset_params params(state);
 
@@ -129,17 +136,22 @@ void bench_multiset_count(nvbench::state& state,
     constexpr int ncols = 1;
     auto key_type = gamax::data_type(gamax::type_to_id<KeyT>());
     auto build = gamax::datagen::device::fk_uniform_id(
-        key_type, params.unique_keys, params.build_num_keys, ncols, 1.0, 42);
+        key_type, params.unique_keys, params.build_num_keys, ncols, 1.0, 42,
+        cudaStreamDefault);
     auto probe = gamax::datagen::device::fk_uniform_id(
-        key_type, params.unique_keys, params.probe_num_keys, ncols, params.hit_ratio, 39);
+        key_type, params.unique_keys, params.probe_num_keys, ncols, params.hit_ratio, 39,
+        cudaStreamDefault);
 
     cudaStream_t stream = 0;
 
-    auto set = gamax::containers::multiset<KeyT, gamax::size_type, ThrustAllocator<char>, CGSize>(
+    gamax::rmm_allocator_handle<gamax::size_type> allocator{stream};
+    auto set = gamax::containers::multiset<
+        KeyT, gamax::size_type,
+        gamax::rmm_cuco_allocator<gamax::size_type>, CGSize>(
         build->get_column(0).view(),
         params.load_factor,
         gamax::sentinel<gamax::size_type>(),
-        *get_thrust_allocator<char>(stream),
+        allocator.get(),
         stream);
 
     set.insert_with_tids(stream);
@@ -177,7 +189,7 @@ void bench_multiset_count(nvbench::state& state,
 template<typename KeyT, nvbench::int32_t CGSize>
 void bench_multiset_probe(nvbench::state& state,
                           nvbench::type_list<KeyT, nvbench::enum_type<CGSize>>) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     multiset_params params(state);
 
@@ -188,17 +200,22 @@ void bench_multiset_probe(nvbench::state& state,
     constexpr int ncols = 1;
     auto key_type = gamax::data_type(gamax::type_to_id<KeyT>());
     auto build = gamax::datagen::device::fk_uniform_id(
-        key_type, params.unique_keys, params.build_num_keys, ncols, 1.0, 42);
+        key_type, params.unique_keys, params.build_num_keys, ncols, 1.0, 42,
+        cudaStreamDefault);
     auto probe = gamax::datagen::device::fk_uniform_id(
-        key_type, params.unique_keys, params.probe_num_keys, ncols, params.hit_ratio, 39);
+        key_type, params.unique_keys, params.probe_num_keys, ncols, params.hit_ratio, 39,
+        cudaStreamDefault);
 
     cudaStream_t stream = 0;
 
-    auto set = gamax::containers::multiset<KeyT, gamax::size_type, ThrustAllocator<char>, CGSize>(
+    gamax::rmm_allocator_handle<gamax::size_type> allocator{stream};
+    auto set = gamax::containers::multiset<
+        KeyT, gamax::size_type,
+        gamax::rmm_cuco_allocator<gamax::size_type>, CGSize>(
         build->get_column(0).view(),
         params.load_factor,
         gamax::sentinel<gamax::size_type>(),
-        *get_thrust_allocator<char>(stream),
+        allocator.get(),
         stream);
 
     set.insert_with_tids(stream);

@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <cuda.h>
@@ -16,8 +19,10 @@
 namespace gamax::containers {
     template <typename Key,
               typename Value = gamax::size_type,  
-              typename Allocator = ThrustAllocator<char>,
-              int CG_SIZE = 2>
+              typename Allocator = rmm_cuco_allocator<cuco::pair<Key, Value>>,
+              int CG_SIZE = 2,
+              typename KeyEqual = cuda::std::equal_to<Key>,
+              typename ProbingScheme = cuco::double_hashing<CG_SIZE, cuco::default_hash_function<Key>>>
     class multimap {
     public:
         multimap(
@@ -26,15 +31,20 @@ namespace gamax::containers {
             Key empty_key_sentinel,
             Value empty_value_sentinel,
             Allocator allocator,
-            cudaStream_t stream = cudaStreamDefault)
+            cudaStream_t stream)
         : _cuco_allocator(allocator)
         , _load_factor(load_factor)
         , _multimap(
-            capacity * std::ceil(1 / load_factor),
+            capacity,
+            load_factor,
             cuco::empty_key{empty_key_sentinel}, 
             cuco::empty_value{empty_value_sentinel},
-            stream,
-            _cuco_allocator) {
+            KeyEqual{},
+            ProbingScheme{},
+            cuco::cuda_thread_scope<cuda::thread_scope_device>{},
+            cuco::storage<2>{},
+            _cuco_allocator,
+            stream) {
                 if(load_factor <= 0.0 || load_factor > 1.0) {
                     throw std::invalid_argument("Load factor must be in the range (0.0, 1.0].");
                 }
@@ -42,7 +52,7 @@ namespace gamax::containers {
     
         void insert_with_tids(
             gamax::column_view const& keys, 
-            cudaStream_t stream = cudaStreamDefault) 
+            cudaStream_t stream)
         {
             auto keys_ptr = keys.data<Key>();
             auto tids = thrust::make_counting_iterator(static_cast<Value>(0));
@@ -59,17 +69,17 @@ namespace gamax::containers {
         probe(
             gamax::column_view const& probe_keys,
             gamax::size_type output_size,
-            cudaStream_t stream = cudaStreamDefault) 
+            cudaStream_t stream)
         {
             auto probe_tids_in = thrust::make_counting_iterator(static_cast<Value>(0));
             auto probe_kv_pairs_in = thrust::make_zip_iterator(cuda::std::make_tuple(probe_keys.data<Key>(), probe_tids_in));
             
-            auto probe_keys_out = gamax::make_column<Key>(output_size);
-            auto probe_tids_out = gamax::make_column<Value>(output_size);
+            auto probe_keys_out = gamax::make_column<Key>(output_size, stream);
+            auto probe_tids_out = gamax::make_column<Value>(output_size, stream);
             auto probe_kv_pairs_out = thrust::make_zip_iterator(cuda::std::make_tuple(probe_keys_out->template data<Key>(), probe_tids_out->template data<Value>()));
 
-            auto build_keys_out = gamax::make_column<Key>(output_size);
-            auto build_tids_out = gamax::make_column<Value>(output_size);
+            auto build_keys_out = gamax::make_column<Key>(output_size, stream);
+            auto build_tids_out = gamax::make_column<Value>(output_size, stream);
             auto build_kv_pairs_out = thrust::make_zip_iterator(cuda::std::make_tuple(build_keys_out->template data<Key>(), build_tids_out->template data<Value>()));
 
             auto pair_equal = [] __device__ (auto const& a, auto const& b) {
@@ -98,7 +108,7 @@ namespace gamax::containers {
 
         std::size_t count(
             gamax::column_view const& probe_keys,
-            cudaStream_t stream = cudaStreamDefault) 
+            cudaStream_t stream)
         {
             auto probe_tids_in = thrust::make_counting_iterator(static_cast<Value>(0));
             auto probe_kv_pairs_in = thrust::make_zip_iterator(cuda::std::make_tuple(probe_keys.data<Key>(), probe_tids_in));
@@ -126,7 +136,14 @@ namespace gamax::containers {
     
     private:
         Allocator _cuco_allocator;
-        cuco::static_multimap<Key, Value, cuda::thread_scope_device, Allocator, cuco::legacy::double_hashing<cg_size(), cuco::default_hash_function<Key>>> _multimap;
+        cuco::static_multimap<
+            Key,
+            Value,
+            cuco::extent<std::size_t>,
+            cuda::thread_scope_device,
+            KeyEqual,
+            ProbingScheme,
+            Allocator> _multimap;
         double _load_factor;
     };
     } // namespace gamax::containers

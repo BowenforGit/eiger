@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
@@ -15,30 +18,30 @@ namespace gamax::select {
     std::unique_ptr<gamax::table> select(
         gamax::table_view table,
         gamax::expression::ExprTree& expr,
-        select_options options = {},
-        cudaStream_t stream = cudaStreamDefault);
+        cudaStream_t stream,
+        select_options options = {});
     
     std::pair<std::unique_ptr<gamax::table>, gamax::column_ptr> select_and_return_bitmask(
         gamax::table_view table,
         gamax::expression::ExprTree& expr,
-        select_options options = {},
-        cudaStream_t stream = cudaStreamDefault);
+        cudaStream_t stream,
+        select_options options = {});
     
     gamax::column_ptr select_to_bitmask(
         gamax::table_view table,
         gamax::expression::ExprTree& expr,
-        select_options options = {},
-        cudaStream_t stream = cudaStreamDefault);
+        cudaStream_t stream,
+        select_options options = {});
 
     std::pair<std::unique_ptr<gamax::table>, gamax::column_ptr> select_fuse(
         gamax::table_view table,
         gamax::expression::ExprTree& expr,
-        cudaStream_t stream = cudaStreamDefault);
+        cudaStream_t stream);
     
     std::pair<std::unique_ptr<gamax::table>, gamax::column_ptr> select_nofuse(
         gamax::table_view table,
         gamax::expression::ExprTree& expr,
-        cudaStream_t stream = cudaStreamDefault);
+        cudaStream_t stream);
 
     // Forward declaration — full definition in predicate.hpp
     class Predicate;
@@ -49,17 +52,7 @@ namespace gamax::select {
     gamax::column_ptr select_to_bitmask(
         gamax::table_view table,
         Predicate& predicate,
-        select_options options,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        select_options options = {});
 
-    // Stream-only convenience: equivalent to passing default
-    // `select_options{}`. Kept so existing callers that didn't care
-    // about fuse/nofuse don't have to spell out the empty struct.
-    inline gamax::column_ptr select_to_bitmask(
-        gamax::table_view table,
-        Predicate& predicate,
-        cudaStream_t stream = cudaStreamDefault)
-    {
-        return select_to_bitmask(table, predicate, select_options{}, stream);
-    }
 } // namespace gamax::select

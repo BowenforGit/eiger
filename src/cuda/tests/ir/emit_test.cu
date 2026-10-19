@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
 
 #include <memory>
@@ -26,7 +29,8 @@ gamax::column_ptr make_col(const std::vector<T>& values) {
     // make_column_from_host takes T* host_data, size_type num_items.
     return gamax::make_column_from_host(
         const_cast<T*>(values.data()),
-        static_cast<gamax::size_type>(values.size()));
+        static_cast<gamax::size_type>(values.size()),
+        cudaStreamDefault);
 }
 
 // Helper: build a string column from a vector of std::string. Matches
@@ -137,9 +141,9 @@ TEST(IrEmit, ScanProducesRequestedColumnsInOrder) {
 
     ASSERT_EQ(out->num_columns(), 2);
     ASSERT_EQ(out->num_rows(), 6);
-    auto disc = gamax::copy_column_to_host<double>(out->view()[0]);
+    auto disc = gamax::copy_column_to_host<double>(out->view()[0], cudaStreamDefault);
     EXPECT_DOUBLE_EQ(disc[1], 0.06);  // row 1 discount
-    auto sd = gamax::copy_column_to_host<int32_t>(out->view()[1]);
+    auto sd = gamax::copy_column_to_host<int32_t>(out->view()[1], cudaStreamDefault);
     EXPECT_EQ(sd[2], 9000);           // row 2 shipdate
 }
 
@@ -174,7 +178,7 @@ TEST(IrEmit, ProjectComputesNewColumns) {
 
     ASSERT_EQ(out->num_columns(), 1);
     ASSERT_EQ(out->num_rows(), 6);
-    auto rev = gamax::copy_column_to_host<double>(out->view()[0]);
+    auto rev = gamax::copy_column_to_host<double>(out->view()[0], cudaStreamDefault);
     EXPECT_DOUBLE_EQ(rev[0], 100.0 * 0.10);
     EXPECT_DOUBLE_EQ(rev[1], 200.0 * 0.06);
     EXPECT_DOUBLE_EQ(rev[2], 300.0 * 0.05);
@@ -195,7 +199,7 @@ TEST(IrEmit, ScalarAggregateSum) {
 
     ASSERT_EQ(out->num_rows(), 1);
     ASSERT_EQ(out->num_columns(), 1);
-    auto total = gamax::copy_column_to_host<double>(out->view()[0]);
+    auto total = gamax::copy_column_to_host<double>(out->view()[0], cudaStreamDefault);
     EXPECT_DOUBLE_EQ(total[0], 100.0 + 200.0 + 300.0 + 400.0 + 500.0 + 600.0);
 }
 
@@ -229,7 +233,7 @@ TEST(IrEmit, SortOrdersRows) {
     auto plan = li.sort({gir::asc("l_shipdate")});
     auto out = gir::emit(plan.plan(), ctx);
 
-    auto sd = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto sd = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     ASSERT_EQ(out->num_rows(), 6);
     EXPECT_EQ(sd[0], 8000);
     EXPECT_EQ(sd[1], 8800);
@@ -267,7 +271,7 @@ TEST(IrEmit, Q6EndToEnd) {
     auto out = gir::emit(plan.plan(), ctx);
     ASSERT_EQ(out->num_rows(), 1);
     ASSERT_EQ(out->num_columns(), 1);
-    auto total = gamax::copy_column_to_host<double>(out->view()[0]);
+    auto total = gamax::copy_column_to_host<double>(out->view()[0], cudaStreamDefault);
     // Hand-computed: rows 1 and 2 pass. 200*0.06 + 300*0.05 = 27.0.
     EXPECT_DOUBLE_EQ(total[0], 12.0 + 15.0);
 }
@@ -323,7 +327,7 @@ TEST(IrEmit, StringColumnFilterGathersAndCompactsTogether) {
 
     ASSERT_EQ(out->num_columns(), 2);
     ASSERT_EQ(out->num_rows(), 2);
-    auto kk = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto kk = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     EXPECT_EQ(kk[0], 3);
     EXPECT_EQ(kk[1], 4);
     // Just verify the string column is intact (2 rows) — reading string
@@ -419,8 +423,8 @@ TEST(IrEmit, InnerJoinSingleKey) {
     EXPECT_EQ(out->num_rows(), 3);
     // IR output schema: [l_partkey, l_extendedprice, p_partkey, p_size].
     ASSERT_EQ(out->num_columns(), 4);
-    auto lpk = gamax::copy_column_to_host<int32_t>(out->view()[0]);
-    auto ppk = gamax::copy_column_to_host<int32_t>(out->view()[2]);
+    auto lpk = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
+    auto ppk = gamax::copy_column_to_host<int32_t>(out->view()[2], cudaStreamDefault);
     // Every row's l_partkey must equal its p_partkey (equi-join).
     for (int i = 0; i < 3; ++i) EXPECT_EQ(lpk[i], ppk[i]);
 }
@@ -457,7 +461,7 @@ TEST(IrEmit, LimitFusedWithSort) {
     auto out = gir::emit(top.plan(), ctx);
 
     ASSERT_EQ(out->num_rows(), 2);
-    auto sd = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto sd = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     EXPECT_EQ(sd[0], 8000);
     EXPECT_EQ(sd[1], 8800);
 }
@@ -475,7 +479,7 @@ TEST(IrEmit, LimitWithoutSortReportsNotImplemented) {
 
 // ── Remaining deferred paths ───────────────────────────────────────
 
-TEST(IrEmit, CountAllReportsNotImplemented) {
+TEST(IrEmit, CountAllProducesRowCount) {
     gir::IdGenerator gen;
     auto cat = make_lineitem_catalog();
     auto in = make_q6_input();
@@ -485,7 +489,13 @@ TEST(IrEmit, CountAllReportsNotImplemented) {
     auto li = qb.scan("lineitem", {"l_shipdate"});
     auto plan = li.aggregate(/*keys=*/{},
         {{"n", gir::AggKind::CountAll, gir::lit(int64_t{0})}});
-    EXPECT_THROW(gir::emit(plan.plan(), ctx), std::runtime_error);
+    auto out = gir::emit(plan.plan(), ctx);
+    ASSERT_EQ(out->num_rows(), 1);
+    ASSERT_EQ(out->num_columns(), 1);
+    auto count = gamax::copy_column_to_host<int64_t>(
+        out->view()[0], cudaStreamDefault);
+    ASSERT_EQ(cudaStreamSynchronize(cudaStreamDefault), cudaSuccess);
+    EXPECT_EQ(count[0], 6);
 }
 
 TEST(IrEmit, LeftOuterJoinReportsNotImplemented) {

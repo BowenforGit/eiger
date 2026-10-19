@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
 #include <cuda_runtime.h>
 #include <vector>
@@ -89,8 +92,8 @@ TEST_F(TopKTableTest, SingleNumericKey_Descending_Sorted) {
     int32_t keys[] = {3, 1, 4, 1, 5, 9, 2, 6};
     int32_t vals[] = {30, 10, 40, 11, 50, 90, 20, 60};
     
-    auto key_col = gamax::make_column_from_host(keys, 8);
-    auto val_col = gamax::make_column_from_host(vals, 8);
+    auto key_col = gamax::make_column_from_host(keys, 8, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 8, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -111,8 +114,8 @@ TEST_F(TopKTableTest, SingleNumericKey_Descending_Sorted) {
     // Corresponding values: [90, 60, 50]
     int32_t expected_keys[] = {9, 6, 5};
     int32_t expected_vals[] = {90, 60, 50};
-    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3);
+    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_val_col->view()));
@@ -127,8 +130,8 @@ TEST_F(TopKTableTest, SingleNumericKey_Ascending_Sorted) {
     int32_t keys[] = {3, 1, 4, 1, 5, 9, 2, 6};
     int32_t vals[] = {30, 10, 40, 11, 50, 90, 20, 60};
     
-    auto key_col = gamax::make_column_from_host(keys, 8);
-    auto val_col = gamax::make_column_from_host(vals, 8);
+    auto key_col = gamax::make_column_from_host(keys, 8, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 8, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -167,8 +170,8 @@ TEST_F(TopKTableTest, SingleNumericKey_Unsorted) {
     int32_t keys[] = {3, 1, 4, 1, 5, 9, 2, 6};
     int32_t vals[] = {30, 10, 40, 11, 50, 90, 20, 60};
     
-    auto key_col = gamax::make_column_from_host(keys, 8);
-    auto val_col = gamax::make_column_from_host(vals, 8);
+    auto key_col = gamax::make_column_from_host(keys, 8, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 8, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -206,7 +209,7 @@ TEST_F(TopKTableTest, SingleNumericKey_WithStringColumn) {
     int32_t keys[] = {3, 1, 4, 2, 5};
     std::vector<std::string> vals = {"three", "one", "four", "two", "five"};
     
-    auto key_col = gamax::make_column_from_host(keys, 5);
+    auto key_col = gamax::make_column_from_host(keys, 5, cudaStreamDefault);
     auto val_col = makeStringColumn(vals, stream_);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
@@ -225,7 +228,7 @@ TEST_F(TopKTableTest, SingleNumericKey_WithStringColumn) {
     
     // Top 3 largest: [5, 4, 3] -> ["five", "four", "three"]
     int32_t expected_keys[] = {5, 4, 3};
-    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3);
+    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3, cudaStreamDefault);
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key_col->view()));
     
     auto& result_str_col = dynamic_cast<const gamax::string_column&>(result->get_column(1));
@@ -244,7 +247,7 @@ TEST_F(TopKTableTest, SingleStringKey_Sorted) {
     int32_t vals[] = {30, 10, 20, 40, 50};
     
     auto key_col = makeStringColumn(keys, stream_);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -268,7 +271,7 @@ TEST_F(TopKTableTest, SingleStringKey_Sorted) {
     
     // Corresponding values: [10, 20, 30]
     int32_t expected_vals[] = {10, 20, 30};
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3, cudaStreamDefault);
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_val_col->view()));
 }
 
@@ -283,9 +286,9 @@ TEST_F(TopKTableTest, MultiKey_Sorted) {
     int32_t key2[] = {3, 1, 2, 1, 2};
     int32_t vals[] = {13, 11, 22, 21, 12};
     
-    auto key1_col = gamax::make_column_from_host(key1, 5);
-    auto key2_col = gamax::make_column_from_host(key2, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key1_col = gamax::make_column_from_host(key1, 5, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -311,9 +314,9 @@ TEST_F(TopKTableTest, MultiKey_Sorted) {
     int32_t expected_key2[] = {1, 2, 3};
     int32_t expected_vals[] = {11, 12, 13};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 3);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 3);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 3, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 3, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -327,8 +330,8 @@ TEST_F(TopKTableTest, K_GreaterThanOrEqual_NumRows) {
     int32_t keys[] = {3, 1, 2};
     int32_t vals[] = {30, 10, 20};
     
-    auto key_col = gamax::make_column_from_host(keys, 3);
-    auto val_col = gamax::make_column_from_host(vals, 3);
+    auto key_col = gamax::make_column_from_host(keys, 3, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 3, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -348,8 +351,8 @@ TEST_F(TopKTableTest, K_GreaterThanOrEqual_NumRows) {
     // Should be fully sorted
     int32_t expected_keys[] = {1, 2, 3};
     int32_t expected_vals[] = {10, 20, 30};
-    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3);
+    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_val_col->view()));
@@ -362,8 +365,8 @@ TEST_F(TopKTableTest, K_Equals_One) {
     int32_t keys[] = {3, 1, 4, 1, 5};
     int32_t vals[] = {30, 10, 40, 11, 50};
     
-    auto key_col = gamax::make_column_from_host(keys, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key_col = gamax::make_column_from_host(keys, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -382,8 +385,8 @@ TEST_F(TopKTableTest, K_Equals_One) {
     // Largest key is 5
     int32_t expected_keys[] = {5};
     int32_t expected_vals[] = {50};
-    auto expected_key_col = gamax::make_column_from_host(expected_keys, 1);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 1);
+    auto expected_key_col = gamax::make_column_from_host(expected_keys, 1, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 1, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_val_col->view()));
@@ -394,7 +397,7 @@ TEST_F(TopKTableTest, K_Equals_One) {
 // =============================================================================
 TEST_F(TopKTableTest, EmptyKeys_Throws) {
     int32_t col1[] = {1, 2, 3};
-    auto col1_ptr = gamax::make_column_from_host(col1, 3);
+    auto col1_ptr = gamax::make_column_from_host(col1, 3, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1_ptr));
@@ -414,7 +417,7 @@ TEST_F(TopKTableTest, EmptyKeys_Throws) {
 // =============================================================================
 TEST_F(TopKTableTest, MismatchedSizes_Throws) {
     int32_t col1[] = {1, 2, 3};
-    auto col1_ptr = gamax::make_column_from_host(col1, 3);
+    auto col1_ptr = gamax::make_column_from_host(col1, 3, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1_ptr));
@@ -437,7 +440,7 @@ TEST_F(TopKTableTest, MismatchedSizes_Throws) {
 // =============================================================================
 TEST_F(TopKTableTest, K_LessThanOrEqualZero_Throws) {
     int32_t col1[] = {1, 2, 3};
-    auto col1_ptr = gamax::make_column_from_host(col1, 3);
+    auto col1_ptr = gamax::make_column_from_host(col1, 3, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(col1_ptr));
@@ -464,8 +467,8 @@ TEST_F(TopKTableTest, Int64Key) {
     int64_t keys[] = {300, 100, 400, 200, 500};
     int32_t vals[] = {30, 10, 40, 20, 50};
     
-    auto key_col = gamax::make_column_from_host(keys, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key_col = gamax::make_column_from_host(keys, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -484,8 +487,8 @@ TEST_F(TopKTableTest, Int64Key) {
     // Top 3 largest: [500, 400, 300]
     int64_t expected_keys[] = {500, 400, 300};
     int32_t expected_vals[] = {50, 40, 30};
-    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3);
+    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 3, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_val_col->view()));
@@ -498,8 +501,8 @@ TEST_F(TopKTableTest, FloatKey) {
     float keys[] = {3.14f, 1.41f, 2.71f, 1.73f, 0.57f};
     int32_t vals[] = {314, 141, 271, 173, 57};
     
-    auto key_col = gamax::make_column_from_host(keys, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key_col = gamax::make_column_from_host(keys, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -533,8 +536,8 @@ TEST_F(TopKTableTest, DoubleKey) {
     double keys[] = {3.14159, 1.41421, 2.71828, 1.73205, 0.57721};
     int32_t vals[] = {314, 141, 271, 173, 57};
     
-    auto key_col = gamax::make_column_from_host(keys, 5);
-    auto val_col = gamax::make_column_from_host(vals, 5);
+    auto key_col = gamax::make_column_from_host(keys, 5, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 5, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -572,8 +575,8 @@ TEST_F(TopKTableTest, NumericKeyWithMixedColumns) {
     int32_t col1[] = {40, 20, 50, 10, 30};
     std::vector<std::string> col2 = {"four", "two", "five", "one", "three"};
     
-    auto key_col = gamax::make_column_from_host(keys, 5);
-    auto col1_ptr = gamax::make_column_from_host(col1, 5);
+    auto key_col = gamax::make_column_from_host(keys, 5, cudaStreamDefault);
+    auto col1_ptr = gamax::make_column_from_host(col1, 5, cudaStreamDefault);
     auto col2_ptr = makeStringColumn(col2, stream_);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
@@ -596,8 +599,8 @@ TEST_F(TopKTableTest, NumericKeyWithMixedColumns) {
     int32_t expected_col1[] = {10, 20, 30};
     std::vector<std::string> expected_col2 = {"one", "two", "three"};
     
-    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3);
-    auto expected_col1_ptr = gamax::make_column_from_host(expected_col1, 3);
+    auto expected_key_col = gamax::make_column_from_host(expected_keys, 3, cudaStreamDefault);
+    auto expected_col1_ptr = gamax::make_column_from_host(expected_col1, 3, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_col1_ptr->view()));
@@ -618,9 +621,9 @@ TEST_F(TopKTableTest, MultiKey_MixedSortOrders) {
     int32_t key2[] = {1, 2, 1, 2};
     int32_t vals[] = {11, 12, 21, 22};
     
-    auto key1_col = gamax::make_column_from_host(key1, 4);
-    auto key2_col = gamax::make_column_from_host(key2, 4);
-    auto val_col = gamax::make_column_from_host(vals, 4);
+    auto key1_col = gamax::make_column_from_host(key1, 4, cudaStreamDefault);
+    auto key2_col = gamax::make_column_from_host(key2, 4, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 4, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key1_col));
@@ -646,9 +649,9 @@ TEST_F(TopKTableTest, MultiKey_MixedSortOrders) {
     int32_t expected_key2[] = {2, 1};
     int32_t expected_vals[] = {12, 11};
     
-    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 2);
-    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 2);
-    auto expected_val_col = gamax::make_column_from_host(expected_vals, 2);
+    auto expected_key1_col = gamax::make_column_from_host(expected_key1, 2, cudaStreamDefault);
+    auto expected_key2_col = gamax::make_column_from_host(expected_key2, 2, cudaStreamDefault);
+    auto expected_val_col = gamax::make_column_from_host(expected_vals, 2, cudaStreamDefault);
     
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_key1_col->view()));
     EXPECT_TRUE(check_cols_eq(result->get_column(1).view(), expected_key2_col->view()));
@@ -660,7 +663,7 @@ TEST_F(TopKTableTest, MultiKey_MixedSortOrders) {
 // =============================================================================
 TEST_F(TopKTableTest, SingleColumnTable) {
     int32_t keys[] = {5, 2, 8, 1, 9, 3};
-    auto key_col = gamax::make_column_from_host(keys, 6);
+    auto key_col = gamax::make_column_from_host(keys, 6, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));
@@ -678,7 +681,7 @@ TEST_F(TopKTableTest, SingleColumnTable) {
     
     // Top 3 largest: [9, 8, 5]
     int32_t expected[] = {9, 8, 5};
-    auto expected_col = gamax::make_column_from_host(expected, 3);
+    auto expected_col = gamax::make_column_from_host(expected, 3, cudaStreamDefault);
     EXPECT_TRUE(check_cols_eq(result->get_column(0).view(), expected_col->view()));
 }
 
@@ -690,8 +693,8 @@ TEST_F(TopKTableTest, PreservesKeyValueRelationship) {
     int32_t keys[] = {100, 200, 300, 400, 500, 600, 700, 800};
     int32_t vals[] = {1, 2, 3, 4, 5, 6, 7, 8};
     
-    auto key_col = gamax::make_column_from_host(keys, 8);
-    auto val_col = gamax::make_column_from_host(vals, 8);
+    auto key_col = gamax::make_column_from_host(keys, 8, cudaStreamDefault);
+    auto val_col = gamax::make_column_from_host(vals, 8, cudaStreamDefault);
     
     std::vector<std::unique_ptr<gamax::column>> columns;
     columns.push_back(std::move(key_col));

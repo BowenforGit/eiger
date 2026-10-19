@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <gtest/gtest.h>
 #include <cuda_runtime.h>
 #include <vector>
@@ -387,6 +390,40 @@ TEST_F(StatsComputeTest, ComputeStats_WithRequest) {
     EXPECT_EQ(min_opt->get<int32_t>(), 1);
     EXPECT_EQ(max_opt->get<int32_t>(), 5);
     EXPECT_DOUBLE_EQ(avg_opt->get<double>(), 3.0);
+}
+
+TEST_F(StatsComputeTest, CacheIdentityDoesNotAliasReusedAddress) {
+    int32_t storage_word = 0;
+    auto const first_id = gamax::make_column_identity();
+    auto const second_id = gamax::make_column_identity();
+    ASSERT_NE(first_id, second_id);
+
+    // Deliberately model allocator address reuse: both non-owning views point
+    // at the same address but identify different logical allocations.
+    gamax::column_view first{
+        &storage_word, 1, gamax::data_type{gamax::type_id::INT32},
+        0, nullptr, 0, 0, first_id};
+    gamax::column_view second{
+        &storage_word, 1, gamax::data_type{gamax::type_id::INT32},
+        0, nullptr, 0, 0, second_id};
+
+    auto& cache = gamax::stats::StatsStorage::instance();
+    cache.set_stat(first, gamax::stats::StatsType::MIN, gamax::scalar{int32_t{7}});
+    EXPECT_TRUE(cache.get_scalar_stat(first, gamax::stats::StatsType::MIN).has_value());
+    EXPECT_FALSE(cache.get_scalar_stat(second, gamax::stats::StatsType::MIN).has_value());
+}
+
+TEST_F(StatsComputeTest, SubviewsHaveDefinedDistinctCacheIdentity) {
+    int32_t data[] = {4, 3, 2, 1};
+    auto col = gamax::make_column_from_host(data, 4, stream_);
+    auto whole = col->view();
+    auto tail = col->view(1);
+    ASSERT_EQ(whole.identity(), tail.identity());
+    ASSERT_NE(whole.offset(), tail.offset());
+
+    auto& cache = gamax::stats::StatsStorage::instance();
+    cache.set_stat(whole, gamax::stats::StatsType::MIN, gamax::scalar{int32_t{1}});
+    EXPECT_FALSE(cache.get_scalar_stat(tail, gamax::stats::StatsType::MIN).has_value());
 }
 
 } // namespace test

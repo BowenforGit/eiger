@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include "ir/plan_node.hpp"
@@ -12,10 +15,9 @@ namespace gamax::ir {
 // etc. — as distinguished from the *implementation-detail* work that
 // happens inside `phys::*` (STRING passthrough, multi-key fusion).
 //
-// Each rule is opt-in via `RuleConfig`. Default-constructing the
-// config enables every rule we currently ship; callers that want a
-// specific shape (for debugging, for testing a particular IR form,
-// or to benchmark rule impact) flip individual fields off.
+// Each rule is controlled via `RuleConfig`. Default-constructing the config
+// enables the established rules, while semantic rewrites that remain opt-in
+// (currently COUNT → SUM(1)) stay disabled until a caller enables them.
 //
 // Why a config struct instead of a rule-list: the rules we care about
 // for TPC-H are few and well-known, so a named boolean per rule is

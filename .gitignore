@@ -1,8 +1,12 @@
+# Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 bin/
 .vscode/
 obj/
 log*
 exp_results/
+/results/
 *.nsys-rep
 *.ncu-rep
 *.csv
@@ -13,6 +17,7 @@ hip/
 compile_commands.json
 tools/visualize/data/measurements/**
 tools/results
+tools/nsight-compute-2026.2/
 __pycache__/
 nsight-compute-lock
 error.txt

@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "stats/stats_compute.hpp"
 #include "types/type_dispatcher.hpp"
 #include "memory/mem_manager.hpp"
@@ -11,6 +14,7 @@
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/execution_policy.h>
 #include <cuco/hyperloglog.cuh>
+#include "utils/green_safe_elementwise.cuh"
 
 namespace gamax::stats {
 
@@ -47,7 +51,7 @@ struct compute_min_impl {
     template<typename T>
     gamax::scalar operator()(gamax::column_view column, cudaStream_t stream) const {
         auto result = thrust::reduce(
-            thrust::cuda::par(*get_thrust_allocator()).on(stream),
+            gamax::rmm_sync_exec_policy_handle{stream}.get(),
             column.data<T>(),
             column.data<T>() + column.size(),
             std::numeric_limits<T>::max(),
@@ -62,7 +66,7 @@ struct compute_max_impl {
     template<typename T>
     gamax::scalar operator()(gamax::column_view column, cudaStream_t stream) const {
         auto result = thrust::reduce(
-            thrust::cuda::par(*get_thrust_allocator()).on(stream),
+            gamax::rmm_sync_exec_policy_handle{stream}.get(),
             column.data<T>(),
             column.data<T>() + column.size(),
             std::numeric_limits<T>::lowest(),
@@ -82,7 +86,7 @@ struct compute_sum_impl {
                           std::conditional_t<std::is_signed_v<T>, int64_t, uint64_t>>;
         
         auto result = thrust::reduce(
-            thrust::cuda::par(*get_thrust_allocator()).on(stream),
+            gamax::rmm_sync_exec_policy_handle{stream}.get(),
             column.data<T>(),
             column.data<T>() + column.size(),
             static_cast<AccumType>(0),
@@ -106,25 +110,36 @@ struct compute_ndv_impl {
     gamax::size_type operator()(gamax::column_view column, cudaStream_t stream) const {
         if constexpr (!std::is_same_v<T, gamax::string_type_tag>) {
             auto const sd = cuco::standard_deviation{0.0122197};
-            cuco::hyperloglog<T> estimator{sd};
+            using allocator_type = gamax::rmm_cuco_allocator<cuda::std::byte>;
+            gamax::rmm_allocator_handle<cuda::std::byte> allocator{stream};
+            cuco::hyperloglog<
+                T, cuda::thread_scope_device, cuco::xxhash_64<T>, allocator_type>
+                estimator{sd, {}, allocator.get(), cuda::stream_ref{stream}};
             
             estimator.add(column.data<T>(), column.data<T>() + column.size(), stream);
             cudaStreamSynchronize(stream);
-            
-            return static_cast<gamax::size_type>(estimator.estimate(stream));
+
+            // estimate() copies the HLL sketch device->host via
+            // cudaMemcpyBatchAsync, which SEGFAULTS on a CUDA green-context
+            // stream (the batched-memcpy driver path doesn't support green
+            // contexts). The sketch is already complete (synced above), so
+            // read it back on the legacy default stream — a non-green stream
+            // where the batched copy works. Correct for every caller (this is
+            // a host-returning estimate; the sketch build already synced).
+            return static_cast<gamax::size_type>(
+                estimator.estimate(cudaStream_t{0}));
         } else {
-            gamax::string_column_view str_col(column, gamax::ARROW_STRING, stream);
+            gamax::string_column_view str_col(column, gamax::ARROW_STRING);
             const auto num_strings = str_col.size();
             
             // Allocate temporary buffer for prefixes
             auto prefix_col = gamax::make_column<prefix_t>(num_strings, stream);
             
             // Extract 4-byte prefixes from each string
-            auto itr = thrust::make_counting_iterator<gamax::size_type>(0);
-            thrust::transform(
-                thrust::cuda::par(*get_thrust_allocator()).on(stream),
-                itr, itr + num_strings,
-                prefix_col->template data<prefix_t>(),
+            // Green-safe: thrust::transform over a counting range routes to
+            // cub::DeviceTransform, which fails on green-context streams.
+            gamax::util::device::indexed_transform(
+                prefix_col->template data<prefix_t>(), num_strings, stream,
                 [str_col] __device__ (gamax::size_type idx) {
                     prefix_t prefix = static_cast<prefix_t>(0);
                     string_col_impl_t str_impl(str_col);
@@ -139,15 +154,26 @@ struct compute_ndv_impl {
             
             // Use HyperLogLog on the extracted prefixes
             auto const sd = cuco::standard_deviation{0.0122197};
-            cuco::hyperloglog<prefix_t> estimator{sd};
+            using allocator_type = gamax::rmm_cuco_allocator<cuda::std::byte>;
+            gamax::rmm_allocator_handle<cuda::std::byte> allocator{stream};
+            cuco::hyperloglog<
+                prefix_t,
+                cuda::thread_scope_device,
+                cuco::xxhash_64<prefix_t>,
+                allocator_type>
+                estimator{sd, {}, allocator.get(), cuda::stream_ref{stream}};
             
             estimator.add(
                 prefix_col->template data<prefix_t>(),
                 prefix_col->template data<prefix_t>() + num_strings,
                 stream);
             cudaStreamSynchronize(stream);
-            
-            return static_cast<gamax::size_type>(estimator.estimate(stream));
+
+            // Same green-safe reroute as the numeric branch: estimate()'s
+            // cudaMemcpyBatchAsync segfaults on a green-context stream; the
+            // sketch is complete (synced above), so read it on stream 0.
+            return static_cast<gamax::size_type>(
+                estimator.estimate(cudaStream_t{0}));
         }
     }
 };
@@ -269,8 +295,8 @@ gamax::scalar get_or_compute_scalar_stat(
 std::shared_ptr<Histogram> get_or_compute_histogram_stat(
     gamax::column_view column,
     StatsType type,
-    gamax::size_type num_buckets,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    gamax::size_type num_buckets)
 {
     auto& storage = StatsStorage::instance();
     
@@ -322,7 +348,7 @@ void compute_stats(
             case StatsType::EQUI_WIDTH_HISTOGRAM:
             case StatsType::EQUI_DEPTH_HISTOGRAM:
                 get_or_compute_histogram_stat(column, type, 
-                                              request.num_buckets, stream);
+                                              stream, request.num_buckets);
                 break;
             default:
                 // Skip unsupported types

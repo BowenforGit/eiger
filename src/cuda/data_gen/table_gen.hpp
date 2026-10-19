@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
@@ -21,7 +24,8 @@ namespace gamax::datagen::device {
         gamax::column_view src,
         const gamax::size_type card,
         const gamax::size_type ncols,
-        const int seed);
+        const int seed,
+        cudaStream_t stream);
 
     /**
      * Generate a table with uniformly distributed primary keys.
@@ -38,6 +42,7 @@ namespace gamax::datagen::device {
         const gamax::size_type card,
         const gamax::size_type ncols,
         const int seed,
+        cudaStream_t stream,
         const uint64_t start = 0);
 
     /**
@@ -72,7 +77,8 @@ namespace gamax::datagen::device {
         const gamax::size_type card,
         const gamax::size_type ncols,
         const double match_ratio,
-        const int seed);
+        const int seed,
+        cudaStream_t stream);
     
     /**
      * Generate a table with uniformly distributed foreign keys.
@@ -93,6 +99,7 @@ namespace gamax::datagen::device {
         const gamax::size_type ncols,
         const double match_ratio,
         const int seed,
+        cudaStream_t stream,
         const uint64_t start = 0);
     
     /**
@@ -111,7 +118,8 @@ namespace gamax::datagen::device {
         const gamax::size_type card,
         const gamax::size_type ncols,
         const double zipf_factor,
-        const int seed);
+        const int seed,
+        cudaStream_t stream);
     
     /**
      * Generate a table with foreign keys following a Zipfian distribution.
@@ -132,5 +140,6 @@ namespace gamax::datagen::device {
         const gamax::size_type ncols,
         const double zipf_factor,
         const int seed,
+        cudaStream_t stream,
         const uint64_t start = 0);
 }

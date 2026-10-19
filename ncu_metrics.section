@@ -1,0 +1,6501 @@
+Identifier: "AlpsTpchMetrics"
+DisplayName: "ALPS TPC-H Metrics"
+Description: "All GB200 counters and launch attributes collected by the ALPS TPC-H NCU campaign."
+Order: 1000
+
+# Exact metric suffixes resolved with Nsight Compute 2025.3.1 on NVIDIA GB200.
+# The following source selectors have no collectable suffix on this target:
+# ^sm__inst_executed_pipe_tensor_op_dmma[.](sum|min|max|avg)$
+# ^sm__inst_executed_pipe_tensor_op_gmma[.](sum|min|max|avg)$
+# ^sm__inst_executed_pipe_tensor_op_hmma[.](sum|min|max|avg)$
+# ^sm__inst_executed_pipe_tensor_op_hmma_type_hfma2[.](sum|min|max|avg)$
+# ^sm__inst_executed_pipe_tensor_op_imma[.](sum|min|max|avg)$
+# ^sm__pipe_tensor_op_dmma_cycles_active[.](sum|min|max|avg)$
+# ^sm__pipe_tensor_op_hmma_cycles_active[.](sum|min|max|avg)$
+# ^sm__pipe_tensor_op_hmma_type_hmma_hgmma_qgmma_cycles_active[.](sum|min|max|avg)$
+# ^sm__pipe_tensor_op_imma_cycles_active[.](sum|min|max|avg)$
+# ^sm__pipe_tensor_type_hmma_hgmma_qgmma_imma_igmma_bmma_bgmma_cycles_active[.](sum|min|max|avg)$
+# ^sm__sass_inst_executed_op_shared_gmma[.](sum|min|max|avg)$
+# ^smsp__average_inst_executed_pipe_tensor_op_dmma_per_warp[.](pct|ratio|max_rate)$
+# ^smsp__average_inst_executed_pipe_tensor_op_gmma_per_warp[.](pct|ratio|max_rate)$
+# ^smsp__average_inst_executed_pipe_tensor_op_hmma_per_warp[.](pct|ratio|max_rate)$
+# ^smsp__average_inst_executed_pipe_tensor_op_hmma_type_hfma2_per_warp[.](pct|ratio|max_rate)$
+# ^smsp__average_inst_executed_pipe_tensor_op_imma_per_warp[.](pct|ratio|max_rate)$
+# ^smsp__average_warp_latency_issue_stalled_gmma[.](pct|ratio|max_rate)$
+# ^smsp__average_warp_latency_issue_stalled_imc_miss[.](pct|ratio|max_rate)$
+# ^smsp__average_warps_issue_stalled_gmma_per_issue_active[.](pct|ratio|max_rate)$
+# ^smsp__average_warps_issue_stalled_imc_miss_per_issue_active[.](pct|ratio|max_rate)$
+# ^smsp__inst_executed_pipe_tensor_op_dmma[.](sum|min|max|avg)$
+# ^smsp__inst_executed_pipe_tensor_op_gmma[.](sum|min|max|avg)$
+# ^smsp__inst_executed_pipe_tensor_op_hmma[.](sum|min|max|avg)$
+# ^smsp__inst_executed_pipe_tensor_op_hmma_type_hfma2[.](sum|min|max|avg)$
+# ^smsp__inst_executed_pipe_tensor_op_imma[.](sum|min|max|avg)$
+# ^smsp__pipe_tensor_op_dmma_cycles_active[.](sum|min|max|avg)$
+# ^smsp__pipe_tensor_op_hmma_cycles_active[.](sum|min|max|avg)$
+# ^smsp__pipe_tensor_op_hmma_type_hmma_hgmma_qgmma_cycles_active[.](sum|min|max|avg)$
+# ^smsp__pipe_tensor_op_imma_cycles_active[.](sum|min|max|avg)$
+# ^smsp__pipe_tensor_type_hmma_hgmma_qgmma_imma_igmma_bmma_bgmma_cycles_active[.](sum|min|max|avg)$
+# ^smsp__sass_data_bytes_mem_shared_op_gmma[.](sum|min|max|avg)$
+# ^smsp__sass_inst_executed_op_shared_gmma[.](sum|min|max|avg)$
+# ^smsp__warp_issue_stalled_gmma_per_warp_active[.](pct|ratio|max_rate)$
+# ^smsp__warp_issue_stalled_imc_miss_per_warp_active[.](pct|ratio|max_rate)$
+# ^smsp__warps_issue_stalled_gmma[.](sum|min|max|avg)$
+# ^smsp__warps_issue_stalled_imc_miss[.](sum|min|max|avg)$
+Metrics {
+  Metrics {
+    Name: "dram__bytes.avg"
+  }
+  Metrics {
+    Name: "dram__bytes.max"
+  }
+  Metrics {
+    Name: "dram__bytes.min"
+  }
+  Metrics {
+    Name: "dram__bytes.sum"
+  }
+  Metrics {
+    Name: "dram__bytes_read.avg"
+  }
+  Metrics {
+    Name: "dram__bytes_read.max"
+  }
+  Metrics {
+    Name: "dram__bytes_read.min"
+  }
+  Metrics {
+    Name: "dram__bytes_read.sum"
+  }
+  Metrics {
+    Name: "dram__bytes_write.avg"
+  }
+  Metrics {
+    Name: "dram__bytes_write.max"
+  }
+  Metrics {
+    Name: "dram__bytes_write.min"
+  }
+  Metrics {
+    Name: "dram__bytes_write.sum"
+  }
+  Metrics {
+    Name: "dram__cycles_active.avg"
+  }
+  Metrics {
+    Name: "dram__cycles_active.max"
+  }
+  Metrics {
+    Name: "dram__cycles_active.min"
+  }
+  Metrics {
+    Name: "dram__cycles_active.sum"
+  }
+  Metrics {
+    Name: "dram__cycles_active_read.avg"
+  }
+  Metrics {
+    Name: "dram__cycles_active_read.max"
+  }
+  Metrics {
+    Name: "dram__cycles_active_read.min"
+  }
+  Metrics {
+    Name: "dram__cycles_active_read.sum"
+  }
+  Metrics {
+    Name: "dram__cycles_active_write.avg"
+  }
+  Metrics {
+    Name: "dram__cycles_active_write.max"
+  }
+  Metrics {
+    Name: "dram__cycles_active_write.min"
+  }
+  Metrics {
+    Name: "dram__cycles_active_write.sum"
+  }
+  Metrics {
+    Name: "dram__cycles_elapsed.avg"
+  }
+  Metrics {
+    Name: "dram__cycles_elapsed.max"
+  }
+  Metrics {
+    Name: "dram__cycles_elapsed.min"
+  }
+  Metrics {
+    Name: "dram__cycles_elapsed.sum"
+  }
+  Metrics {
+    Name: "dram__sectors.avg"
+  }
+  Metrics {
+    Name: "dram__sectors.max"
+  }
+  Metrics {
+    Name: "dram__sectors.min"
+  }
+  Metrics {
+    Name: "dram__sectors.sum"
+  }
+  Metrics {
+    Name: "dram__sectors_read.avg"
+  }
+  Metrics {
+    Name: "dram__sectors_read.max"
+  }
+  Metrics {
+    Name: "dram__sectors_read.min"
+  }
+  Metrics {
+    Name: "dram__sectors_read.sum"
+  }
+  Metrics {
+    Name: "dram__sectors_write.avg"
+  }
+  Metrics {
+    Name: "dram__sectors_write.max"
+  }
+  Metrics {
+    Name: "dram__sectors_write.min"
+  }
+  Metrics {
+    Name: "dram__sectors_write.sum"
+  }
+  Metrics {
+    Name: "dram__throughput.avg.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "dram__throughput.avg.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "dram__throughput.max.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "dram__throughput.max.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "dram__throughput.min.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "dram__throughput.min.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "dram__throughput.sum.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "dram__throughput.sum.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "gpu__cycles_active.avg"
+  }
+  Metrics {
+    Name: "gpu__cycles_active.max"
+  }
+  Metrics {
+    Name: "gpu__cycles_active.min"
+  }
+  Metrics {
+    Name: "gpu__cycles_active.sum"
+  }
+  Metrics {
+    Name: "gpu__cycles_elapsed.avg"
+  }
+  Metrics {
+    Name: "gpu__cycles_elapsed.max"
+  }
+  Metrics {
+    Name: "gpu__cycles_elapsed.min"
+  }
+  Metrics {
+    Name: "gpu__cycles_elapsed.sum"
+  }
+  Metrics {
+    Name: "gpu__dram_throughput.avg.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "gpu__dram_throughput.max.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "gpu__dram_throughput.max.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "gpu__dram_throughput.min.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "gpu__dram_throughput.min.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "gpu__dram_throughput.sum.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "gpu__dram_throughput.sum.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "gpu__time_active.avg"
+  }
+  Metrics {
+    Name: "gpu__time_active.max"
+  }
+  Metrics {
+    Name: "gpu__time_active.min"
+  }
+  Metrics {
+    Name: "gpu__time_active.sum"
+  }
+  Metrics {
+    Name: "gpu__time_duration.avg"
+  }
+  Metrics {
+    Name: "gpu__time_duration.max"
+  }
+  Metrics {
+    Name: "gpu__time_duration.min"
+  }
+  Metrics {
+    Name: "gpu__time_duration.sum"
+  }
+  Metrics {
+    Name: "gpu__time_duration_measured_user.avg"
+  }
+  Metrics {
+    Name: "gpu__time_duration_measured_user.max"
+  }
+  Metrics {
+    Name: "gpu__time_duration_measured_user.min"
+  }
+  Metrics {
+    Name: "gpu__time_duration_measured_user.sum"
+  }
+  Metrics {
+    Name: "gpu__time_duration_measured_wallclock.avg"
+  }
+  Metrics {
+    Name: "gpu__time_duration_measured_wallclock.max"
+  }
+  Metrics {
+    Name: "gpu__time_duration_measured_wallclock.min"
+  }
+  Metrics {
+    Name: "gpu__time_duration_measured_wallclock.sum"
+  }
+  Metrics {
+    Name: "gpu__time_end.avg"
+  }
+  Metrics {
+    Name: "gpu__time_end.max"
+  }
+  Metrics {
+    Name: "gpu__time_end.min"
+  }
+  Metrics {
+    Name: "gpu__time_end.sum"
+  }
+  Metrics {
+    Name: "gpu__time_start.avg"
+  }
+  Metrics {
+    Name: "gpu__time_start.max"
+  }
+  Metrics {
+    Name: "gpu__time_start.min"
+  }
+  Metrics {
+    Name: "gpu__time_start.sum"
+  }
+  Metrics {
+    Name: "gr__ctas_completed.avg"
+  }
+  Metrics {
+    Name: "gr__ctas_completed.max"
+  }
+  Metrics {
+    Name: "gr__ctas_completed.min"
+  }
+  Metrics {
+    Name: "gr__ctas_completed.sum"
+  }
+  Metrics {
+    Name: "gr__ctas_launched.avg"
+  }
+  Metrics {
+    Name: "gr__ctas_launched.max"
+  }
+  Metrics {
+    Name: "gr__ctas_launched.min"
+  }
+  Metrics {
+    Name: "gr__ctas_launched.sum"
+  }
+  Metrics {
+    Name: "l1tex__cycles_active.avg"
+  }
+  Metrics {
+    Name: "l1tex__cycles_active.max"
+  }
+  Metrics {
+    Name: "l1tex__cycles_active.min"
+  }
+  Metrics {
+    Name: "l1tex__cycles_active.sum"
+  }
+  Metrics {
+    Name: "l1tex__cycles_elapsed.avg"
+  }
+  Metrics {
+    Name: "l1tex__cycles_elapsed.max"
+  }
+  Metrics {
+    Name: "l1tex__cycles_elapsed.min"
+  }
+  Metrics {
+    Name: "l1tex__cycles_elapsed.sum"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_mem_global_op_atom.avg"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_mem_global_op_atom.max"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_mem_global_op_atom.min"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_mem_global_op_atom.sum"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_mem_global_op_red.avg"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_mem_global_op_red.max"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_mem_global_op_red.min"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_mem_global_op_red.sum"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_mem_lg_op_st.avg"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_mem_lg_op_st.max"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_mem_lg_op_st.min"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_mem_lg_op_st.sum"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_pipe_tex.avg"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_pipe_tex.max"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_pipe_tex.min"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_bytes_pipe_tex.sum"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_mem_global_op_atom.avg"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_mem_global_op_atom.max"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_mem_global_op_atom.min"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_mem_global_op_atom.sum"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_mem_global_op_red.avg"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_mem_global_op_red.max"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_mem_global_op_red.min"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_mem_global_op_red.sum"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_mem_lg_op_st.avg"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_mem_lg_op_st.max"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_mem_lg_op_st.min"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_mem_lg_op_st.sum"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_pipe_tex.avg"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_pipe_tex.max"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_pipe_tex.min"
+  }
+  Metrics {
+    Name: "l1tex__m_l1tex2xbar_write_sectors_pipe_tex.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_lookup_hit.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_lookup_hit.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_lookup_miss.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_lookup_miss.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_lookup_hit.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_lookup_hit.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_lookup_miss.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_lookup_miss.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_atom.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_atom.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_atom.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_atom.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_atom_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_atom_lookup_hit.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_atom_lookup_hit.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_atom_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_atom_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_atom_lookup_miss.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_atom_lookup_miss.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_atom_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ld.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ld.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ld.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ld.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ld_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ld_lookup_hit.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ld_lookup_hit.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ld_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ld_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ld_lookup_miss.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ld_lookup_miss.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ld_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ldgsts_cache_access.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ldgsts_cache_access.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ldgsts_cache_access.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ldgsts_cache_access.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ldgsts_cache_access_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ldgsts_cache_access_lookup_hit.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ldgsts_cache_access_lookup_hit.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ldgsts_cache_access_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ldgsts_cache_access_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ldgsts_cache_access_lookup_miss.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ldgsts_cache_access_lookup_miss.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_ldgsts_cache_access_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_red.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_red.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_red.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_red.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_red_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_red_lookup_hit.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_red_lookup_hit.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_red_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_red_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_red_lookup_miss.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_red_lookup_miss.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_red_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_st.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_st.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_st.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_st.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_st_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_st_lookup_hit.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_st_lookup_hit.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_st_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_st_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_st_lookup_miss.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_st_lookup_miss.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_global_op_st_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_lg.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_lg.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_lg.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_lg.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_lg_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_lg_lookup_hit.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_lg_lookup_hit.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_lg_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_lg_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_lg_lookup_miss.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_lg_lookup_miss.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_lg_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_ld.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_ld.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_ld.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_ld.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_ld_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_ld_lookup_hit.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_ld_lookup_hit.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_ld_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_ld_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_ld_lookup_miss.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_ld_lookup_miss.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_ld_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_st.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_st.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_st.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_st.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_st_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_st_lookup_hit.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_st_lookup_hit.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_st_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_st_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_st_lookup_miss.max"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_st_lookup_miss.min"
+  }
+  Metrics {
+    Name: "l1tex__t_bytes_pipe_lsu_mem_local_op_st_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_hit_rate.max_rate"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_hit_rate.pct"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_hit_rate.ratio"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_hit_rate.max_rate"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_hit_rate.pct"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_hit_rate.ratio"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_atom_hit_rate.max_rate"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_atom_hit_rate.pct"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_atom_hit_rate.ratio"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_ld_hit_rate.max_rate"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_ld_hit_rate.pct"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_ld_hit_rate.ratio"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_ldgsts_cache_access_hit_rate.max_rate"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_ldgsts_cache_access_hit_rate.pct"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_ldgsts_cache_access_hit_rate.ratio"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_red_hit_rate.max_rate"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_red_hit_rate.pct"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_red_hit_rate.ratio"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_st_hit_rate.max_rate"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_st_hit_rate.pct"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_global_op_st_hit_rate.ratio"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_lg_hit_rate.max_rate"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_lg_hit_rate.pct"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_lg_hit_rate.ratio"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_local_op_ld_hit_rate.max_rate"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_local_op_ld_hit_rate.pct"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_local_op_ld_hit_rate.ratio"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_local_op_st_hit_rate.max_rate"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_local_op_st_hit_rate.pct"
+  }
+  Metrics {
+    Name: "l1tex__t_sector_pipe_lsu_mem_local_op_st_hit_rate.ratio"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors.max"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors.min"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu.max"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu.min"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_atom.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_atom.max"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_atom.min"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_atom.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.max"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.min"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_ldgsts_cache_access.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_ldgsts_cache_access.max"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_ldgsts_cache_access.min"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_ldgsts_cache_access.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_red.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_red.max"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_red.min"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_red.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_st.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_st.max"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_st.min"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_lg.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_lg.max"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_lg.min"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_lg.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_local_op_ld.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_local_op_ld.max"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_local_op_ld.min"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_local_op_ld.sum"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_local_op_st.avg"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_local_op_st.max"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_local_op_st.min"
+  }
+  Metrics {
+    Name: "l1tex__t_sectors_pipe_lsu_mem_local_op_st.sum"
+  }
+  Metrics {
+    Name: "l1tex__throughput.avg.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "l1tex__throughput.avg.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "l1tex__throughput.max.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "l1tex__throughput.max.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "l1tex__throughput.min.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "l1tex__throughput.min.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "l1tex__throughput.sum.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "l1tex__throughput.sum.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "lts__cycles_active.avg"
+  }
+  Metrics {
+    Name: "lts__cycles_active.max"
+  }
+  Metrics {
+    Name: "lts__cycles_active.min"
+  }
+  Metrics {
+    Name: "lts__cycles_active.sum"
+  }
+  Metrics {
+    Name: "lts__cycles_elapsed.avg"
+  }
+  Metrics {
+    Name: "lts__cycles_elapsed.max"
+  }
+  Metrics {
+    Name: "lts__cycles_elapsed.min"
+  }
+  Metrics {
+    Name: "lts__cycles_elapsed.sum"
+  }
+  Metrics {
+    Name: "lts__d_sectors.avg"
+  }
+  Metrics {
+    Name: "lts__d_sectors.max"
+  }
+  Metrics {
+    Name: "lts__d_sectors.min"
+  }
+  Metrics {
+    Name: "lts__d_sectors.sum"
+  }
+  Metrics {
+    Name: "lts__ltcfabric2lts_cycles_active.avg"
+  }
+  Metrics {
+    Name: "lts__ltcfabric2lts_cycles_active.max"
+  }
+  Metrics {
+    Name: "lts__ltcfabric2lts_cycles_active.min"
+  }
+  Metrics {
+    Name: "lts__ltcfabric2lts_cycles_active.sum"
+  }
+  Metrics {
+    Name: "lts__ltcfabric2lts_cycles_stalled.avg"
+  }
+  Metrics {
+    Name: "lts__ltcfabric2lts_cycles_stalled.max"
+  }
+  Metrics {
+    Name: "lts__ltcfabric2lts_cycles_stalled.min"
+  }
+  Metrics {
+    Name: "lts__ltcfabric2lts_cycles_stalled.sum"
+  }
+  Metrics {
+    Name: "lts__lts2xbar_cycles_active.avg"
+  }
+  Metrics {
+    Name: "lts__lts2xbar_cycles_active.max"
+  }
+  Metrics {
+    Name: "lts__lts2xbar_cycles_active.min"
+  }
+  Metrics {
+    Name: "lts__lts2xbar_cycles_active.sum"
+  }
+  Metrics {
+    Name: "lts__lts2xbar_cycles_active_realtime.avg"
+  }
+  Metrics {
+    Name: "lts__lts2xbar_cycles_active_realtime.max"
+  }
+  Metrics {
+    Name: "lts__lts2xbar_cycles_active_realtime.min"
+  }
+  Metrics {
+    Name: "lts__lts2xbar_cycles_active_realtime.sum"
+  }
+  Metrics {
+    Name: "lts__t_bytes.avg"
+  }
+  Metrics {
+    Name: "lts__t_bytes.max"
+  }
+  Metrics {
+    Name: "lts__t_bytes.min"
+  }
+  Metrics {
+    Name: "lts__t_bytes.sum"
+  }
+  Metrics {
+    Name: "lts__t_request_hit_rate.max_rate"
+  }
+  Metrics {
+    Name: "lts__t_request_hit_rate.pct"
+  }
+  Metrics {
+    Name: "lts__t_request_hit_rate.ratio"
+  }
+  Metrics {
+    Name: "lts__t_requests.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests.max"
+  }
+  Metrics {
+    Name: "lts__t_requests.min"
+  }
+  Metrics {
+    Name: "lts__t_requests.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_read.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_read.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_read.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_read.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_read_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_read_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_read_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_read_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_read_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_read_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_read_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_read_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_write.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_write.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_write.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_write.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_write_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_write_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_write_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_write_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_write_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_write_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_write_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_op_write_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_op_read.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_op_read.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_op_read.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_op_read.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_op_read_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_op_read_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_op_read_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_op_read_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_op_read_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_op_read_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_op_read_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_gcc_op_read_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_read.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_read.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_read.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_read.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_read_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_read_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_read_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_read_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_read_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_read_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_read_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_read_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_write.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_write.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_write.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_write.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_write_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_write_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_write_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_write_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_write_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_write_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_write_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_l1_op_write_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_read.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_read.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_read.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_read.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_read_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_read_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_read_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_read_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_read_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_read_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_read_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_read_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_write.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_write.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_write.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_write.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_write_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_write_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_write_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_write_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_write_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_write_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_write_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_ltcfabric_op_write_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_tex.avg"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_tex.max"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_tex.min"
+  }
+  Metrics {
+    Name: "lts__t_requests_srcunit_tex.sum"
+  }
+  Metrics {
+    Name: "lts__t_sector_hit_rate.max_rate"
+  }
+  Metrics {
+    Name: "lts__t_sector_hit_rate.pct"
+  }
+  Metrics {
+    Name: "lts__t_sector_hit_rate.ratio"
+  }
+  Metrics {
+    Name: "lts__t_sectors.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_read.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_read.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_read.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_read.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_read_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_read_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_read_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_read_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_read_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_read_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_read_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_read_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_write.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_write.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_write.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_write.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_write_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_write_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_write_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_write_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_write_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_write_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_write_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_op_write_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_read.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_read.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_read.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_read.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_read_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_read_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_read_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_read_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_read_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_read_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_read_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_read_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_write.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_write.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_write.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_write.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_write_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_write_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_write_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_write_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_write_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_write_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_write_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcnode_gpc_op_write_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_op_read.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_op_read.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_op_read.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_op_read.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_op_read_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_op_read_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_op_read_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_op_read_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_op_read_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_op_read_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_op_read_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_gcc_op_read_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_read.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_read.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_read.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_read.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_read_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_read_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_read_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_read_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_read_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_read_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_read_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_read_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_write.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_write.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_write.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_write.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_write_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_write_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_write_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_write_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_write_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_write_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_write_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_l1_op_write_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_read.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_read.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_read.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_read.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_read_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_read_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_read_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_read_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_read_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_read_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_read_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_read_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_write.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_write.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_write.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_write.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_write_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_write_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_write_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_write_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_write_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_write_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_write_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_ltcfabric_op_write_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_tex.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_tex.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_tex.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_tex.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_tex_lookup_hit.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_tex_lookup_hit.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_tex_lookup_hit.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_tex_lookup_hit.sum"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_tex_lookup_miss.avg"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_tex_lookup_miss.max"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_tex_lookup_miss.min"
+  }
+  Metrics {
+    Name: "lts__t_sectors_srcunit_tex_lookup_miss.sum"
+  }
+  Metrics {
+    Name: "lts__throughput.avg.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "lts__throughput.avg.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "lts__throughput.max.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "lts__throughput.max.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "lts__throughput.min.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "lts__throughput.min.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "lts__throughput.sum.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "lts__throughput.sum.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "lts__throughput_internal_activity.avg.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "lts__throughput_internal_activity.avg.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "lts__throughput_internal_activity.max.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "lts__throughput_internal_activity.max.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "lts__throughput_internal_activity.min.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "lts__throughput_internal_activity.min.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "lts__throughput_internal_activity.sum.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "lts__throughput_internal_activity.sum.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "lts__xbar2lts_cycles_active.avg"
+  }
+  Metrics {
+    Name: "lts__xbar2lts_cycles_active.max"
+  }
+  Metrics {
+    Name: "lts__xbar2lts_cycles_active.min"
+  }
+  Metrics {
+    Name: "lts__xbar2lts_cycles_active.sum"
+  }
+  Metrics {
+    Name: "sm__average_thread_inst_executed_pred_on_per_inst_executed_realtime.max_rate"
+  }
+  Metrics {
+    Name: "sm__average_thread_inst_executed_pred_on_per_inst_executed_realtime.pct"
+  }
+  Metrics {
+    Name: "sm__average_thread_inst_executed_pred_on_per_inst_executed_realtime.ratio"
+  }
+  Metrics {
+    Name: "sm__ctas_active.avg"
+  }
+  Metrics {
+    Name: "sm__ctas_active.max"
+  }
+  Metrics {
+    Name: "sm__ctas_active.min"
+  }
+  Metrics {
+    Name: "sm__ctas_active.sum"
+  }
+  Metrics {
+    Name: "sm__ctas_launched.avg"
+  }
+  Metrics {
+    Name: "sm__ctas_launched.max"
+  }
+  Metrics {
+    Name: "sm__ctas_launched.min"
+  }
+  Metrics {
+    Name: "sm__ctas_launched.sum"
+  }
+  Metrics {
+    Name: "sm__ctas_launched_total.avg"
+  }
+  Metrics {
+    Name: "sm__ctas_launched_total.max"
+  }
+  Metrics {
+    Name: "sm__ctas_launched_total.min"
+  }
+  Metrics {
+    Name: "sm__ctas_launched_total.sum"
+  }
+  Metrics {
+    Name: "sm__ctas_restored.avg"
+  }
+  Metrics {
+    Name: "sm__ctas_restored.max"
+  }
+  Metrics {
+    Name: "sm__ctas_restored.min"
+  }
+  Metrics {
+    Name: "sm__ctas_restored.sum"
+  }
+  Metrics {
+    Name: "sm__cycles_active.avg"
+  }
+  Metrics {
+    Name: "sm__cycles_active.max"
+  }
+  Metrics {
+    Name: "sm__cycles_active.min"
+  }
+  Metrics {
+    Name: "sm__cycles_active.sum"
+  }
+  Metrics {
+    Name: "sm__cycles_elapsed.avg"
+  }
+  Metrics {
+    Name: "sm__cycles_elapsed.max"
+  }
+  Metrics {
+    Name: "sm__cycles_elapsed.min"
+  }
+  Metrics {
+    Name: "sm__cycles_elapsed.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_op_ldsm.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_op_ldsm.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_op_ldsm.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_op_ldsm.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_op_shared_stsm.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_op_shared_stsm.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_op_shared_stsm.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_op_shared_stsm.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_adu.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_adu.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_adu.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_adu.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_alu.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_alu.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_alu.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_alu.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_cbu.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_cbu.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_cbu.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_cbu.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_cbu_pred_off_all.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_cbu_pred_off_all.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_cbu_pred_off_all.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_cbu_pred_off_all.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_cbu_pred_on_any.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_cbu_pred_on_any.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_cbu_pred_on_any.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_cbu_pred_on_any.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fma.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fma.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fma.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fma.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fma_type_fp16.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fma_type_fp16.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fma_type_fp16.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fma_type_fp16.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fmaheavy.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fmaheavy.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fmaheavy.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fmaheavy.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fmalite.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fmalite.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fmalite.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fmalite.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fp64.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fp64.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fp64.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_fp64.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_ipa.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_ipa.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_ipa.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_ipa.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_lsu.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_lsu.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_lsu.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_lsu.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tensor.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tensor.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tensor.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tensor.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tex.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tex.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tex.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tex.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tma.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tma.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tma.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tma.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tma_pred_off_all.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tma_pred_off_all.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tma_pred_off_all.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tma_pred_off_all.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tma_pred_on_any.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tma_pred_on_any.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tma_pred_on_any.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_tma_pred_on_any.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_uniform.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_uniform.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_uniform.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_uniform.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_xu.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_xu.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_xu.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_xu.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_xu_realtime.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_xu_realtime.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_xu_realtime.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_pipe_xu_realtime.sum"
+  }
+  Metrics {
+    Name: "sm__inst_executed_realtime.avg"
+  }
+  Metrics {
+    Name: "sm__inst_executed_realtime.max"
+  }
+  Metrics {
+    Name: "sm__inst_executed_realtime.min"
+  }
+  Metrics {
+    Name: "sm__inst_executed_realtime.sum"
+  }
+  Metrics {
+    Name: "sm__inst_issued.avg"
+  }
+  Metrics {
+    Name: "sm__inst_issued.max"
+  }
+  Metrics {
+    Name: "sm__inst_issued.min"
+  }
+  Metrics {
+    Name: "sm__inst_issued.sum"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput.avg.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput.avg.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput.max.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput.max.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput.min.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput.min.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput.sum.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput.sum.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput_internal_activity.avg.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput_internal_activity.avg.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput_internal_activity.max.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput_internal_activity.max.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput_internal_activity.min.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput_internal_activity.min.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput_internal_activity.sum.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__instruction_throughput_internal_activity.sum.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__issue_active.avg"
+  }
+  Metrics {
+    Name: "sm__issue_active.max"
+  }
+  Metrics {
+    Name: "sm__issue_active.min"
+  }
+  Metrics {
+    Name: "sm__issue_active.sum"
+  }
+  Metrics {
+    Name: "sm__memory_throughput.avg.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__memory_throughput.avg.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__memory_throughput.max.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__memory_throughput.max.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__memory_throughput.min.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__memory_throughput.min.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__memory_throughput.sum.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__memory_throughput.sum.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__memory_throughput_internal_activity.avg.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__memory_throughput_internal_activity.avg.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__memory_throughput_internal_activity.max.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__memory_throughput_internal_activity.max.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__memory_throughput_internal_activity.min.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__memory_throughput_internal_activity.min.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__memory_throughput_internal_activity.sum.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__memory_throughput_internal_activity.sum.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__mio_inst_issued.avg"
+  }
+  Metrics {
+    Name: "sm__mio_inst_issued.max"
+  }
+  Metrics {
+    Name: "sm__mio_inst_issued.min"
+  }
+  Metrics {
+    Name: "sm__mio_inst_issued.sum"
+  }
+  Metrics {
+    Name: "sm__pipe_alu_cycles_active.avg"
+  }
+  Metrics {
+    Name: "sm__pipe_alu_cycles_active.max"
+  }
+  Metrics {
+    Name: "sm__pipe_alu_cycles_active.min"
+  }
+  Metrics {
+    Name: "sm__pipe_alu_cycles_active.sum"
+  }
+  Metrics {
+    Name: "sm__pipe_fma_cycles_active.avg"
+  }
+  Metrics {
+    Name: "sm__pipe_fma_cycles_active.max"
+  }
+  Metrics {
+    Name: "sm__pipe_fma_cycles_active.min"
+  }
+  Metrics {
+    Name: "sm__pipe_fma_cycles_active.sum"
+  }
+  Metrics {
+    Name: "sm__pipe_fmaheavy_cycles_active.avg"
+  }
+  Metrics {
+    Name: "sm__pipe_fmaheavy_cycles_active.max"
+  }
+  Metrics {
+    Name: "sm__pipe_fmaheavy_cycles_active.min"
+  }
+  Metrics {
+    Name: "sm__pipe_fmaheavy_cycles_active.sum"
+  }
+  Metrics {
+    Name: "sm__pipe_fmalite_cycles_active.avg"
+  }
+  Metrics {
+    Name: "sm__pipe_fmalite_cycles_active.max"
+  }
+  Metrics {
+    Name: "sm__pipe_fmalite_cycles_active.min"
+  }
+  Metrics {
+    Name: "sm__pipe_fmalite_cycles_active.sum"
+  }
+  Metrics {
+    Name: "sm__pipe_fp64_cycles_active.avg"
+  }
+  Metrics {
+    Name: "sm__pipe_fp64_cycles_active.max"
+  }
+  Metrics {
+    Name: "sm__pipe_fp64_cycles_active.min"
+  }
+  Metrics {
+    Name: "sm__pipe_fp64_cycles_active.sum"
+  }
+  Metrics {
+    Name: "sm__pipe_shared_cycles_active.avg"
+  }
+  Metrics {
+    Name: "sm__pipe_shared_cycles_active.max"
+  }
+  Metrics {
+    Name: "sm__pipe_shared_cycles_active.min"
+  }
+  Metrics {
+    Name: "sm__pipe_shared_cycles_active.sum"
+  }
+  Metrics {
+    Name: "sm__pipe_shared_cycles_active_realtime.avg"
+  }
+  Metrics {
+    Name: "sm__pipe_shared_cycles_active_realtime.max"
+  }
+  Metrics {
+    Name: "sm__pipe_shared_cycles_active_realtime.min"
+  }
+  Metrics {
+    Name: "sm__pipe_shared_cycles_active_realtime.sum"
+  }
+  Metrics {
+    Name: "sm__pipe_tensor_cycles_active.avg"
+  }
+  Metrics {
+    Name: "sm__pipe_tensor_cycles_active.max"
+  }
+  Metrics {
+    Name: "sm__pipe_tensor_cycles_active.min"
+  }
+  Metrics {
+    Name: "sm__pipe_tensor_cycles_active.sum"
+  }
+  Metrics {
+    Name: "sm__pipe_tma_cycles_active.avg"
+  }
+  Metrics {
+    Name: "sm__pipe_tma_cycles_active.max"
+  }
+  Metrics {
+    Name: "sm__pipe_tma_cycles_active.min"
+  }
+  Metrics {
+    Name: "sm__pipe_tma_cycles_active.sum"
+  }
+  Metrics {
+    Name: "sm__sass_branch_targets.avg"
+  }
+  Metrics {
+    Name: "sm__sass_branch_targets.max"
+  }
+  Metrics {
+    Name: "sm__sass_branch_targets.min"
+  }
+  Metrics {
+    Name: "sm__sass_branch_targets.sum"
+  }
+  Metrics {
+    Name: "sm__sass_branch_targets_threads_divergent.avg"
+  }
+  Metrics {
+    Name: "sm__sass_branch_targets_threads_divergent.max"
+  }
+  Metrics {
+    Name: "sm__sass_branch_targets_threads_divergent.min"
+  }
+  Metrics {
+    Name: "sm__sass_branch_targets_threads_divergent.sum"
+  }
+  Metrics {
+    Name: "sm__sass_branch_targets_threads_uniform.avg"
+  }
+  Metrics {
+    Name: "sm__sass_branch_targets_threads_uniform.max"
+  }
+  Metrics {
+    Name: "sm__sass_branch_targets_threads_uniform.min"
+  }
+  Metrics {
+    Name: "sm__sass_branch_targets_threads_uniform.sum"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global.avg"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global.max"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global.min"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global.sum"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_atom.avg"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_atom.max"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_atom.min"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_atom.sum"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ld.avg"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ld.max"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ld.min"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ld.sum"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ldgsts.avg"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ldgsts.max"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ldgsts.min"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ldgsts.sum"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ldgsts_cache_access.avg"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ldgsts_cache_access.max"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ldgsts_cache_access.min"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ldgsts_cache_access.sum"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ldgsts_cache_bypass.avg"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ldgsts_cache_bypass.max"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ldgsts_cache_bypass.min"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_ldgsts_cache_bypass.sum"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_red.avg"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_red.max"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_red.min"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_red.sum"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_st.avg"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_st.max"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_st.min"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_global_op_st.sum"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_local.avg"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_local.max"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_local.min"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_local.sum"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_local_op_ld.avg"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_local_op_ld.max"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_local_op_ld.min"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_local_op_ld.sum"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_local_op_st.avg"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_local_op_st.max"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_local_op_st.min"
+  }
+  Metrics {
+    Name: "sm__sass_data_bytes_mem_local_op_st.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_atom.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_atom.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_atom.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_atom.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_branch.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_branch.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_branch.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_branch.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_atom.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_atom.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_atom.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_atom.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_ld.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_ld.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_ld.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_ld.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_redas.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_redas.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_redas.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_redas.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_st.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_st.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_st.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_st.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_stas.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_stas.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_stas.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_stas.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_tma_red.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_tma_red.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_tma_red.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_tma_red.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_tma_st.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_tma_st.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_tma_st.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_dshared_tma_st.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_atom.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_atom.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_atom.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_atom.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_ld.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_ld.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_ld.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_ld.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_red.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_red.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_red.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_red.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_st.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_st.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_st.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_global_st.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ld.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ld.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ld.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ld.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldgsts.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldgsts.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldgsts.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldgsts.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldgsts_cache_access.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldgsts_cache_access.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldgsts_cache_access.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldgsts_cache_access.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldgsts_cache_bypass.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldgsts_cache_bypass.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldgsts_cache_bypass.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldgsts_cache_bypass.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldsm.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldsm.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldsm.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_ldsm.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_local.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_local.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_local.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_local.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_local_ld.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_local_ld.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_local_ld.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_local_ld.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_local_st.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_local_st.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_local_st.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_local_st.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_128b.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_128b.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_128b.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_128b.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_16b.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_16b.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_16b.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_16b.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_32b.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_32b.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_32b.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_32b.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_64b.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_64b.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_64b.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_64b.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_8b.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_8b.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_8b.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_memory_8b.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_atom.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_atom.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_atom.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_atom.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_ld.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_ld.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_ld.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_ld.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_st.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_st.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_st.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_st.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_stsm.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_stsm.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_stsm.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_shared_stsm.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_st.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_st.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_st.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_st.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_texture.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_texture.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_texture.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_texture.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma_ld.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma_ld.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma_ld.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma_ld.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma_red.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma_red.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma_red.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma_red.sum"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma_st.avg"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma_st.max"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma_st.min"
+  }
+  Metrics {
+    Name: "sm__sass_inst_executed_op_tma_st.sum"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_atom.avg"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_atom.max"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_atom.min"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_atom.sum"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ld.avg"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ld.max"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ld.min"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ld.sum"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts.avg"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts.max"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts.min"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts.sum"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_red.avg"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_red.max"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_red.min"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_red.sum"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_st.avg"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_st.max"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_st.min"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_st.sum"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_ld.avg"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_ld.max"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_ld.min"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_ld.sum"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_st.avg"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_st.max"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_st.min"
+  }
+  Metrics {
+    Name: "sm__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_st.sum"
+  }
+  Metrics {
+    Name: "sm__sass_sectors_mem_global.avg"
+  }
+  Metrics {
+    Name: "sm__sass_sectors_mem_global.max"
+  }
+  Metrics {
+    Name: "sm__sass_sectors_mem_global.min"
+  }
+  Metrics {
+    Name: "sm__sass_sectors_mem_global.sum"
+  }
+  Metrics {
+    Name: "sm__sass_sectors_mem_local.avg"
+  }
+  Metrics {
+    Name: "sm__sass_sectors_mem_local.max"
+  }
+  Metrics {
+    Name: "sm__sass_sectors_mem_local.min"
+  }
+  Metrics {
+    Name: "sm__sass_sectors_mem_local.sum"
+  }
+  Metrics {
+    Name: "sm__sass_thread_inst_executed.avg"
+  }
+  Metrics {
+    Name: "sm__sass_thread_inst_executed.max"
+  }
+  Metrics {
+    Name: "sm__sass_thread_inst_executed.min"
+  }
+  Metrics {
+    Name: "sm__sass_thread_inst_executed.sum"
+  }
+  Metrics {
+    Name: "sm__thread_inst_executed_pred_on_realtime.avg"
+  }
+  Metrics {
+    Name: "sm__thread_inst_executed_pred_on_realtime.max"
+  }
+  Metrics {
+    Name: "sm__thread_inst_executed_pred_on_realtime.min"
+  }
+  Metrics {
+    Name: "sm__thread_inst_executed_pred_on_realtime.sum"
+  }
+  Metrics {
+    Name: "sm__threads_launched.avg"
+  }
+  Metrics {
+    Name: "sm__threads_launched.max"
+  }
+  Metrics {
+    Name: "sm__threads_launched.min"
+  }
+  Metrics {
+    Name: "sm__threads_launched.sum"
+  }
+  Metrics {
+    Name: "sm__throughput.avg.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__throughput.avg.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__throughput.max.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__throughput.max.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__throughput.min.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__throughput.min.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__throughput.sum.pct_of_peak_sustained_active"
+  }
+  Metrics {
+    Name: "sm__throughput.sum.pct_of_peak_sustained_elapsed"
+  }
+  Metrics {
+    Name: "sm__warps_active.avg"
+  }
+  Metrics {
+    Name: "sm__warps_active.max"
+  }
+  Metrics {
+    Name: "sm__warps_active.min"
+  }
+  Metrics {
+    Name: "sm__warps_active.sum"
+  }
+  Metrics {
+    Name: "sm__warps_launched.avg"
+  }
+  Metrics {
+    Name: "sm__warps_launched.max"
+  }
+  Metrics {
+    Name: "sm__warps_launched.min"
+  }
+  Metrics {
+    Name: "sm__warps_launched.sum"
+  }
+  Metrics {
+    Name: "smsp__amortized_warp_latency.max_rate"
+  }
+  Metrics {
+    Name: "smsp__amortized_warp_latency.pct"
+  }
+  Metrics {
+    Name: "smsp__amortized_warp_latency.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_alu_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_alu_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_alu_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_cbu_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_cbu_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_cbu_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fma_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fma_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fma_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fma_type_fp16_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fma_type_fp16_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fma_type_fp16_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fmaheavy_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fmaheavy_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fmaheavy_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fmalite_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fmalite_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fmalite_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fp64_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fp64_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_fp64_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_ipa_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_ipa_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_ipa_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_lsu_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_lsu_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_lsu_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_tex_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_tex_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_tex_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_tma_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_tma_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_tma_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_uniform_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_uniform_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_uniform_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_xu_per_warp.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_xu_per_warp.pct"
+  }
+  Metrics {
+    Name: "smsp__average_inst_executed_pipe_xu_per_warp.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_barrier.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_barrier.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_barrier.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_branch_resolving.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_branch_resolving.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_branch_resolving.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_dispatch_stall.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_dispatch_stall.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_dispatch_stall.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_drain.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_drain.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_drain.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_lg_throttle.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_lg_throttle.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_lg_throttle.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_long_scoreboard.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_long_scoreboard.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_long_scoreboard.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_math_pipe_throttle.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_math_pipe_throttle.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_math_pipe_throttle.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_membar.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_membar.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_membar.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_mio_throttle.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_mio_throttle.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_mio_throttle.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_misc.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_misc.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_misc.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_no_instruction.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_no_instruction.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_no_instruction.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_not_selected.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_not_selected.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_not_selected.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_selected.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_selected.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_selected.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_short_scoreboard.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_short_scoreboard.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_short_scoreboard.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_sleeping.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_sleeping.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_sleeping.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_tex_throttle.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_tex_throttle.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_tex_throttle.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_wait.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_wait.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_issue_stalled_wait.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_per_inst_executed.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_per_inst_executed.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_per_inst_executed.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_per_inst_issued.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_per_inst_issued.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warp_latency_per_inst_issued.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_active_per_inst_executed.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_active_per_inst_executed.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_active_per_inst_executed.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_active_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_active_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_active_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_barrier_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_barrier_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_barrier_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_branch_resolving_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_branch_resolving_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_branch_resolving_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_dispatch_stall_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_dispatch_stall_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_dispatch_stall_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_drain_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_drain_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_drain_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_lg_throttle_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_lg_throttle_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_lg_throttle_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_long_scoreboard_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_long_scoreboard_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_long_scoreboard_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_math_pipe_throttle_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_math_pipe_throttle_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_math_pipe_throttle_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_membar_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_membar_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_membar_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_mio_throttle_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_mio_throttle_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_mio_throttle_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_misc_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_misc_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_misc_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_no_instruction_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_no_instruction_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_no_instruction_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_not_selected_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_not_selected_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_not_selected_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_selected_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_selected_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_selected_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_short_scoreboard_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_short_scoreboard_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_short_scoreboard_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_sleeping_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_sleeping_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_sleeping_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_tex_throttle_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_tex_throttle_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_tex_throttle_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_wait_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_wait_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__average_warps_issue_stalled_wait_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__cycles_active.avg"
+  }
+  Metrics {
+    Name: "smsp__cycles_active.max"
+  }
+  Metrics {
+    Name: "smsp__cycles_active.min"
+  }
+  Metrics {
+    Name: "smsp__cycles_active.sum"
+  }
+  Metrics {
+    Name: "smsp__cycles_elapsed.avg"
+  }
+  Metrics {
+    Name: "smsp__cycles_elapsed.max"
+  }
+  Metrics {
+    Name: "smsp__cycles_elapsed.min"
+  }
+  Metrics {
+    Name: "smsp__cycles_elapsed.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_branch.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_branch.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_branch.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_branch.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_atom.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_atom.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_atom.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_atom.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_atom_dot_alu.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_atom_dot_alu.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_atom_dot_alu.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_atom_dot_alu.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_atom_dot_cas.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_atom_dot_cas.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_atom_dot_cas.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_atom_dot_cas.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_ld.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_ld.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_st.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_st.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_st.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_generic_st.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_global_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_global_ld.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_global_ld.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_global_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_global_red.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_global_red.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_global_red.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_global_red.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_global_st.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_global_st.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_global_st.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_global_st.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_ldc.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_ldc.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_ldc.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_ldc.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_ldgsts.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_ldgsts.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_ldgsts.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_ldgsts.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_ldsm.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_ldsm.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_ldsm.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_ldsm.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_local_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_local_ld.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_local_ld.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_local_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_local_st.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_local_st.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_local_st.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_local_st.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_redas.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_redas.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_redas.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_redas.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_atom.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_atom.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_atom.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_atom.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_atom_dot_alu.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_atom_dot_alu.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_atom_dot_alu.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_atom_dot_alu.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_atom_dot_cas.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_atom_dot_cas.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_atom_dot_cas.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_atom_dot_cas.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_ld.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_ld.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_st.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_st.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_st.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_st.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_stsm.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_stsm.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_stsm.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_shared_stsm.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_stas.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_stas.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_stas.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_stas.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_atom.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_atom.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_atom.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_atom.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_atom_dot_alu.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_atom_dot_alu.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_atom_dot_alu.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_atom_dot_alu.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_atom_dot_cas.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_atom_dot_cas.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_atom_dot_cas.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_atom_dot_cas.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_ld.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_ld.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_red.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_red.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_red.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_red.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_st.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_st.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_st.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_surface_st.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_texture.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_texture.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_texture.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_texture.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_tma_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_tma_ld.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_tma_ld.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_tma_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_tma_st.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_tma_st.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_tma_st.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_op_tma_st.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_adu.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_adu.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_adu.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_adu.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_alu.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_alu.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_alu.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_alu.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_cbu.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_cbu.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_cbu.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_cbu.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_cbu_pred_off_all.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_cbu_pred_off_all.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_cbu_pred_off_all.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_cbu_pred_off_all.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_cbu_pred_on_any.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_cbu_pred_on_any.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_cbu_pred_on_any.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_cbu_pred_on_any.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fma.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fma.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fma.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fma.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fma_type_fp16.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fma_type_fp16.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fma_type_fp16.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fma_type_fp16.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fmaheavy.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fmaheavy.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fmaheavy.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fmaheavy.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fmalite.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fmalite.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fmalite.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fmalite.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fp64.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fp64.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fp64.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_fp64.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_ipa.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_ipa.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_ipa.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_ipa.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_lsu.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_lsu.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_lsu.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_lsu.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tensor.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tensor.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tensor.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tensor.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tex.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tex.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tex.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tex.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tma.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tma.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tma.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tma.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tma_pred_off_all.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tma_pred_off_all.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tma_pred_off_all.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tma_pred_off_all.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tma_pred_on_any.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tma_pred_on_any.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tma_pred_on_any.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_tma_pred_on_any.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_uniform.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_uniform.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_uniform.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_uniform.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_xu.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_xu.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_xu.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_pipe_xu.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_shader_cs.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_shader_cs.max"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_shader_cs.min"
+  }
+  Metrics {
+    Name: "smsp__inst_executed_shader_cs.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_issued.avg"
+  }
+  Metrics {
+    Name: "smsp__inst_issued.max"
+  }
+  Metrics {
+    Name: "smsp__inst_issued.min"
+  }
+  Metrics {
+    Name: "smsp__inst_issued.sum"
+  }
+  Metrics {
+    Name: "smsp__inst_issued_per_issue_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__inst_issued_per_issue_active.pct"
+  }
+  Metrics {
+    Name: "smsp__inst_issued_per_issue_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__issue_active.avg"
+  }
+  Metrics {
+    Name: "smsp__issue_active.max"
+  }
+  Metrics {
+    Name: "smsp__issue_active.min"
+  }
+  Metrics {
+    Name: "smsp__issue_active.sum"
+  }
+  Metrics {
+    Name: "smsp__issue_inst0.avg"
+  }
+  Metrics {
+    Name: "smsp__issue_inst0.max"
+  }
+  Metrics {
+    Name: "smsp__issue_inst0.min"
+  }
+  Metrics {
+    Name: "smsp__issue_inst0.sum"
+  }
+  Metrics {
+    Name: "smsp__issue_inst1.avg"
+  }
+  Metrics {
+    Name: "smsp__issue_inst1.max"
+  }
+  Metrics {
+    Name: "smsp__issue_inst1.min"
+  }
+  Metrics {
+    Name: "smsp__issue_inst1.sum"
+  }
+  Metrics {
+    Name: "smsp__pipe_alu_cycles_active.avg"
+  }
+  Metrics {
+    Name: "smsp__pipe_alu_cycles_active.max"
+  }
+  Metrics {
+    Name: "smsp__pipe_alu_cycles_active.min"
+  }
+  Metrics {
+    Name: "smsp__pipe_alu_cycles_active.sum"
+  }
+  Metrics {
+    Name: "smsp__pipe_fma_cycles_active.avg"
+  }
+  Metrics {
+    Name: "smsp__pipe_fma_cycles_active.max"
+  }
+  Metrics {
+    Name: "smsp__pipe_fma_cycles_active.min"
+  }
+  Metrics {
+    Name: "smsp__pipe_fma_cycles_active.sum"
+  }
+  Metrics {
+    Name: "smsp__pipe_fmaheavy_cycles_active.avg"
+  }
+  Metrics {
+    Name: "smsp__pipe_fmaheavy_cycles_active.max"
+  }
+  Metrics {
+    Name: "smsp__pipe_fmaheavy_cycles_active.min"
+  }
+  Metrics {
+    Name: "smsp__pipe_fmaheavy_cycles_active.sum"
+  }
+  Metrics {
+    Name: "smsp__pipe_fmalite_cycles_active.avg"
+  }
+  Metrics {
+    Name: "smsp__pipe_fmalite_cycles_active.max"
+  }
+  Metrics {
+    Name: "smsp__pipe_fmalite_cycles_active.min"
+  }
+  Metrics {
+    Name: "smsp__pipe_fmalite_cycles_active.sum"
+  }
+  Metrics {
+    Name: "smsp__pipe_fp64_cycles_active.avg"
+  }
+  Metrics {
+    Name: "smsp__pipe_fp64_cycles_active.max"
+  }
+  Metrics {
+    Name: "smsp__pipe_fp64_cycles_active.min"
+  }
+  Metrics {
+    Name: "smsp__pipe_fp64_cycles_active.sum"
+  }
+  Metrics {
+    Name: "smsp__pipe_shared_cycles_active.avg"
+  }
+  Metrics {
+    Name: "smsp__pipe_shared_cycles_active.max"
+  }
+  Metrics {
+    Name: "smsp__pipe_shared_cycles_active.min"
+  }
+  Metrics {
+    Name: "smsp__pipe_shared_cycles_active.sum"
+  }
+  Metrics {
+    Name: "smsp__pipe_tensor_cycles_active.avg"
+  }
+  Metrics {
+    Name: "smsp__pipe_tensor_cycles_active.max"
+  }
+  Metrics {
+    Name: "smsp__pipe_tensor_cycles_active.min"
+  }
+  Metrics {
+    Name: "smsp__pipe_tensor_cycles_active.sum"
+  }
+  Metrics {
+    Name: "smsp__pipe_tma_cycles_active.avg"
+  }
+  Metrics {
+    Name: "smsp__pipe_tma_cycles_active.max"
+  }
+  Metrics {
+    Name: "smsp__pipe_tma_cycles_active.min"
+  }
+  Metrics {
+    Name: "smsp__pipe_tma_cycles_active.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_average_branch_targets_threads_uniform.max_rate"
+  }
+  Metrics {
+    Name: "smsp__sass_average_branch_targets_threads_uniform.pct"
+  }
+  Metrics {
+    Name: "smsp__sass_average_branch_targets_threads_uniform.ratio"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global.max_rate"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global.pct"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global.ratio"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_atom.max_rate"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_atom.pct"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_atom.ratio"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.max_rate"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.pct"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.ratio"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_ldgsts.max_rate"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_ldgsts.pct"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_ldgsts.ratio"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_ldgsts_cache_access.max_rate"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_ldgsts_cache_access.pct"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_ldgsts_cache_access.ratio"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_ldgsts_cache_bypass.max_rate"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_ldgsts_cache_bypass.pct"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_ldgsts_cache_bypass.ratio"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_red.max_rate"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_red.pct"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_red.ratio"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_st.max_rate"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_st.pct"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_global_op_st.ratio"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_local.max_rate"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_local.pct"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_local.ratio"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_local_op_ld.max_rate"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_local_op_ld.pct"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_local_op_ld.ratio"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_local_op_st.max_rate"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_local_op_st.pct"
+  }
+  Metrics {
+    Name: "smsp__sass_average_data_bytes_per_sector_mem_local_op_st.ratio"
+  }
+  Metrics {
+    Name: "smsp__sass_branch_targets.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_branch_targets.max"
+  }
+  Metrics {
+    Name: "smsp__sass_branch_targets.min"
+  }
+  Metrics {
+    Name: "smsp__sass_branch_targets.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_branch_targets_threads_divergent.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_branch_targets_threads_divergent.max"
+  }
+  Metrics {
+    Name: "smsp__sass_branch_targets_threads_divergent.min"
+  }
+  Metrics {
+    Name: "smsp__sass_branch_targets_threads_divergent.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_branch_targets_threads_uniform.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_branch_targets_threads_uniform.max"
+  }
+  Metrics {
+    Name: "smsp__sass_branch_targets_threads_uniform.min"
+  }
+  Metrics {
+    Name: "smsp__sass_branch_targets_threads_uniform.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_atom.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_atom.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_atom.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_atom.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ld.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ld.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ldgsts.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ldgsts.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ldgsts.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ldgsts.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ldgsts_cache_access.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ldgsts_cache_access.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ldgsts_cache_access.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ldgsts_cache_access.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ldgsts_cache_bypass.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ldgsts_cache_bypass.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ldgsts_cache_bypass.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_ldgsts_cache_bypass.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_red.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_red.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_red.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_red.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_st.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_st.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_st.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_global_op_st.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_local.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_local.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_local.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_local.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_local_op_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_local_op_ld.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_local_op_ld.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_local_op_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_local_op_st.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_local_op_st.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_local_op_st.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_local_op_st.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_atom.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_atom.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_atom.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_atom.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ld.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ld.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldgsts.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldgsts.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldgsts.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldgsts.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldgsts_cache_access.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldgsts_cache_access.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldgsts_cache_access.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldgsts_cache_access.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldgsts_cache_bypass.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldgsts_cache_bypass.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldgsts_cache_bypass.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldgsts_cache_bypass.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldsm.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldsm.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldsm.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_ldsm.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_st.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_st.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_st.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_st.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_stsm.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_stsm.max"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_stsm.min"
+  }
+  Metrics {
+    Name: "smsp__sass_data_bytes_mem_shared_op_stsm.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_first.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_first.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_first.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_first.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_last.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_last.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_last.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_last.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_normal.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_normal.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_normal.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_normal.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_normal_demote.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_normal_demote.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_normal_demote.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_hitprop_evict_normal_demote.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_missprop_evict_first.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_missprop_evict_first.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_missprop_evict_first.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_missprop_evict_first.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_missprop_evict_normal.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_missprop_evict_normal.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_missprop_evict_normal.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_memdesc_explicit_missprop_evict_normal.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_atom.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_atom.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_atom.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_atom.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_branch.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_branch.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_branch.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_branch.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_atom.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_atom.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_atom.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_atom.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_ld.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_ld.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_redas.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_redas.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_redas.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_redas.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_st.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_st.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_st.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_st.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_stas.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_stas.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_stas.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_stas.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_tma_red.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_tma_red.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_tma_red.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_tma_red.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_tma_st.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_tma_st.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_tma_st.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_dshared_tma_st.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_atom.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_atom.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_atom.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_atom.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_ld.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_ld.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_red.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_red.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_red.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_red.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_st.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_st.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_st.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_global_st.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ld.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ld.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldgsts.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldgsts.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldgsts.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldgsts.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldgsts_cache_access.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldgsts_cache_access.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldgsts_cache_access.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldgsts_cache_access.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldgsts_cache_bypass.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldgsts_cache_bypass.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldgsts_cache_bypass.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldgsts_cache_bypass.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldsm.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldsm.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldsm.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_ldsm.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_local.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_local.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_local.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_local.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_local_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_local_ld.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_local_ld.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_local_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_local_st.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_local_st.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_local_st.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_local_st.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_128b.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_128b.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_128b.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_128b.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_16b.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_16b.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_16b.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_16b.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_32b.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_32b.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_32b.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_32b.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_64b.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_64b.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_64b.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_64b.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_8b.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_8b.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_8b.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_memory_8b.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_atom.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_atom.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_atom.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_atom.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_ld.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_ld.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_st.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_st.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_st.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_st.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_stsm.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_stsm.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_stsm.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_shared_stsm.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_st.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_st.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_st.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_st.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_texture.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_texture.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_texture.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_texture.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma_ld.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma_ld.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma_red.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma_red.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma_red.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma_red.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma_st.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma_st.max"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma_st.min"
+  }
+  Metrics {
+    Name: "smsp__sass_inst_executed_op_tma_st.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_atom.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_atom.max"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_atom.min"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_atom.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ld.max"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ld.min"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts.max"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts.min"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts_cache_access.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts_cache_access.max"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts_cache_access.min"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts_cache_access.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts_cache_bypass.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts_cache_bypass.max"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts_cache_bypass.min"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_ldgsts_cache_bypass.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_red.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_red.max"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_red.min"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_red.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_st.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_st.max"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_st.min"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_global_op_st.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_ld.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_ld.max"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_ld.min"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_ld.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_st.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_st.max"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_st.min"
+  }
+  Metrics {
+    Name: "smsp__sass_l1tex_t_sectors_pipe_lsu_mem_local_op_st.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_sectors_mem_global.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_sectors_mem_global.max"
+  }
+  Metrics {
+    Name: "smsp__sass_sectors_mem_global.min"
+  }
+  Metrics {
+    Name: "smsp__sass_sectors_mem_global.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_sectors_mem_local.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_sectors_mem_local.max"
+  }
+  Metrics {
+    Name: "smsp__sass_sectors_mem_local.min"
+  }
+  Metrics {
+    Name: "smsp__sass_sectors_mem_local.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_thread_inst_executed.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_thread_inst_executed.max"
+  }
+  Metrics {
+    Name: "smsp__sass_thread_inst_executed.min"
+  }
+  Metrics {
+    Name: "smsp__sass_thread_inst_executed.sum"
+  }
+  Metrics {
+    Name: "smsp__sass_thread_inst_executed_pred_on.avg"
+  }
+  Metrics {
+    Name: "smsp__sass_thread_inst_executed_pred_on.max"
+  }
+  Metrics {
+    Name: "smsp__sass_thread_inst_executed_pred_on.min"
+  }
+  Metrics {
+    Name: "smsp__sass_thread_inst_executed_pred_on.sum"
+  }
+  Metrics {
+    Name: "smsp__thread_inst_executed.avg"
+  }
+  Metrics {
+    Name: "smsp__thread_inst_executed.max"
+  }
+  Metrics {
+    Name: "smsp__thread_inst_executed.min"
+  }
+  Metrics {
+    Name: "smsp__thread_inst_executed.sum"
+  }
+  Metrics {
+    Name: "smsp__thread_inst_executed_per_inst_executed.max_rate"
+  }
+  Metrics {
+    Name: "smsp__thread_inst_executed_per_inst_executed.pct"
+  }
+  Metrics {
+    Name: "smsp__thread_inst_executed_per_inst_executed.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_barrier_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_barrier_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_barrier_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_branch_resolving_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_branch_resolving_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_branch_resolving_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_dispatch_stall_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_dispatch_stall_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_dispatch_stall_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_drain_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_drain_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_drain_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_lg_throttle_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_lg_throttle_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_lg_throttle_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_math_pipe_throttle_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_math_pipe_throttle_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_math_pipe_throttle_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_membar_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_membar_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_membar_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_mio_throttle_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_mio_throttle_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_mio_throttle_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_misc_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_misc_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_misc_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_no_instruction_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_no_instruction_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_no_instruction_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_not_selected_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_not_selected_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_not_selected_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_selected_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_selected_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_selected_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_short_scoreboard_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_short_scoreboard_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_short_scoreboard_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_sleeping_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_sleeping_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_sleeping_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_tex_throttle_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_tex_throttle_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_tex_throttle_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_wait_per_warp_active.max_rate"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_wait_per_warp_active.pct"
+  }
+  Metrics {
+    Name: "smsp__warp_issue_stalled_wait_per_warp_active.ratio"
+  }
+  Metrics {
+    Name: "smsp__warps_active.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_active.max"
+  }
+  Metrics {
+    Name: "smsp__warps_active.min"
+  }
+  Metrics {
+    Name: "smsp__warps_active.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_eligible.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_eligible.max"
+  }
+  Metrics {
+    Name: "smsp__warps_eligible.min"
+  }
+  Metrics {
+    Name: "smsp__warps_eligible.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_barrier.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_barrier.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_barrier.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_barrier.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_branch_resolving.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_branch_resolving.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_branch_resolving.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_branch_resolving.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_dispatch_stall.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_dispatch_stall.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_dispatch_stall.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_dispatch_stall.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_drain.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_drain.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_drain.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_drain.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_lg_throttle.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_lg_throttle.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_lg_throttle.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_lg_throttle.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_long_scoreboard.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_long_scoreboard.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_long_scoreboard.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_long_scoreboard.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_math_pipe_throttle.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_math_pipe_throttle.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_math_pipe_throttle.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_math_pipe_throttle.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_membar.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_membar.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_membar.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_membar.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_mio_throttle.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_mio_throttle.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_mio_throttle.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_mio_throttle.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_misc.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_misc.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_misc.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_misc.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_no_instruction.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_no_instruction.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_no_instruction.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_no_instruction.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_not_selected.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_not_selected.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_not_selected.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_not_selected.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_selected.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_selected.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_selected.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_selected.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_short_scoreboard.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_short_scoreboard.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_short_scoreboard.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_short_scoreboard.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_sleeping.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_sleeping.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_sleeping.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_sleeping.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_tex_throttle.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_tex_throttle.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_tex_throttle.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_tex_throttle.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_wait.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_wait.max"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_wait.min"
+  }
+  Metrics {
+    Name: "smsp__warps_issue_stalled_wait.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_launched.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_launched.max"
+  }
+  Metrics {
+    Name: "smsp__warps_launched.min"
+  }
+  Metrics {
+    Name: "smsp__warps_launched.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_launched_total.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_launched_total.max"
+  }
+  Metrics {
+    Name: "smsp__warps_launched_total.min"
+  }
+  Metrics {
+    Name: "smsp__warps_launched_total.sum"
+  }
+  Metrics {
+    Name: "smsp__warps_restored.avg"
+  }
+  Metrics {
+    Name: "smsp__warps_restored.max"
+  }
+  Metrics {
+    Name: "smsp__warps_restored.min"
+  }
+  Metrics {
+    Name: "smsp__warps_restored.sum"
+  }
+  Metrics {
+    Name: "launch__waves_per_multiprocessor"
+  }
+  Metrics {
+    Name: "launch__uses_green_context"
+  }
+  Metrics {
+    Name: "launch__tpc_enabled"
+  }
+  Metrics {
+    Name: "launch__tpc_count"
+  }
+  Metrics {
+    Name: "launch__thread_count"
+  }
+  Metrics {
+    Name: "launch__stack_size"
+  }
+  Metrics {
+    Name: "launch__sm_count"
+  }
+  Metrics {
+    Name: "launch__shared_mem_per_block_static"
+  }
+  Metrics {
+    Name: "launch__shared_mem_per_block_dynamic"
+  }
+  Metrics {
+    Name: "launch__shared_mem_per_block_driver"
+  }
+  Metrics {
+    Name: "launch__shared_mem_config_size"
+  }
+  Metrics {
+    Name: "launch__registers_per_thread"
+  }
+  Metrics {
+    Name: "launch__grid_size"
+  }
+  Metrics {
+    Name: "launch__func_cache_config"
+  }
+  Metrics {
+    Name: "launch__block_size"
+  }
+  Metrics {
+    Name: "launch__cluster_size"
+  }
+  Metrics {
+    Name: "launch__cluster_scheduling_policy"
+  }
+  Metrics {
+    Name: "launch__preferred_cluster_size"
+  }
+}

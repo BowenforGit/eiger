@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 """Generate canonical TPC-H golden answers by running DuckDB's tpch
 extension against the existing Parquet tables at $TPCH_DATA_PATH/sfN.
 
@@ -26,19 +29,27 @@ import time
 
 import duckdb
 
-TABLES = [
-    "customer", "lineitem", "nation", "orders",
-    "part", "partsupp", "region", "supplier",
-]
+from tpch_dataset_layout import resolve_all_tables
 
 
-def register_views(con: duckdb.DuckDBPyConnection, sf_dir: str) -> None:
-    for t in TABLES:
-        path = os.path.join(sf_dir, f"{t}.parquet")
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"missing table parquet: {path}")
-        con.execute(f"CREATE OR REPLACE VIEW {t} AS "
-                    f"SELECT * FROM '{path}'")
+def _sql_string(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def register_views(
+    con: duckdb.DuckDBPyConnection,
+    sf_dir: str,
+    sf: int,
+    *,
+    allow_legacy_multifile: bool = False,
+) -> None:
+    layouts = resolve_all_tables(
+        sf_dir, sf, allow_legacy_multifile=allow_legacy_multifile)
+    for table, paths in layouts.items():
+        path_list = ", ".join(_sql_string(path) for path in paths)
+        con.execute(
+            f"CREATE OR REPLACE VIEW {table} AS "
+            f"SELECT * FROM read_parquet([{path_list}])")
 
 
 def get_query_text(con: duckdb.DuckDBPyConnection, qid: int) -> str:
@@ -89,8 +100,13 @@ def run_one_query(
     n_cols = len(con.execute(f"DESCRIBE {tmp}").fetchall())
 
     out_path = os.path.join(golden_dir, f"q{qid:02d}.parquet")
+    temp_path = f"{out_path}.tmp.{os.getpid()}"
+    if os.path.exists(temp_path):
+        os.unlink(temp_path)
     proj = coerced_projection(con, tmp)
-    con.execute(f"COPY ({proj}) TO '{out_path}' (FORMAT PARQUET)")
+    con.execute(
+        f"COPY ({proj}) TO {_sql_string(temp_path)} (FORMAT PARQUET)")
+    os.replace(temp_path, out_path)
     con.execute(f"DROP TABLE {tmp}")
     return n_rows, n_cols
 
@@ -120,6 +136,9 @@ def main() -> int:
     ap.add_argument("--queries", default=None,
                     help="comma-separated query ids or ranges "
                          "(default: 1-22)")
+    ap.add_argument(
+        "--allow-legacy-multifile", action="store_true",
+        help="allow directory tables without a manifest (migration only)")
     args = ap.parse_args()
 
     sf_dir = os.path.join(args.out, f"sf{args.sf}")
@@ -136,7 +155,9 @@ def main() -> int:
     con = duckdb.connect()
     con.execute("INSTALL tpch")
     con.execute("LOAD tpch")
-    register_views(con, sf_dir)
+    register_views(
+        con, sf_dir, args.sf,
+        allow_legacy_multifile=args.allow_legacy_multifile)
 
     failures: list[tuple[int, str]] = []
     for q in qids:

@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
@@ -51,6 +54,9 @@ struct Context {
     // and pushes the elapsed time into the sink at finalize time. Null
     // by default — zero overhead for ordinary runs.
     gamax::exec::StepProfileSink* profile_sink {nullptr};
+    // Emit nested phase NVTX ranges without collecting CUDA-event samples.
+    // The distributed benchmark enables this only for its NSYS profile run.
+    bool emit_phase_nvtx {false};
     // Future: memory resource; one stream per executor today (a stream
     // pool is a later, additive extension).
 };

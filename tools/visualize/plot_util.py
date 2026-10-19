@@ -1,3 +1,6 @@
+# Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 import pandas as pd
 import os
 import matplotlib
@@ -63,7 +66,7 @@ def save_fig(fig, name, subdir="", suffix="jpg", dpi=300):
     
     fig.tight_layout()
     
-    if suffix == "jpg":
+    if suffix in ("jpg", "png"):
         fig.savefig(path, dpi=dpi)
     else:
         fig.savefig(path)

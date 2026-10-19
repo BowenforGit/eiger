@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
 #include <memory>
@@ -46,6 +49,6 @@ std::unique_ptr<gamax::table> groupby(
     gamax::table_view val, 
     std::vector<gamax::groupby::aggregation_request>& agg_requests,
     gamax::groupby::groupby_hint& hint,
-    cudaStream_t stream = cudaStreamDefault);
+    cudaStream_t stream);
 }
 }

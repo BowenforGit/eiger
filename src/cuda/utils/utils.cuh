@@ -13,6 +13,7 @@
 #define CEIL(a,b) (((a)+(b)-1)/(b))
 
 // Timing functions are from Anil Shanbhag (https://github.com/anilshanbhag/crystal)
+// Copyright (c) 2020 Anil Shanbhag. MIT license: LICENSES/Crystal-MIT.txt.
 
 #define SETUP_TIMING() cudaEvent_t start, stop; cudaEventCreate(&start); cudaEventCreate(&stop);
 
@@ -35,6 +36,10 @@
 }
 
 // https://stackoverflow.com/a/47563100/9054082
+// Adapted from Jean-Michaël Celerier's answer, licensed CC BY-SA 3.0.
+// Changes include CUDA __device__/__host__ annotations.
+// Author: https://stackoverflow.com/users/1495627/jean-micha%c3%abl-celerier
+// License: LICENSES/CC-BY-SA-3.0.txt. See THIRD_PARTY_NOTICES.md.
 template<std::size_t N>
 struct num { static const constexpr auto value = N; };
 template <class F, std::size_t... Is>

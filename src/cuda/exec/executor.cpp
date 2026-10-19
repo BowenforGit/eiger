@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "exec/executor.hpp"
 
 #include <numeric>
@@ -42,6 +45,7 @@ namespace {
 struct Slot {
     std::unique_ptr<gamax::table> owned;
     gamax::table_view view;
+    std::shared_ptr<void> opaque;
 };
 
 // Prefer an explicit view (set by SourceTable or by an aliasing
@@ -166,15 +170,17 @@ Slot step_dispatch(
     const Step& s,
     std::unordered_map<ValueId, Slot>& live,
     const SourceResolver& source_resolver,
-    const gamax::phys::Context& ctx)
+    const gamax::phys::Context& ctx,
+    const StepExtension* extension,
+    const char* nvtx_prefix = "step")
 {
     // Per-step NVTX range for the Nsight Systems timeline. Label
     // includes step index + kind name so sibling steps of the same
     // kind (two EqJoins, etc.) are distinguishable on the timeline.
     // Cheap enough to keep compiled in unconditionally.
-    std::string nvtx_label =
-        "step[" + std::to_string(step_index) + "]:" +
-        step_kind_name(s.kind);
+    const std::string step_label = format_step_label(plan, step_index);
+    std::string nvtx_label = std::string(nvtx_prefix) + "[" +
+        std::to_string(step_index) + "]:" + step_label;
     nvtxRangePushA(nvtx_label.c_str());
 
     // Optional per-step GPU timing (opt-in via `ctx.profile_sink`).
@@ -183,11 +189,47 @@ Slot step_dispatch(
     const bool profile = (ctx.profile_sink != nullptr);
     if (profile) {
         ctx.profile_sink->begin_step(
-            static_cast<int>(step_index), s.kind, ctx.stream);
+            static_cast<int>(step_index), s.kind, step_label, ctx.stream);
+    }
+
+    const bool handled_by_extension =
+        extension && extension->handles && extension->handles(s.kind);
+    std::unique_ptr<PhaseRange> local_phase;
+    const bool phase_instrumentation =
+        (ctx.profile_sink && ctx.profile_sink->collects_phases()) ||
+        ctx.emit_phase_nvtx;
+    if (phase_instrumentation && !handled_by_extension &&
+        s.kind != StepKind::SourceTable) {
+        local_phase = std::make_unique<PhaseRange>(
+            ctx,
+            PhaseMetadata{
+                std::string("local.") + step_kind_name(s.kind),
+                PhaseCategory::Compute});
     }
 
     Slot slot;
-    if (s.kind == StepKind::SourceTable) {
+    if (handled_by_extension) {
+        if (!extension->execute) {
+            exec_error("step extension has no execute callback");
+        }
+        std::vector<ExtensionInput> inputs;
+        inputs.reserve(s.inputs.size());
+        for (const auto input_id : s.inputs) {
+            auto it = live.find(input_id);
+            if (it == live.end()) {
+                exec_error(
+                    "extension step missing input value " +
+                    std::to_string(input_id));
+            }
+            inputs.push_back(ExtensionInput{view_of(it->second), it->second.opaque});
+        }
+        auto result = extension->execute(s, inputs, ctx);
+        if (!result.table && !result.opaque) {
+            exec_error("step extension returned neither table nor opaque value");
+        }
+        slot.owned = std::move(result.table);
+        slot.opaque = std::move(result.opaque);
+    } else if (s.kind == StepKind::SourceTable) {
         // SourceTable's "output" aliases caller-owned data; no
         // run_step dispatch — the resolver is the work.
         const auto& pl = std::get<SourceTablePayload>(s.payload);
@@ -336,6 +378,7 @@ Slot step_dispatch(
         slot.owned = run_step(s, live, source_resolver, ctx);
     }
 
+    local_phase.reset();
     if (profile) ctx.profile_sink->end_step(ctx.stream);
     nvtxRangePop();
     return slot;
@@ -354,7 +397,7 @@ void free_dead_inputs(
     for (auto in : s.inputs) {
         if (plan.values[in].last_used_step <= step_index) {
             auto it = live.find(in);
-            if (it != live.end() && it->second.owned) {
+            if (it != live.end() && (it->second.owned || it->second.opaque)) {
                 live.erase(it);
             }
         }
@@ -396,10 +439,11 @@ std::unique_ptr<gamax::table> finalize_result(
 // Production entry point: walk the plan, dispatch every step,
 // aggressively free dead inputs.
 // ─────────────────────────────────────────────────────────────────────
-std::unique_ptr<gamax::table> execute(
+std::unique_ptr<gamax::table> execute_impl(
     const ExecPlan& plan,
     const SourceResolver& source_resolver,
-    const gamax::phys::Context& ctx)
+    const gamax::phys::Context& ctx,
+    const StepExtension* extension)
 {
     if (plan.steps.empty()) exec_error("empty plan");
 
@@ -418,7 +462,8 @@ std::unique_ptr<gamax::table> execute(
          i < static_cast<gamax::size_type>(plan.steps.size()); ++i)
     {
         const auto& s = plan.steps[i];
-        live[s.output] = step_dispatch(plan, i, s, live, source_resolver, ctx);
+        live[s.output] = step_dispatch(
+            plan, i, s, live, source_resolver, ctx, extension, "step");
 
 #ifdef GAMAX_PHYS_DEBUG
         // Debug hook — fires for *every* step (including SourceTable)
@@ -455,6 +500,23 @@ std::unique_ptr<gamax::table> execute(
     }
 
     return finalize_result(plan, live, ctx);
+}
+
+std::unique_ptr<gamax::table> execute(
+    const ExecPlan& plan,
+    const SourceResolver& source_resolver,
+    const gamax::phys::Context& ctx)
+{
+    return execute_impl(plan, source_resolver, ctx, nullptr);
+}
+
+std::unique_ptr<gamax::table> execute(
+    const ExecPlan& plan,
+    const SourceResolver& source_resolver,
+    const gamax::phys::Context& ctx,
+    const StepExtension& extension)
+{
+    return execute_impl(plan, source_resolver, ctx, &extension);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -500,7 +562,8 @@ BenchExecState bench_resolve_sources(
     {
         const auto& s = plan.steps[i];
         if (s.kind != StepKind::SourceTable) continue;
-        live[s.output] = step_dispatch(plan, i, s, live, source_resolver, ctx);
+        live[s.output] = step_dispatch(
+            plan, i, s, live, source_resolver, ctx, nullptr, "load.step");
     }
 
     cudaStreamSynchronize(stream);
@@ -516,14 +579,24 @@ BenchExecState bench_resolve_sources(
 // The SourceResolver passed to step_dispatch is a sentinel that throws
 // if invoked — phase 2 must never see a SourceTable step.
 // ─────────────────────────────────────────────────────────────────────
-std::unique_ptr<gamax::table> bench_run_steps(
+std::unique_ptr<gamax::table> bench_run_steps_impl(
     const ExecPlan& plan,
-    BenchExecState state,
-    const gamax::phys::Context& ctx)
+    const BenchExecState& state,
+    const gamax::phys::Context& ctx,
+    const StepExtension* extension)
 {
     if (plan.steps.empty()) exec_error("empty plan");
 
-    auto& live = state.impl()->live;
+    std::unordered_map<ValueId, Slot> live;
+    live.reserve(state.impl()->live.size() + plan.values.size());
+    for (const auto& [value_id, source] : state.impl()->live) {
+        if (source.owned || source.opaque) {
+            exec_error("benchmark preload state contains a non-source value");
+        }
+        Slot copy;
+        copy.view = source.view;
+        live.emplace(value_id, std::move(copy));
+    }
 
     SourceResolver null_resolver =
         [](const std::string&,
@@ -536,11 +609,29 @@ std::unique_ptr<gamax::table> bench_run_steps(
     {
         const auto& s = plan.steps[i];
         if (s.kind == StepKind::SourceTable) continue;
-        live[s.output] = step_dispatch(plan, i, s, live, null_resolver, ctx);
+        live[s.output] = step_dispatch(
+            plan, i, s, live, null_resolver, ctx, extension, "step");
         free_dead_inputs(plan, s, i, live);
     }
 
     return finalize_result(plan, live, ctx);
+}
+
+std::unique_ptr<gamax::table> bench_run_steps(
+    const ExecPlan& plan,
+    const BenchExecState& state,
+    const gamax::phys::Context& ctx)
+{
+    return bench_run_steps_impl(plan, state, ctx, nullptr);
+}
+
+std::unique_ptr<gamax::table> bench_run_steps(
+    const ExecPlan& plan,
+    const BenchExecState& state,
+    const gamax::phys::Context& ctx,
+    const StepExtension& extension)
+{
+    return bench_run_steps_impl(plan, state, ctx, &extension);
 }
 
 } // namespace gamax::exec

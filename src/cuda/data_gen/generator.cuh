@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 /*
 Code adapted from  multicore-hashjoins-0.2@https://www.systems.ethz.ch/node/334
 All credit to the original author: Cagri Balkesen <cagri.balkesen@inf.ethz.ch>
@@ -312,14 +315,14 @@ template<typename Generator,
 std::unique_ptr<gamax::column> generate(
     Generator gen,
     const gamax::size_type n,
-    cudaStream_t stream = cudaStreamDefault) 
+    cudaStream_t stream)
 {
     static_assert(std::is_same_v<T, typename Generator::result_type>);
     
-    auto ret = gamax::make_column<T>(n);
+    auto ret = gamax::make_column<T>(n, stream);
     auto itr = thrust::make_counting_iterator<gamax::size_type>(0);
     thrust::transform(
-        thrust::cuda::par(*get_thrust_allocator()).on(stream),
+        gamax::rmm_exec_policy_handle{stream}.get(),
         itr, itr+n,
         ret->template data<T>(), // TODO: figure out why sometimes only this form works
         gen
@@ -436,15 +439,15 @@ struct normalize_cdf_functor {
 inline std::unique_ptr<gamax::column> gen_zipf_cdf_device(
     double zipf_factor, 
     gamax::size_type alphabet_size,
-    cudaStream_t stream = cudaStreamDefault) 
+    cudaStream_t stream)
 {
     // Allocate device memory for CDF
-    auto d_cdf = gamax::make_column<double>(alphabet_size, false, stream);
+    auto d_cdf = gamax::make_column<double>(alphabet_size, stream);
     
     // Step 1: Compute PMF weights w[i] = 1/(i+1)^zipf_factor
     auto count_iter = thrust::make_counting_iterator<gamax::size_type>(0);
     thrust::transform(
-        thrust::cuda::par(*get_thrust_allocator()).on(stream),
+        gamax::rmm_exec_policy_handle{stream}.get(),
         count_iter,
         count_iter + alphabet_size,
         d_cdf->data<double>(),
@@ -453,7 +456,7 @@ inline std::unique_ptr<gamax::column> gen_zipf_cdf_device(
     
     // Step 2: Compute inclusive prefix sum (unnormalized CDF)
     thrust::inclusive_scan(
-        thrust::cuda::par(*get_thrust_allocator()).on(stream),
+        gamax::rmm_exec_policy_handle{stream}.get(),
         d_cdf->data<double>(),
         d_cdf->data<double>() + alphabet_size,
         d_cdf->data<double>()
@@ -467,7 +470,7 @@ inline std::unique_ptr<gamax::column> gen_zipf_cdf_device(
     
     // Step 4: Normalize CDF by dividing by total sum
     thrust::transform(
-        thrust::cuda::par(*get_thrust_allocator()).on(stream),
+        gamax::rmm_exec_policy_handle{stream}.get(),
         d_cdf->data<double>(),
         d_cdf->data<double>() + alphabet_size,
         d_cdf->data<double>(),
@@ -511,8 +514,8 @@ std::unique_ptr<gamax::column> generate_zipf(
     const gamax::size_type n,
     const double zipf_factor,
     const gamax::size_type alphabet_size,
-    const int seed = 42,
-    cudaStream_t stream = cudaStreamDefault)
+    cudaStream_t stream,
+    const int seed = 42)
 {
     static_assert(std::is_integral_v<T>, "generate_zipf requires an integral type");
     

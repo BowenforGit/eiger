@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <nvbench/nvbench.cuh>
 #include <string>
 
@@ -27,7 +30,7 @@ tpch_params params_from_state(nvbench::state& state) {
 }
 
 void bench_tpch(nvbench::state& state, tpch_query qid) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     auto params = params_from_state(state);
     auto runner = get_query_runner(qid, params);

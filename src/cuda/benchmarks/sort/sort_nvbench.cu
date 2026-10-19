@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <nvbench/nvbench.cuh>
 
 #include <string>
@@ -50,7 +53,7 @@ bool check_skip(sort_params<KeyT> const& params) {
 template<typename KeyT>
 void bench_sort_column_pair(nvbench::state& state, nvbench::type_list<KeyT>) {
     // memory cleanup
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     using ValueT = KeyT;
 
@@ -64,8 +67,10 @@ void bench_sort_column_pair(nvbench::state& state, nvbench::type_list<KeyT>) {
     constexpr int ncols = 1;
     auto key_type = gamax::data_type(gamax::type_to_id<KeyT>());
     auto value_type = gamax::data_type(gamax::type_to_id<ValueT>());
-    auto keys = gamax::datagen::device::fk_uniform_id(key_type, params.num_items, params.num_items, ncols, 1.0, 42);
-    auto values = gamax::datagen::device::fk_uniform_id(value_type, params.num_items, params.num_items, ncols, 1.0, 43);
+    auto keys = gamax::datagen::device::fk_uniform_id(
+        key_type, params.num_items, params.num_items, ncols, 1.0, 42, cudaStreamDefault);
+    auto values = gamax::datagen::device::fk_uniform_id(
+        value_type, params.num_items, params.num_items, ncols, 1.0, 43, cudaStreamDefault);
 
     cudaDeviceSynchronize();
 
@@ -78,12 +83,12 @@ void bench_sort_column_pair(nvbench::state& state, nvbench::type_list<KeyT>) {
             auto sorted = gamax::sort::sort_column_pair(
                 keys->get_column(0).view(), 
                 values->get_column(0).view(), 
+                launch.get_stream(),
                 params.begin_bit, 
                 params.end_bit, 
                 gamax::sort_order::ASCENDING, 
                 nullptr, 
-                0, 
-                launch.get_stream()); 
+                0);
             cudaStreamSynchronize(launch.get_stream());
         });
     }

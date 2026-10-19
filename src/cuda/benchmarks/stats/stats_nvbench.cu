@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 /**
  * @file stats_nvbench.cu
  * @brief NVBench benchmark for gamax::stats statistics computation functions.
@@ -61,7 +64,7 @@ bool is_histogram_type(gamax::stats::StatsType type) {
 template<typename ValueT>
 void bench_get_or_compute_scalar_stat(nvbench::state& state, nvbench::type_list<ValueT>) {
     // Memory cleanup to ensure consistent state
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
     
     // Clear any cached stats from previous runs
     gamax::stats::StatsStorage::instance().clear_all();
@@ -87,7 +90,7 @@ void bench_get_or_compute_scalar_stat(nvbench::state& state, nvbench::type_list<
     // Generate random input column with uniformly distributed values
     auto value_type = gamax::data_type(gamax::type_to_id<ValueT>());
     auto input_table = gamax::datagen::device::fk_uniform_id(
-        value_type, num_items, num_items, 1, 1.0, seed);
+        value_type, num_items, num_items, 1, 1.0, seed, cudaStreamDefault);
     auto input_col = input_table->get_column(0).view();
 
     cudaDeviceSynchronize();

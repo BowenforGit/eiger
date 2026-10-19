@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 // Unit tests for `phys::concat` — vertical (UNION ALL)
 // concatenation of N table_views. Numeric columns get a per-input
 // memcpy into a pre-sized output; STRING columns get the byte buffer
@@ -27,9 +30,7 @@ phys::Context default_ctx() { return phys::Context{cudaStreamDefault}; }
 
 template <typename T>
 gamax::column_ptr mk_col(const std::vector<T>& v) {
-    return gamax::make_column_from_host(
-        const_cast<T*>(v.data()),
-        static_cast<gamax::size_type>(v.size()));
+    return gamax::make_column_from_host(const_cast<T*>(v.data()), static_cast<gamax::size_type>(v.size()), cudaStreamDefault);
 }
 
 gamax::column_ptr mk_string_col(const std::vector<std::string>& ss) {
@@ -46,24 +47,20 @@ gamax::column_ptr mk_string_col(const std::vector<std::string>& ss) {
     return std::unique_ptr<gamax::column>(std::move(ptr));
 }
 
-// Read a STRING column back to host via the [data_ptr, meta_ptr]
-// helper buffer — matches what run_tpch_ir's print_result does.
+// Read a STRING column back through the non-owning view metadata.
 std::vector<std::string> dump_string_col(
     gamax::column_view col,
     cudaStream_t stream = cudaStreamDefault)
 {
-    void* host_ptrs[2] = {nullptr, nullptr};
-    cudaMemcpy(host_ptrs, col.data<void>(),
-               2 * sizeof(void*), cudaMemcpyDeviceToHost);
     const auto n = col.size();
     std::vector<gamax::size_type> offsets(n + 1);
-    cudaMemcpy(offsets.data(), host_ptrs[1],
+    cudaMemcpy(offsets.data(), col.auxiliary_data(),
                (n + 1) * sizeof(gamax::size_type),
                cudaMemcpyDeviceToHost);
     const auto total = offsets.back();
     std::string bytes(total, '\0');
     if (total > 0) {
-        cudaMemcpy(bytes.data(), host_ptrs[0], total,
+        cudaMemcpy(bytes.data(), col.data<void>(), total,
                    cudaMemcpyDeviceToHost);
     }
     std::vector<std::string> out;
@@ -90,7 +87,7 @@ TEST(PhysConcat, TwoNumericTables) {
     auto out = phys::concat({ta->view(), tb->view()}, default_ctx());
     ASSERT_EQ(out->num_rows(), 5);
     ASSERT_EQ(out->num_columns(), 1);
-    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     std::vector<int32_t> expected = {1, 2, 3, 10, 20};
     for (int i = 0; i < 5; ++i) EXPECT_EQ(host[i], expected[i]);
 }
@@ -115,8 +112,8 @@ TEST(PhysConcat, MultiColumnNumericPreservesOrder) {
     auto out = phys::concat({ta->view(), tb->view()}, default_ctx());
     ASSERT_EQ(out->num_rows(), 5);
     ASSERT_EQ(out->num_columns(), 2);
-    auto h_i = gamax::copy_column_to_host<int32_t>(out->view()[0]);
-    auto h_f = gamax::copy_column_to_host<double>(out->view()[1]);
+    auto h_i = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
+    auto h_f = gamax::copy_column_to_host<double>(out->view()[1], cudaStreamDefault);
     std::vector<int32_t> expected_i = {1, 2, 30, 40, 50};
     std::vector<double>  expected_f = {1.5, 2.5, 3.5, 4.5, 5.5};
     for (int i = 0; i < 5; ++i) {
@@ -163,7 +160,7 @@ TEST(PhysConcat, MixedNumericAndString) {
     ASSERT_EQ(out->num_rows(), 5);
     ASSERT_EQ(out->num_columns(), 2);
     auto h_s = dump_string_col(out->view()[0]);
-    auto h_i = gamax::copy_column_to_host<int64_t>(out->view()[1]);
+    auto h_i = gamax::copy_column_to_host<int64_t>(out->view()[1], cudaStreamDefault);
     std::vector<std::string> expected_s = {"x", "yy", "zzz", "aa", "bbbb"};
     std::vector<int64_t>     expected_i = {1, 2, 10, 20, 30};
     EXPECT_EQ(h_s, expected_s);
@@ -186,7 +183,7 @@ TEST(PhysConcat, ThreeWayNary) {
     auto out = phys::concat(
         {ta->view(), tb->view(), tc->view()}, default_ctx());
     ASSERT_EQ(out->num_rows(), 6);
-    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     std::vector<int32_t> expected = {1, 2, 3, 4, 5, 6};
     for (int i = 0; i < 6; ++i) EXPECT_EQ(host[i], expected[i]);
 }
@@ -207,7 +204,7 @@ TEST(PhysConcat, EmptyInputAmongOthersIsNoOp) {
     auto out = phys::concat(
         {ta->view(), tb->view(), tc->view()}, default_ctx());
     ASSERT_EQ(out->num_rows(), 3);
-    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0]);
+    auto host = gamax::copy_column_to_host<int32_t>(out->view()[0], cudaStreamDefault);
     std::vector<int32_t> expected = {1, 2, 3};
     for (int i = 0; i < 3; ++i) EXPECT_EQ(host[i], expected[i]);
 }

@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <nvbench/nvbench.cuh>
 
 #include <string>
@@ -67,13 +70,13 @@ std::unique_ptr<gamax::table> generate_benchmark_table(
     for (int64_t i = 0; i < params.num_key_cols; ++i) {
         if (i == 0 && params.has_string_key) {
             auto str_col = gamax::datagen::device::generate_random_strings(
-                params.num_rows, params.string_length, gamax::ARROW_STRING,
-                42 + static_cast<int>(i), stream);
+                params.num_rows, params.string_length, stream, gamax::ARROW_STRING,
+                42 + static_cast<int>(i));
             columns.push_back(std::move(str_col));
         } else {
             auto key_table = gamax::datagen::device::fk_uniform_id(
                 key_type, params.num_rows, params.num_rows, 1, 1.0,
-                42 + static_cast<int>(i));
+                42 + static_cast<int>(i), stream);
             columns.push_back(key_table->remove_column(0));
         }
     }
@@ -82,13 +85,13 @@ std::unique_ptr<gamax::table> generate_benchmark_table(
     for (int64_t i = 0; i < params.num_nonkey_cols; ++i) {
         if (i == 0 && params.has_string_nonkey) {
             auto str_col = gamax::datagen::device::generate_random_strings(
-                params.num_rows, params.string_length, gamax::ARROW_STRING,
-                100 + static_cast<int>(i), stream);
+                params.num_rows, params.string_length, stream, gamax::ARROW_STRING,
+                100 + static_cast<int>(i));
             columns.push_back(std::move(str_col));
         } else {
             auto val_table = gamax::datagen::device::fk_uniform_id(
                 key_type, params.num_rows, params.num_rows, 1, 1.0,
-                100 + static_cast<int>(i));
+                100 + static_cast<int>(i), stream);
             columns.push_back(val_table->remove_column(0));
         }
     }
@@ -103,7 +106,7 @@ std::unique_ptr<gamax::table> generate_benchmark_table(
 // =============================================================================
 template<typename KeyT>
 void bench_sort_table_numeric(nvbench::state& state, nvbench::type_list<KeyT>) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     sort_table_params params(state);
     params.has_string_key = false;
@@ -150,7 +153,7 @@ void bench_sort_table_numeric(nvbench::state& state, nvbench::type_list<KeyT>) {
 // =============================================================================
 template<typename KeyT>
 void bench_sort_table_string_key(nvbench::state& state, nvbench::type_list<KeyT>) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     sort_table_params params(state);
     params.has_string_key = true;
@@ -189,7 +192,7 @@ void bench_sort_table_string_key(nvbench::state& state, nvbench::type_list<KeyT>
 // =============================================================================
 template<typename KeyT>
 void bench_sort_table_string_payload(nvbench::state& state, nvbench::type_list<KeyT>) {
-    release_all_mem();
+    gamax::prewarm_device_memory_resource();
 
     sort_table_params params(state);
     params.has_string_key = false;

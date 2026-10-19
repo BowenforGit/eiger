@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include "operators/groupby/groupby_hash.hpp"
 
 #include <algorithm>
@@ -180,25 +183,6 @@ namespace {
         }
     }
 
-    // Book-keeping produced by the hash-set insert phase; consumed by
-    // downstream aggregation or dedup materialisation.
-    struct group_id_result {
-        gamax::column_ptr sparse_group_ids;  // size = input rows;
-                                             // set only at the leader
-                                             // row of each group.
-        gamax::column_ptr groupid_loc;       // size = input rows; points
-                                             // at the leader row, so
-                                             // sparse_group_ids[groupid_loc[i]]
-                                             // is the dense group id.
-        gamax::column_ptr leader_tid;        // size = num_groups (trimmed);
-                                             // input-row index of the
-                                             // first inserter for each
-                                             // group — used as a gather
-                                             // map to materialise key
-                                             // columns.
-        gamax::size_type num_groups;
-    };
-
     // Build a cuco::static_set over `key`'s rows and populate the four
     // book-keeping columns above. Shared by `hash_groupby_multi_key`
     // (aggregation path) and `hash::distinct` (no-agg dedup path) so
@@ -209,7 +193,7 @@ namespace {
     // The cuco set is released on return; downstream phases only need
     // the four outputs. Stream is synchronised before return so the
     // caller sees a fully-populated result set.
-    group_id_result compute_group_ids(
+    group_id_plan compute_group_ids_impl(
         gamax::table_view key,
         gamax::groupby::groupby_hint& hint,
         cudaStream_t stream)
@@ -221,8 +205,8 @@ namespace {
         constexpr double load_factor = 0.25;
         gamax::size_type constexpr empty_key_sentinel =
             gamax::sentinel<gamax::size_type>();
-        auto cuco_allocator =
-            *get_thrust_allocator<cuco::pair<gamax::size_type, gamax::size_type>>(stream);
+        auto cuco_allocator = gamax::rmm_allocator_handle<
+            cuco::pair<gamax::size_type, gamax::size_type>>{stream};
 
         auto key_device_view = key.device_view(stream);
 
@@ -234,16 +218,17 @@ namespace {
             cuco::linear_probing<1, gamax::row_hasher>{gamax::row_hasher{*key_device_view}},
             cuco::thread_scope_device,
             cuco::storage<1>{},
-            cuco_allocator,
+            cuco_allocator.get(),
             stream};
         auto set_ref = set.ref(cuco::insert_and_find);
 
-        auto sparse_group_ids = gamax::make_idx_column(input_num_rows, false);
-        auto groupid_loc      = gamax::make_idx_column(input_num_rows, false);
+        auto sparse_group_ids = gamax::make_idx_column(input_num_rows, stream);
+        auto groupid_loc      = gamax::make_idx_column(input_num_rows, stream);
         // leader_tid is sized at the upper bound; trimmed before return
         // so it is usable as a gather map directly.
-        auto leader_tid       = gamax::make_idx_column(estimated_num_groups, false);
-        auto d_num_groups     = gamax::make_idx_column(1, true);
+        auto leader_tid       = gamax::make_idx_column(estimated_num_groups, stream);
+        auto d_num_groups     = gamax::make_idx_column(
+            1, stream, gamax::buffer_init::zero);
 
         compute_groupid_kernel<<<num_tb(input_num_rows, 256), 256, 0, stream>>>(
             set_ref,
@@ -299,19 +284,21 @@ namespace {
     // the same gather cost; the benefit is a single uniform code path
     // that `simple_materialize` already dispatches correctly for STRING
     // via `gather_strings`.
-    std::unique_ptr<gamax::table> hash_groupby_multi_key(
+    std::unique_ptr<gamax::table> hash_groupby_multi_key_with_plan(
         gamax::table_view key,
         gamax::table_view val,
         std::vector<gamax::groupby::aggregation_request>& agg_requests,
-        gamax::groupby::groupby_hint& hint,
-        cudaStream_t stream = cudaStreamDefault)
+        const group_id_plan& gid_result,
+        cudaStream_t stream)
     {
         auto input_num_rows = key.num_rows();
         auto num_key_cols = key.num_columns();
-        gamax::size_type estimated_num_groups = std::min(input_num_rows, hint.groups_upper_bound);
+        gamax::size_type estimated_num_groups = gid_result.num_groups;
 
-        auto d_agg_req_buf = std::make_unique<gamax::device_buffer>(sizeof(gamax::groupby::aggregation_request) * agg_requests.size(), false);
-        cudaMemcpy(d_agg_req_buf->data(), agg_requests.data(), d_agg_req_buf->size(), cudaMemcpyHostToDevice);
+        auto d_agg_req_buf = std::make_unique<gamax::device_buffer>(
+            sizeof(gamax::groupby::aggregation_request) * agg_requests.size(), stream);
+        cudaMemcpyAsync(d_agg_req_buf->data(), agg_requests.data(), d_agg_req_buf->size(),
+                        cudaMemcpyHostToDevice, stream);
 
         // Pre-allocate only the aggregation result columns — the kernels
         // need these as output buffers. Key columns are materialised
@@ -321,14 +308,13 @@ namespace {
             agg_result_cols.push_back(
                 gamax::make_column(
                     gamax::groupby::agg_output_data_type(agg.agg_kind, val.get_column(agg.column_index).type()),
-                    estimated_num_groups));
+                    estimated_num_groups, stream));
         }
         auto agg_result_table = std::make_unique<gamax::table>(std::move(agg_result_cols));
 
-        auto gid_result = compute_group_ids(key, hint, stream);
-        auto& sparse_group_ids = gid_result.sparse_group_ids;
-        auto& groupid_loc      = gid_result.groupid_loc;
-        auto& leader_tid       = gid_result.leader_tid;
+        const auto& sparse_group_ids = gid_result.sparse_group_ids;
+        const auto& groupid_loc      = gid_result.groupid_loc;
+        const auto& leader_tid       = gid_result.leader_tid;
         const auto num_groups  = gid_result.num_groups;
 
             // Aggregation side — unchanged shape, but the result table
@@ -410,7 +396,50 @@ namespace {
             }
             return std::make_unique<gamax::table>(std::move(final_columns));
     }
+
+    std::unique_ptr<gamax::table> hash_groupby_multi_key(
+        gamax::table_view key,
+        gamax::table_view val,
+        std::vector<gamax::groupby::aggregation_request>& agg_requests,
+        gamax::groupby::groupby_hint& hint,
+        cudaStream_t stream)
+    {
+        auto plan = compute_group_ids_impl(key, hint, stream);
+        return hash_groupby_multi_key_with_plan(
+            key, val, agg_requests, plan, stream);
+    }
 } // unnamed namespace
+
+group_id_plan compute_group_ids(
+    gamax::table_view key,
+    gamax::groupby::groupby_hint& hint,
+    cudaStream_t stream)
+{
+    if (key.num_columns() == 0) {
+        throw std::runtime_error(
+            "hash::compute_group_ids: must have at least one key column");
+    }
+    return compute_group_ids_impl(key, hint, stream);
+}
+
+std::unique_ptr<gamax::table> groupby_with_plan(
+    gamax::table_view key,
+    gamax::table_view val,
+    std::vector<gamax::groupby::aggregation_request>& agg_requests,
+    const group_id_plan& plan,
+    cudaStream_t stream)
+{
+    check_solvable(key, val, agg_requests);
+    if (!plan.sparse_group_ids || !plan.groupid_loc || !plan.leader_tid ||
+        plan.sparse_group_ids->size() != key.num_rows() ||
+        plan.groupid_loc->size() != key.num_rows() ||
+        plan.leader_tid->size() != plan.num_groups) {
+        throw std::invalid_argument(
+            "hash::groupby_with_plan: plan does not match key rows");
+    }
+    return hash_groupby_multi_key_with_plan(
+        key, val, agg_requests, plan, stream);
+}
 
 // Hash-based groupby supporting multiple key columns
 std::unique_ptr<gamax::table> groupby(
@@ -451,7 +480,7 @@ std::unique_ptr<gamax::table> distinct(
         empty_cols.reserve(key.num_columns());
         for (gamax::size_type i = 0; i < key.num_columns(); ++i) {
             empty_cols.push_back(gamax::make_column(
-                key.get_column(i).type(), 0));
+                key.get_column(i).type(), 0, stream));
         }
         return std::make_unique<gamax::table>(std::move(empty_cols));
     }
@@ -473,7 +502,7 @@ std::unique_ptr<gamax::table> distinct(
         int compressed_bits = 0;
         gamax::compress::multikey_compress_options opts;
         opts.out_total_bits = &compressed_bits;
-        compressed_key = gamax::compress::multikey_compress(key, opts, stream);
+        compressed_key = gamax::compress::multikey_compress(key, stream, opts);
         if (compressed_key) {
             hint.groups_upper_bound = std::min(
                 hint.groups_upper_bound,
@@ -483,7 +512,7 @@ std::unique_ptr<gamax::table> distinct(
                 compressed_key->view()};
             gamax::table_view compressed_view(compressed_cols);
 
-            auto gid_result = compute_group_ids(compressed_view, hint, stream);
+            auto gid_result = compute_group_ids_impl(compressed_view, hint, stream);
             auto final_columns = gather_keys_by_leader(
                 key, gid_result.leader_tid->view(), stream);
             return std::make_unique<gamax::table>(std::move(final_columns));
@@ -491,7 +520,7 @@ std::unique_ptr<gamax::table> distinct(
         // Fall through to the multi-col path when SKF can't fuse.
     }
 
-    auto gid_result = compute_group_ids(key, hint, stream);
+    auto gid_result = compute_group_ids_impl(key, hint, stream);
     auto final_columns = gather_keys_by_leader(
         key, gid_result.leader_tid->view(), stream);
     return std::make_unique<gamax::table>(std::move(final_columns));

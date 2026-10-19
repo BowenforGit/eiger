@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -47,9 +50,9 @@ struct reduce_by_key_aggregator_helper {
         
         if(permutation_idx != nullptr) {
             auto val_itr = thrust::make_permutation_iterator(val.data<ValT>(), permutation_idx);
-            CALL_CUB_FUNC(cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key.data<KeyT>(), val_itr, result_val.data<AggT>(), d_num_groups, F{}, num_items, stream)
+            CALL_CUB_FUNC(stream, cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key.data<KeyT>(), val_itr, result_val.data<AggT>(), d_num_groups, F{}, num_items, stream)
         } else {
-            CALL_CUB_FUNC(cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key.data<KeyT>(), val.data<ValT>(), result_val.data<AggT>(), d_num_groups, F{}, num_items, stream)
+            CALL_CUB_FUNC(stream, cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key.data<KeyT>(), val.data<ValT>(), result_val.data<AggT>(), d_num_groups, F{}, num_items, stream)
         }
     }
 
@@ -65,14 +68,14 @@ struct reduce_by_key_aggregator_helper {
         using AggT = typename F::OutputType;
         
         auto num_items = key.size();
-        auto result_key_ptr = gamax::make_column(key.type(), num_groups);
-        auto d_num_groups = gamax::make_column(gamax::data_type{size_type_id}, 1);
+        auto result_key_ptr = gamax::make_column(key.type(), num_groups, stream);
+        auto d_num_groups = gamax::make_column(gamax::data_type{size_type_id}, 1, stream);
 
         if(permutation_idx != nullptr) {
             auto val_itr = thrust::make_permutation_iterator(val.data<ValT>(), permutation_idx);
-            CALL_CUB_FUNC(cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key_ptr->data<KeyT>(), val_itr, result_val.data<AggT>(), d_num_groups->data<gamax::size_type>(), F{}, num_items, stream)
+            CALL_CUB_FUNC(stream, cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key_ptr->data<KeyT>(), val_itr, result_val.data<AggT>(), d_num_groups->data<gamax::size_type>(), F{}, num_items, stream)
         } else {
-            CALL_CUB_FUNC(cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key_ptr->data<KeyT>(), val.data<ValT>(), result_val.data<AggT>(), d_num_groups->data<gamax::size_type>(), F{}, num_items, stream)
+            CALL_CUB_FUNC(stream, cub::DeviceReduce::ReduceByKey, key.data<KeyT>(), result_key_ptr->data<KeyT>(), val.data<ValT>(), result_val.data<AggT>(), d_num_groups->data<gamax::size_type>(), F{}, num_items, stream)
         }
     }
 };
@@ -183,10 +186,10 @@ void aggregate(
     gamax::mutable_column_view result_key,
     gamax::mutable_column_view result_val,
     gamax::size_type& num_groups,
-    gamax::size_type* permutation_idx = nullptr,
-    cudaStream_t stream = cudaStreamDefault) 
+    gamax::size_type* permutation_idx,
+    cudaStream_t stream)
 {
-    auto d_num_groups = gamax::make_column(gamax::data_type{size_type_id}, 1);
+    auto d_num_groups = gamax::make_column(gamax::data_type{size_type_id}, 1, stream);
     dispatch_aggregate(agg_kind, key, val, result_key, result_val, d_num_groups->data<gamax::size_type>(), permutation_idx, stream);
     cudaMemcpyAsync(&num_groups, d_num_groups->data<gamax::size_type>(), sizeof(gamax::size_type), cudaMemcpyDeviceToHost, stream);
     cudaStreamSynchronize(stream);
@@ -198,8 +201,8 @@ void aggregate(
     gamax::column_view val, 
     const gamax::size_type num_groups,
     gamax::mutable_column_view result_val,
-    gamax::size_type* permutation_idx = nullptr,
-    cudaStream_t stream = cudaStreamDefault) 
+    gamax::size_type* permutation_idx,
+    cudaStream_t stream)
 {
     dispatch_aggregate(agg_kind, key, val, num_groups, result_val, permutation_idx, stream);
     cudaStreamSynchronize(stream);
@@ -268,8 +271,8 @@ struct case1_dispatcher {
         // Allocate the unique-values output at the worst-case size
         // (every row distinct) and trim after the RLE writes the
         // actual `num_runs`.
-        auto unique_col = gamax::make_column<T>(n, false, stream);
-        auto d_num_runs = gamax::make_idx_column(1, false, stream);
+        auto unique_col = gamax::make_column<T>(n, stream);
+        auto d_num_runs = gamax::make_idx_column(1, stream);
 
         std::size_t tmp_bytes = 0;
         cub::DeviceRunLengthEncode::Encode(
@@ -279,7 +282,7 @@ struct case1_dispatcher {
             thrust::make_discard_iterator(),
             d_num_runs->data<gamax::size_type>(),
             n, stream);
-        auto tmp = std::make_unique<gamax::device_buffer>(tmp_bytes, false);
+        auto tmp = std::make_unique<gamax::device_buffer>(tmp_bytes, stream);
         cub::DeviceRunLengthEncode::Encode(
             tmp->data(), tmp_bytes,
             sorted_key.template data<T>(),
@@ -313,7 +316,7 @@ inline gamax::size_type rle_counts_only(
     cudaStream_t stream)
 {
     const auto n = sorted_fk.size();
-    auto d_num_runs = gamax::make_idx_column(1, false, stream);
+    auto d_num_runs = gamax::make_idx_column(1, stream);
 
     std::size_t tmp_bytes = 0;
     cub::DeviceRunLengthEncode::Encode(
@@ -323,7 +326,7 @@ inline gamax::size_type rle_counts_only(
         counts_out.data<gamax::size_type>(),
         d_num_runs->data<gamax::size_type>(),
         n, stream);
-    auto tmp = std::make_unique<gamax::device_buffer>(tmp_bytes, false);
+    auto tmp = std::make_unique<gamax::device_buffer>(tmp_bytes, stream);
     cub::DeviceRunLengthEncode::Encode(
         tmp->data(), tmp_bytes,
         sorted_fk.data<std::uint64_t>(),
@@ -360,7 +363,9 @@ std::unique_ptr<gamax::table> groupby(
     extract_groupby_hint(hint, input_num_rows, key_type, estimated_num_groups, begin_bit, end_bit);
 
     auto first_val_col_id = agg_requests[0].column_index;
-    auto [sorted_key, sorted_val_0] = gamax::sort::sort_column_pair(key.get_column(0), val.get_column(first_val_col_id), begin_bit, end_bit, gamax::sort_order::ASCENDING, nullptr, 0, stream);
+    auto [sorted_key, sorted_val_0] = gamax::sort::sort_column_pair(
+        key.get_column(0), val.get_column(first_val_col_id), stream,
+        begin_bit, end_bit, gamax::sort_order::ASCENDING, nullptr, 0);
     
     gamax::size_type num_groups = 0;
     std::vector<std::unique_ptr<gamax::column>> final_columns;
@@ -377,8 +382,8 @@ std::unique_ptr<gamax::table> groupby(
         
         if(!grouped) {
             sorted_val = std::move(sorted_val_0);
-            auto unique_keys = gamax::make_column(key_type, estimated_num_groups);
-            auto agg_val = gamax::make_column(agg_output_type, estimated_num_groups);
+            auto unique_keys = gamax::make_column(key_type, estimated_num_groups, stream);
+            auto agg_val = gamax::make_column(agg_output_type, estimated_num_groups, stream);
             
             aggregate(agg_kind, sorted_key->view(), sorted_val->view(), unique_keys->mutable_view(), agg_val->mutable_view(), num_groups, nullptr, stream);
 
@@ -397,8 +402,8 @@ std::unique_ptr<gamax::table> groupby(
                         key.get_column(0), 
                         // *(final_columns.front()), 
                         final_columns.front()->view(),
-                        data_type{type_id::INT32}, 
-                        stream);
+                        stream,
+                        data_type{type_id::INT32});
                 }
                 auto end_bit = [&](gamax::size_type v) {
                     v--;
@@ -410,12 +415,16 @@ std::unique_ptr<gamax::table> groupby(
                     v++;
                     return 8 * gamax::size_of(encoded_key->type()) - __builtin_clz(v);
                 } (num_groups);
-                std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(encoded_key->view(), val.get_column(i), 0, end_bit, gamax::sort_order::ASCENDING, nullptr, 0, stream);
+                std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(
+                    encoded_key->view(), val.get_column(i), stream,
+                    0, end_bit, gamax::sort_order::ASCENDING, nullptr, 0);
             } else {
-                std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(key.get_column(0), val.get_column(i), begin_bit, end_bit, gamax::sort_order::ASCENDING, nullptr, 0, stream);
+                std::tie(std::ignore, sorted_val) = gamax::sort::sort_column_pair(
+                    key.get_column(0), val.get_column(i), stream,
+                    begin_bit, end_bit, gamax::sort_order::ASCENDING, nullptr, 0);
             }
 
-            auto agg_val = gamax::make_column(agg_output_type, num_groups);
+            auto agg_val = gamax::make_column(agg_output_type, num_groups, stream);
             aggregate(agg_kind, sorted_key->view(), sorted_val->view(), num_groups, agg_val->mutable_view(), nullptr, stream);
             final_columns.push_back(std::move(agg_val));
         }
@@ -443,7 +452,9 @@ std::unique_ptr<gamax::table> groupby_gfur(
     int begin_bit, end_bit;
     extract_groupby_hint(hint, input_num_rows, key_type, estimated_num_groups, begin_bit, end_bit);
 
-    auto [sorted_key, idx_col] = gamax::sort::argsort(key.get_column(0), begin_bit, end_bit, gamax::sort_order::ASCENDING, nullptr, 0, stream);
+    auto [sorted_key, idx_col] = gamax::sort::argsort(
+        key.get_column(0), stream, begin_bit, end_bit,
+        gamax::sort_order::ASCENDING, nullptr, 0);
     
     gamax::size_type num_groups = 0;
     std::vector<std::unique_ptr<gamax::column>> final_columns;
@@ -457,8 +468,8 @@ std::unique_ptr<gamax::table> groupby_gfur(
         auto agg_output_type = gamax::groupby::agg_output_data_type(agg_kind, val_type);
         
         if(!grouped) {
-            auto agg_val = gamax::make_column(agg_output_type, estimated_num_groups);
-            auto unique_keys = gamax::make_column(key_type, estimated_num_groups);
+            auto agg_val = gamax::make_column(agg_output_type, estimated_num_groups, stream);
+            auto unique_keys = gamax::make_column(key_type, estimated_num_groups, stream);
             aggregate(agg_kind, sorted_key->view(), val.get_column(i), unique_keys->mutable_view(), agg_val->mutable_view(), num_groups, idx_col->data<gamax::size_type>(), stream);
             unique_keys->set_size(num_groups);
             agg_val->set_size(num_groups);
@@ -467,7 +478,7 @@ std::unique_ptr<gamax::table> groupby_gfur(
 
             grouped = true;
         } else {
-            auto agg_val = gamax::make_column(agg_output_type, num_groups);
+            auto agg_val = gamax::make_column(agg_output_type, num_groups, stream);
             aggregate(agg_kind, sorted_key->view(), val.get_column(i), num_groups, agg_val->mutable_view(), idx_col->data<gamax::size_type>(), stream);
             final_columns.push_back(std::move(agg_val));
         }
@@ -517,10 +528,10 @@ std::unique_ptr<gamax::table> distinct(
     if (key.num_columns() == 1) {
         auto sorted_key = gamax::sort::sort_column(
             key.get_column(0),
+            stream,
             /*begin_bit=*/0, /*end_bit=*/-1,
             gamax::sort_order::ASCENDING,
-            /*d_temp_storage=*/nullptr, /*temp_storage_bytes=*/0,
-            stream);
+            /*d_temp_storage=*/nullptr, /*temp_storage_bytes=*/0);
 
         return gamax::type_dispatcher(
             sorted_key->type(),
@@ -542,7 +553,7 @@ std::unique_ptr<gamax::table> distinct(
     int compressed_bits = 0;
     gamax::compress::multikey_compress_options skf_opts;
     skf_opts.out_total_bits = &compressed_bits;
-    auto fk = gamax::compress::multikey_compress(key, skf_opts, stream);
+    auto fk = gamax::compress::multikey_compress(key, stream, skf_opts);
     if (!fk) {
         throw std::runtime_error(
             "sort::distinct: multi-col key didn't compress under SKF "
@@ -552,21 +563,20 @@ std::unique_ptr<gamax::table> distinct(
     // Per-row tids [0, n), so the (fk, tid) sort gives us the original
     // row index of every key after sorting.
     auto tids = gamax::make_sequence<gamax::size_type>(
-        n, /*start=*/gamax::size_type{0}, /*step=*/gamax::size_type{1},
-        stream);
+        n, stream, /*start=*/gamax::size_type{0}, /*step=*/gamax::size_type{1});
 
     auto [sorted_fk, sorted_tid] = gamax::sort::sort_column_pair(
         fk->view(), tids->view(),
+        stream,
         /*begin_bit=*/0, /*end_bit=*/-1,
         gamax::sort_order::ASCENDING,
-        /*d_temp_storage=*/nullptr, /*temp_storage_bytes=*/0,
-        stream);
+        /*d_temp_storage=*/nullptr, /*temp_storage_bytes=*/0);
 
     // RLE on the sorted fused key. Discard unique values (we materialize
     // original-key rows via leader-tid instead); keep per-group counts
     // so we can do an exclusive prefix sum into leader-row indices.
     auto counts = gamax::make_column(
-        gamax::data_type{size_type_id}, n, /*clear=*/false, stream);
+        gamax::data_type{size_type_id}, n, stream);
     const gamax::size_type num_runs = rle_counts_only(
         sorted_fk->view(), counts->mutable_view(), stream);
 

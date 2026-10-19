@@ -1,3 +1,6 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #include <memory>
 #include <vector>
 #include <variant>
@@ -17,6 +20,7 @@
 #include "memory/scalar.hpp"
 #include "utils/copying.hpp"
 #include "utils/utils.cuh"
+#include "utils/green_safe_elementwise.cuh"
 #include "types/data_type.hpp"
 #include "types/type_dispatcher.hpp"
 #include "types/vec_type.hpp"
@@ -367,15 +371,13 @@ struct unary_op_launch_helper {
         cudaStream_t stream)
     {
         using ResType = decltype(op(cuda::std::declval<T1>()));
-        auto output = gamax::make_column(data_type{type_to_id<ResType>()}, input.size());
+        auto output = gamax::make_column(
+            data_type{type_to_id<ResType>()}, input.size(), stream);
         const int blockSize = 256;
         const int numBlocks = (input.size() + blockSize - 1) / blockSize;
         kernel_unary_op<<<numBlocks, blockSize, 0, stream>>>(
             make_iterator<T1>(input), output->mutable_view(), op);
         
-        // Ensure the kernel is finished before returning otherwise
-        // the unique_ptr may go out of scope before the kernel is done
-        cudaStreamSynchronize(stream);
         return output;
     }
 };
@@ -504,7 +506,8 @@ struct binary_op_launch_helper {
 
         const auto output_size = get_output_size(input1, input2);
 
-        auto output = gamax::make_column(data_type{type_to_id<ResType>()}, output_size);
+        auto output = gamax::make_column(
+            data_type{type_to_id<ResType>()}, output_size, stream);
         
         constexpr int VT = 4; // Vector width for vectorized processing
         const int blockSize = 256;
@@ -516,9 +519,6 @@ struct binary_op_launch_helper {
             output->mutable_view(), 
             op);
         
-        // Ensure the kernel is finished before returning otherwise
-        // the unique_ptr may go out of scope before the kernel is done
-        cudaStreamSynchronize(stream);
         return output;
     }
 
@@ -534,7 +534,7 @@ struct binary_op_launch_helper {
         cudaStream_t stream)
     {
         const auto output_size = get_output_size(input1, input2);
-        auto output = gamax::make_column(input1.type(), output_size);
+        auto output = gamax::make_column(input1.type(), output_size, stream);
 
         const int blockSize = 256;
         const int numBlocks = (output_size + blockSize - 1) / blockSize;
@@ -544,10 +544,6 @@ struct binary_op_launch_helper {
             make_iterator<T>(input2),
             select_mask,
             output->mutable_view());
-
-        // Ensure the kernel is finished before returning otherwise
-        // the unique_ptr may go out of scope before the kernel is done
-        cudaStreamSynchronize(stream);
 
         return output;
     }
@@ -589,11 +585,13 @@ struct broadcast_scalar_helper {
                                  gamax::size_type n,
                                  cudaStream_t stream) const
     {
-        auto col = gamax::make_column<T>(n, /*clear=*/false, stream);
+        auto col = gamax::make_column<T>(
+            n, stream, gamax::buffer_init::uninitialized);
         T val = s.get<T>();
-        thrust::fill_n(thrust::cuda::par.on(stream),
-                       col->mutable_view().template data<T>(),
-                       n, val);
+        // Green-safe: thrust::fill_n routes to cub::DeviceTransform, which fails
+        // on green-context streams. device_fill is a plain-kernel replacement.
+        gamax::util::device::device_fill(
+            col->mutable_view().template data<T>(), n, val, stream);
         return col;
     }
 

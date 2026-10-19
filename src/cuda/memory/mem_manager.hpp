@@ -1,159 +1,255 @@
+// Portions Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// See LICENSE and THIRD_PARTY_NOTICES.md for license information.
+
 #pragma once
 
-#include <unordered_map>
-#include <list>
-#include <memory>
-#include <cassert>
+#include <cuda/memory_resource>
 #include <cuda_runtime_api.h>
-#include <cuda/stream_ref>
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/exec_policy.hpp>
+#include <rmm/mr/thrust_allocator_adaptor.hpp>
 
-#include "utils/check_error.hpp"
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <stdexcept>
+#include <string>
 
-class MemoryManager {
-public:
-    virtual void allocate(void** ptr, bool clear, size_t sz, cudaStream_t stream) = 0;
-    virtual void release(void* ptr, cudaStream_t stream) = 0;
-    size_t get_peak_mem_used() const { return peak_mem_used; }
-    size_t get_mem_used() const { return mem_used; }
-    // Reset the peak high-water mark to the *current* in-flight bytes.
-    // Use this to bracket a region of work — call before, then read
-    // `get_peak_mem_used()` after to obtain the high-water mark
-    // observed within the bracket. (Lower-bounded at `mem_used` rather
-    // than zero so the post-bracket peak is always >= the bracket's
-    // starting baseline.)
-    void reset_peak_mem_used() { peak_mem_used = mem_used; }
+namespace gamax {
 
-protected:
-    size_t mem_used {0};
-    size_t peak_mem_used {0};
+enum class buffer_init { uninitialized, zero };
+
+enum class memory_resource_mode { arena, cuda };
+enum class memory_tracking_mode { off, on, stacks };
+
+struct memory_resource_options {
+    memory_resource_mode mode{memory_resource_mode::arena};
+    memory_tracking_mode tracking{memory_tracking_mode::off};
+    bool statistics{false};
+
+    // Test/diagnostic override for a deliberately small arena. Production
+    // initialization leaves this empty and derives the size from cudaMemGetInfo.
+    std::optional<std::size_t> arena_size_bytes{};
 };
 
-class UserSpaceMM : public MemoryManager {
-private:
-    using block_type = struct { char* data {nullptr}; size_t sz {0}; };
-
-public:
-    UserSpaceMM(const size_t kInitialPoolSize, const size_t kAlignBits = 256UL);
-
-    ~UserSpaceMM();
-
-    void allocate(void** ptr, bool clear, size_t sz, cudaStream_t stream) override;
-
-    void release(void* ptr, cudaStream_t stream) override;
-
-private:
-    // find a block in the free list that is at least as large as sz
-    block_type find_block(const size_t sz);
-
-    // Insert the block back to the free list, merge if necessary
-    void insert_block(const block_type& free);
-
-    size_t roundup(const size_t value);
-
-    char* roundup(const char* ptr);
-
-    bool can_alloc(const block_type& block, const size_t sz);
-
-private:
-    std::unordered_map<void*, block_type> alloc_map;
-    std::list<block_type> free_list;
-    void* root{nullptr};
-    size_t align_bits;
+struct arena_sizing {
+    std::size_t available_bytes{};
+    std::size_t reserved_bytes{};
+    std::size_t arena_bytes{};
 };
 
-class CudaMM : public MemoryManager {
+// Pure sizing/parser entry point used by the allocator unit tests. A null
+// reserve selects the 75% policy. A non-null reserve must be a complete,
+// positive, unsigned decimal value smaller than available_bytes.
+arena_sizing compute_arena_sizing(std::size_t available_bytes, const char* reserve_value);
+
+memory_resource_options memory_resource_options_from_environment();
+
+namespace detail {
+struct resource_generation;
+struct lease_slot;
+}
+
+class device_buffer;
+class rmm_exec_policy_handle;
+class rmm_sync_exec_policy_handle;
+class scoped_memory_statistics;
+template <typename T>
+class rmm_cuco_allocator;
+
+// An owning resource snapshot paired with a lease on its resource generation.
+// Project code must keep this handle adjacent to every RMM object/container
+// constructed from resource().
+class resource_handle {
 public:
-    void allocate(void** ptr, bool clear, size_t sz, cudaStream_t stream) override;
-    void release(void* ptr, cudaStream_t stream) override;
+    resource_handle() = default;
+    resource_handle(resource_handle const& other) noexcept;
+    resource_handle& operator=(resource_handle const& other) noexcept;
+    resource_handle(resource_handle&& other) noexcept;
+    resource_handle& operator=(resource_handle&& other) noexcept;
+    ~resource_handle() noexcept;
+
+    [[nodiscard]] explicit operator bool() const noexcept;
+    [[nodiscard]] int device_id() const;
+    [[nodiscard]] std::uint64_t generation_id() const;
+    [[nodiscard]] memory_resource_options const& options() const;
 
 private:
-    std::unordered_map<void*, std::size_t> alloc_map;
+    [[nodiscard]] cuda::mr::any_resource<cuda::mr::device_accessible> resource() const;
+    [[nodiscard]] cuda::mr::any_resource<cuda::mr::device_accessible>
+        acquire_for_buffer(int& device_id);
+    explicit resource_handle(
+        detail::resource_generation* generation, detail::lease_slot* lease) noexcept;
+    void acquire() noexcept;
+    void release() noexcept;
+    detail::resource_generation* generation_{};
+    detail::lease_slot* lease_{};
+    bool owner_thread_lease_{false};
+
+    friend resource_handle get_device_memory_resource();
+    friend class device_buffer;
+    friend class rmm_exec_policy_handle;
+    friend class rmm_sync_exec_policy_handle;
+    friend class scoped_memory_statistics;
+    template <typename T>
+    friend class rmm_cuco_allocator;
 };
 
-template<typename T>
-class ThrustAllocator {
-public:
-    template<typename U>
-    friend class ThrustAllocator;
+[[nodiscard]] resource_handle get_device_memory_resource();
 
+// Short-lived policy owner used at Thrust call sites. The generation lease is
+// declared before the policy so it outlives the policy's owning resource.
+class rmm_exec_policy_handle {
+public:
+    explicit rmm_exec_policy_handle(cudaStream_t stream)
+        : resource_{get_device_memory_resource()}
+        , policy_{rmm::cuda_stream_view{stream}, resource_.resource()}
+    {
+    }
+
+    [[nodiscard]] rmm::exec_policy_nosync& get() noexcept { return policy_; }
+
+private:
+    resource_handle resource_;
+    rmm::exec_policy_nosync policy_;
+};
+
+class rmm_sync_exec_policy_handle {
+public:
+    explicit rmm_sync_exec_policy_handle(cudaStream_t stream)
+        : resource_{get_device_memory_resource()}
+        , policy_{rmm::cuda_stream_view{stream}, resource_.resource()}
+    {
+    }
+
+    [[nodiscard]] rmm::exec_policy& get() noexcept { return policy_; }
+
+private:
+    resource_handle resource_;
+    rmm::exec_policy policy_;
+};
+
+template <typename T>
+class rmm_cuco_allocator {
+public:
     using value_type = T;
 
-    ThrustAllocator() = default;
+    template <typename U>
+    struct rebind { using other = rmm_cuco_allocator<U>; };
 
-    ThrustAllocator(std::shared_ptr<MemoryManager> mm, cudaStream_t stream) : mm_(mm), stream_(stream) {}
-
-    T* allocate(std::size_t num_items) {
-        T* ptr;
-        mm_->allocate((void**)&ptr, false, num_items*sizeof(T), stream_);
-        return ptr;
-    }
-
-    void deallocate(T* ptr, std::size_t) {
-        mm_->release(ptr, stream_);
-    }
-
-    T* allocate(std::size_t num_items, cuda::stream_ref stream) {
-        T* ptr;
-        mm_->allocate((void**)&ptr, false, num_items*sizeof(T), stream.get());
-        return ptr;
-    }
-
-    void deallocate(T* ptr, std::size_t, cuda::stream_ref stream) {
-        mm_->release(ptr, stream.get());
-    }
-
-
-    template <class U>
-    ThrustAllocator(ThrustAllocator<U> const& other) noexcept
+    explicit rmm_cuco_allocator(resource_handle resource)
+        : generation_{std::move(resource)}
+        , generation_id_{generation_.generation_id()}
+        , resource_{generation_.resource()}
     {
-        mm_ = other.mm_;
-        stream_ = other.stream_;
+    }
+
+    template <typename U>
+    rmm_cuco_allocator(rmm_cuco_allocator<U> const& other)
+        : generation_{other.generation_}
+        , generation_id_{other.generation_id_}
+        , resource_{other.resource_}
+    {
+    }
+
+    [[nodiscard]] T* allocate(std::size_t count, cuda::stream_ref stream)
+    {
+        return static_cast<T*>(resource_.allocate(stream, count * sizeof(T), alignof(T)));
+    }
+
+    void deallocate(T* pointer, std::size_t count, cuda::stream_ref stream) noexcept
+    {
+        resource_.deallocate(stream, pointer, count * sizeof(T), alignof(T));
+    }
+
+    template <typename U>
+    [[nodiscard]] bool operator==(rmm_cuco_allocator<U> const& other) const noexcept
+    {
+        return generation_id_ == other.generation_id_;
     }
 
 private:
-    std::shared_ptr<MemoryManager> mm_;
-    cudaStream_t stream_;
+    template <typename>
+    friend class rmm_cuco_allocator;
+    resource_handle generation_;
+    std::uint64_t generation_id_{};
+    cuda::mr::any_resource<cuda::mr::device_accessible> resource_;
 };
 
-// Switch the global memory manager to use cudaMallocAsync /
-// cudaFreeAsync directly (CudaMM) instead of the UserSpaceMM slab
-// pool. Must be called before any allocation — i.e. before the
-// first get_mm() — otherwise throws.
-//
-// Why: UserSpaceMM cudaMalloc's ~95% of free GPU memory up front and
-// hands out aligned slices from the slab. compute-sanitizer / memcheck
-// only sees the one big slab as a legal allocation, so an OOB write
-// inside the slab boundary looks valid to the tool. Switching to
-// CudaMM makes each `cudaMallocAsync` a separately-tracked allocation
-// the sanitizer can detect overflows on.
-//
-// The default (no call to use_cuda_mm) keeps the existing UserSpaceMM
-// behaviour. The previous compile-time `USE_DEFAULT_MEMALLOC` macro
-// is removed in favour of this runtime switch — debug binaries can
-// just call `use_cuda_mm()` at start of main() without rebuilding the
-// library.
-//
-// Idempotent: calling use_cuda_mm() multiple times before first
-// allocation is a no-op.
-void use_cuda_mm();
+template <typename T>
+class rmm_allocator_handle {
+public:
+    explicit rmm_allocator_handle(cudaStream_t)
+        : resource_{get_device_memory_resource()}, allocator_{resource_}
+    {
+    }
 
-std::shared_ptr<MemoryManager> get_mm();
+    [[nodiscard]] rmm_cuco_allocator<T>& get() noexcept { return allocator_; }
 
-template<typename T = char>
-std::unique_ptr<ThrustAllocator<T>> get_thrust_allocator(cudaStream_t stream = cudaStreamDefault) {
-    return std::make_unique<ThrustAllocator<T>>(get_mm(), stream);
-}
+private:
+    resource_handle resource_;
+    rmm_cuco_allocator<T> allocator_;
+};
 
-template<typename T>
-void allocate_mem(T** ptr, bool clear = true, size_t sz = sizeof(T), cudaStream_t stream = cudaStreamDefault) {
-    assert(ptr != nullptr);
-    get_mm()->allocate((void**)ptr, clear, sz, stream);
-}
+struct memory_statistics_counter {
+    std::int64_t current{};
+    std::int64_t peak{};
+    std::int64_t total{};
+};
 
-template<typename T>
-void release_mem(T* ptr, cudaStream_t stream = cudaStreamDefault) {
-    get_mm()->release(ptr, stream);
-}
+struct memory_statistics_sample {
+    memory_statistics_counter bytes{};
+    memory_statistics_counter allocations{};
+};
 
-void release_all_mem();
-void debug_device_mem_usage();
+// Serialized scoped counters for diagnostic/axis probes. Statistics must be
+// enabled when the generation is created; scopes cannot overlap across host
+// threads because RMM's counters form a single nested stack.
+class scoped_memory_statistics {
+public:
+    scoped_memory_statistics();
+    ~scoped_memory_statistics() noexcept;
+    scoped_memory_statistics(scoped_memory_statistics const&) = delete;
+    scoped_memory_statistics& operator=(scoped_memory_statistics const&) = delete;
+    scoped_memory_statistics(scoped_memory_statistics&&) = delete;
+    scoped_memory_statistics& operator=(scoped_memory_statistics&&) = delete;
+
+    [[nodiscard]] memory_statistics_sample finish();
+
+private:
+    static std::mutex& probe_mutex();
+
+    std::unique_lock<std::mutex> probe_lock_;
+    resource_handle generation_;
+    bool active_{false};
+};
+
+// Prewarm the rank's process-wide resource after selecting its one CUDA device.
+// The overload with options is primarily for tests and diagnostic executables.
+void initialize_device_memory_resource(int device_id);
+void initialize_device_memory_resource(int device_id, memory_resource_options const& options);
+void prewarm_device_memory_resource();
+
+// Lazily initializes from the environment on the current device.
+// Hard reset is only legal at a quiescent boundary after all generation leases
+// have been destroyed: no other thread may allocate, submit work, or acquire a
+// resource while reset/shutdown runs. It synchronizes the device again to drain
+// deferred frees, validates tracking/lease state, expires the old generation,
+// and installs a new generation using either the previous options or the
+// supplied replacement.
+void reset_device_memory_resource(
+    int device_id,
+    std::optional<memory_resource_options> replacement_options = std::nullopt);
+
+// Explicit teardown for executables that own process-static GPU caches. No
+// replacement generation is created.
+void shutdown_device_memory_resource(int device_id);
+
+[[nodiscard]] std::size_t outstanding_resource_leases();
+[[nodiscard]] std::size_t outstanding_tracked_allocations();
+[[nodiscard]] std::string outstanding_allocation_diagnostics();
+[[nodiscard]] std::uint64_t current_resource_generation_id();
+
+} // namespace gamax
